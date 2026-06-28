@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <!-- Defense-in-depth: no remote script/connect origins; external links open in new tabs. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' data: https://upload.wikimedia.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#080b16" />
+  <title>Reunly — Reunion Planner</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="logo">R</div>
+    <div>
+      <h1>Reunly</h1>
+      <div class="sub" id="topbarSub">Plan the reunion everyone can make</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn ghost sm" id="themeToggle" aria-label="Toggle theme" title="Toggle light/dark">🌙</button>
+    <button class="btn ghost sm" id="restartBtn" hidden>Restart</button>
+  </header>
+
+  <main class="app">
+    <!-- ============ Screen: Register ============ -->
+    <section class="screen active" id="screen-register">
+      <div class="hero-deco" aria-hidden="true">
+        <span class="float f1">✈️</span>
+        <span class="float f2">🏝️</span>
+        <span class="float f3">🗺️</span>
+        <span class="float f4">🌍</span>
+        <span class="float f5">🧳</span>
+        <span class="float f6">🛫</span>
+      </div>
+      <div class="hero">
+        <div class="hero-badge">✦ Plan together · travel together</div>
+        <h1 class="hero-title">Where will the<br /><span class="grad">crew reunite?</span></h1>
+        <p class="hero-tag">Pool everyone's dates &amp; dream spots — like
+          <span class="rot" id="rotator">Bali 🌺</span></p>
+      </div>
+      <div class="card center-card reg-card">
+        <label for="regName">Full name</label>
+        <input id="regName" type="text" autocomplete="name" placeholder="Jordan Rivera" />
+        <label for="regEmail">Email address</label>
+        <input id="regEmail" type="email" autocomplete="email" placeholder="jordan@example.com" />
+        <label for="regCity">Home city</label>
+        <input id="regCity" type="text" list="cityList" autocomplete="off" placeholder="Type to see suggestions…" />
+        <div class="error" id="regError"></div>
+        <button class="btn" id="regSubmit" style="margin-top:16px">Get started →</button>
+        <p class="muted" style="font-size:.72rem;text-align:center;margin:12px 0 0">
+          No account needed · your data stays on this device
+        </p>
+      </div>
+    </section>
+
+    <!-- ============ Screen: Choose path ============ -->
+    <section class="screen" id="screen-choose">
+      <div class="card center-card">
+        <div class="section-head"><h2 id="choiceGreeting">What would you like to do?</h2></div>
+        <div class="choice-grid">
+          <button class="btn" id="chooseSetup">Set up a reunion</button>
+          <button class="btn secondary" id="chooseJoin">Join a reunion invitation</button>
+        </div>
+        <div id="joinPanel" hidden>
+          <div class="divider"></div>
+          <label for="joinCode">Invitation code</label>
+          <input id="joinCode" type="text" placeholder="e.g. FAM-2026" />
+          <div class="error" id="joinError"></div>
+          <button class="btn" id="joinSubmit" style="margin-top:12px">Join reunion</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ Screen: Dashboard ============ -->
+    <section class="screen" id="screen-dashboard">
+      <!-- Reunion meta -->
+      <div class="card tight">
+        <div class="row">
+          <div>
+            <label for="reunionName">Reunion name</label>
+            <input id="reunionName" type="text" placeholder="The Rivera Family Reunion" />
+          </div>
+          <div>
+            <label for="reunionType">Type</label>
+            <select id="reunionType">
+              <option>Family</option>
+              <option>School</option>
+              <option>College</option>
+              <option>Friends</option>
+            </select>
+          </div>
+        </div>
+        <div class="pcard-summary" style="margin-top:10px">
+          <span class="chip" id="inviteChip">Invite code: —</span>
+          <span class="chip" id="countChip">0 participants</span>
+        </div>
+        <button class="btn secondary sm" id="shareBtn" style="width:auto;margin-top:10px">🔗 Share invite link</button>
+      </div>
+
+      <!-- Recommendations -->
+      <div class="section">
+        <div class="section-head">
+          <h2>Top recommendations</h2>
+          <span class="hint">date 30% · place 30% · cost 40%</span>
+        </div>
+        <div id="recList"></div>
+      </div>
+
+      <!-- Participants -->
+      <div class="section">
+        <div class="section-head">
+          <h2>Participants</h2>
+          <button class="btn secondary sm" id="addParticipant" style="width:auto">+ Add demo participant</button>
+        </div>
+        <div id="participantList"></div>
+      </div>
+
+      <!-- Travel costs -->
+      <div class="section">
+        <div class="section-head">
+          <h2>Travel costs</h2>
+          <button class="btn ghost sm" id="currencyToggle" style="width:auto">Show USD</button>
+        </div>
+        <div class="hint" id="costDestHint" style="margin:-4px 0 8px">vs group best</div>
+        <div id="costList"></div>
+        <div class="disclaimer">
+          Fares are round-trip, sourced in <strong>USD</strong>; local-currency amounts
+          use approximate static rates.
+          <span class="badge good">live</span>/<span class="badge good">searched</span>
+          fares come from the fare proxy / captured ranges;
+          <span class="badge warn">estimated</span> fares are distance-based fallbacks.
+          None is a guaranteed price — use the search links on each card to confirm
+          before booking.
+        </div>
+      </div>
+
+      <footer class="app-footer">
+        Reunly · prototype v0.3 — demo data, no booking. Fares for guidance only.
+      </footer>
+    </section>
+  </main>
+
+  <!-- ============ First-run onboarding ============ -->
+  <div id="onboarding" class="onboard" hidden>
+    <div class="onboard-card">
+      <div class="onboard-slides" id="onboardSlides">
+        <div class="onboard-slide">
+          <div class="onboard-emoji">🗳️</div>
+          <h2>Everyone's in</h2>
+          <p>Each friend adds their available dates and dream destinations — ranked 1st, 2nd, 3rd.</p>
+        </div>
+        <div class="onboard-slide">
+          <div class="onboard-emoji">🏆</div>
+          <h2>We find the winner</h2>
+          <p>Reunly ranks the best date &amp; place for the whole crew, with a transparent score.</p>
+        </div>
+        <div class="onboard-slide">
+          <div class="onboard-emoji">✈️</div>
+          <h2>See the real cost</h2>
+          <p>Live flight estimates from everyone's city — shown in their own local currency.</p>
+        </div>
+      </div>
+      <div class="onboard-dots" id="onboardDots"></div>
+      <div class="onboard-actions">
+        <button class="btn ghost sm" id="onboardSkip">Skip</button>
+        <button class="btn" id="onboardNext" style="flex:1">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Shared city suggestions -->
+  <datalist id="cityList"></datalist>
+
+  <script src="data.js"></script>
+  <script src="engine.js"></script>
+  <script src="fares.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

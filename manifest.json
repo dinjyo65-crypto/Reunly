@@ -1,0 +1,19 @@
+{
+  "name": "Reunly — Reunion Planner",
+  "short_name": "Reunly",
+  "description": "Plan reunions: collect availability and destination preferences, rank the best options, and estimate travel costs.",
+  "start_url": "index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f1419",
+  "theme_color": "#0f1419",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

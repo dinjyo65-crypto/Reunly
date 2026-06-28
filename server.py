@@ -1,0 +1,341 @@
+"""
+server.py — Reunly static host + tiny fare proxy.
+
+Serves the PWA files AND exposes a same-origin fare API the front end calls:
+
+  GET /api/health            -> { ok, live, asOf }
+  GET /api/fare?from=&to=&date=
+                             -> { min, max, currency, source, asOf? }
+
+Fare resolution order (honest, never fabricated):
+  1. LIVE  — Amadeus Flight Offers Search, IF AMADEUS_CLIENT_ID / _SECRET env
+             vars are set (free self-service tier). source = "live".
+  2. SEARCHED — curated real round-trip ranges captured from fare sites.
+  3. ESTIMATED — distance-based heuristic fallback.
+  4. unknown  — city not in the coordinate table.
+
+No API key required to run: without Amadeus creds it transparently serves
+searched/estimated data through the same endpoint, so the plumbing is real and
+flips to live the moment credentials are provided.
+
+Run:  python server.py            (defaults to PORT 4175)
+Live: set AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET, then run.
+"""
+
+import json
+import math
+import os
+import threading
+import time
+import urllib.parse
+import urllib.request
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+USER_AGENT = "Reunly/0.5 (reunion planner prototype)"
+
+PORT = int(os.environ.get("PORT", "4175"))
+DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+FARES_AS_OF = "2026-06-27"
+
+# --- City coordinates (mirror of data.js, server-side estimate fallback) ------
+CITY_COORDS = {
+    "New York, NY": (40.7128, -74.006),
+    "San Francisco, CA": (37.7749, -122.4194),
+    "Los Angeles, CA": (34.0522, -118.2437),
+    "Chicago, IL": (41.8781, -87.6298),
+    "Washington, DC": (38.9072, -77.0369),
+    "Boston, MA": (42.3601, -71.0589),
+    "Seattle, WA": (47.6062, -122.3321),
+    "Atlanta, GA": (33.749, -84.388),
+    "Dallas, TX": (32.7767, -96.797),
+    "London, UK": (51.5072, -0.1276),
+    "Manchester, UK": (53.4808, -2.2426),
+    "Paris, France": (48.8566, 2.3522),
+    "Dubai, UAE": (25.2048, 55.2708),
+    "Abu Dhabi, UAE": (24.4539, 54.3773),
+    "Delhi, India": (28.6139, 77.209),
+    "Mumbai, India": (19.076, 72.8777),
+    "Bangalore, India": (12.9716, 77.5946),
+    "Chennai, India": (13.0827, 80.2707),
+    "Hyderabad, India": (17.385, 78.4867),
+    "Kolkata, India": (22.5726, 88.3639),
+    "Pune, India": (18.5204, 73.8567),
+    "Goa, India": (15.4909, 73.8278),
+    "Singapore": (1.3521, 103.8198),
+    "Bangkok, Thailand": (13.7563, 100.5018),
+    "Bali, Indonesia": (-8.6705, 115.2126),
+    "Kuala Lumpur, Malaysia": (3.139, 101.6869),
+    "Hong Kong": (22.3193, 114.1694),
+    "Sydney, Australia": (-33.8688, 151.2093),
+}
+
+# --- Curated real round-trip USD fares (mirror of data.js) --------------------
+SEARCHED_FARES = {
+    "Singapore|Bangkok, Thailand": (150, 310),
+    "Dubai, UAE|Bali, Indonesia": (520, 980),
+    "Mumbai, India|Goa, India": (65, 150),
+    "London, UK|Dubai, UAE": (380, 685),
+    "Delhi, India|Bangkok, Thailand": (230, 320),
+    "New York, NY|London, UK": (430, 650),
+}
+
+# --- City -> IATA (needed for the live Amadeus path) --------------------------
+CITY_IATA = {
+    "New York, NY": "JFK", "San Francisco, CA": "SFO", "Los Angeles, CA": "LAX",
+    "Chicago, IL": "ORD", "Washington, DC": "IAD", "Boston, MA": "BOS",
+    "Seattle, WA": "SEA", "Atlanta, GA": "ATL", "Dallas, TX": "DFW",
+    "London, UK": "LHR", "Manchester, UK": "MAN", "Paris, France": "CDG",
+    "Dubai, UAE": "DXB", "Abu Dhabi, UAE": "AUH", "Delhi, India": "DEL",
+    "Mumbai, India": "BOM", "Bangalore, India": "BLR", "Chennai, India": "MAA",
+    "Hyderabad, India": "HYD", "Kolkata, India": "CCU", "Pune, India": "PNQ",
+    "Goa, India": "GOI", "Singapore": "SIN", "Bangkok, Thailand": "BKK",
+    "Bali, Indonesia": "DPS", "Kuala Lumpur, Malaysia": "KUL",
+    "Hong Kong": "HKG", "Sydney, Australia": "SYD",
+}
+
+_LOWER = {k.lower(): k for k in CITY_COORDS}
+
+
+def resolve_city(name):
+    return _LOWER.get((name or "").strip().lower())
+
+
+# --- Geocoding for ANY city (OpenStreetMap Nominatim, keyless) ----------------
+# Serialized via a lock so concurrent fare requests for the same new city only
+# hit Nominatim once (respects their fair-use policy).
+_geo_cache = {}
+_geo_lock = threading.Lock()
+
+
+def geocode(name):
+    key = (name or "").strip().lower()
+    if not key:
+        return None
+    with _geo_lock:
+        if key in _geo_cache:
+            return _geo_cache[key]
+        coord = None
+        try:
+            q = urllib.parse.urlencode({"q": name, "format": "json", "limit": 1})
+            req = urllib.request.Request(
+                "https://nominatim.openstreetmap.org/search?" + q,
+                headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                arr = json.loads(r.read())
+            if arr:
+                coord = (float(arr[0]["lat"]), float(arr[0]["lon"]))
+        except Exception:
+            coord = None
+        _geo_cache[key] = coord
+        return coord
+
+
+def coords_for(name):
+    """Return (lat, lng) for a city: known table first, else geocoded."""
+    key = resolve_city(name)
+    if key:
+        return CITY_COORDS[key]
+    return geocode(name)
+
+
+def haversine_miles(a, b):
+    r = 3958.8
+    lat1, lng1 = a
+    lat2, lng2 = b
+    d_lat = math.radians(lat2 - lat1)
+    d_lng = math.radians(lng2 - lng1)
+    h = (math.sin(d_lat / 2) ** 2
+         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2))
+         * math.sin(d_lng / 2) ** 2)
+    return 2 * r * math.asin(math.sqrt(h))
+
+
+def estimate_fare(miles):
+    if miles is None:
+        return None
+    if miles == 0:
+        return (0, 0)
+    base = 60
+    near = min(miles, 600) * 0.20
+    far = max(0, miles - 600) * 0.11
+    mid = base + near + far
+    return (round(mid * 0.82 / 5) * 5, round(mid * 1.28 / 5) * 5)
+
+
+# --- Amadeus live path (optional) --------------------------------------------
+_token_cache = {"token": None, "exp": 0}
+
+
+def _amadeus_token():
+    cid = os.environ.get("AMADEUS_CLIENT_ID")
+    secret = os.environ.get("AMADEUS_CLIENT_SECRET")
+    if not cid or not secret:
+        return None
+    if _token_cache["token"] and _token_cache["exp"] > time.time() + 30:
+        return _token_cache["token"]
+    data = urllib.parse.urlencode({
+        "grant_type": "client_credentials",
+        "client_id": cid,
+        "client_secret": secret,
+    }).encode()
+    req = urllib.request.Request(
+        "https://test.api.amadeus.com/v1/security/oauth2/token", data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        body = json.loads(r.read())
+    _token_cache["token"] = body["access_token"]
+    _token_cache["exp"] = time.time() + body.get("expires_in", 1800)
+    return _token_cache["token"]
+
+
+def amadeus_fare(frm, to, date):
+    """Return (min, max) round-trip USD from live offers, or None on any issue."""
+    o_iata = CITY_IATA.get(frm)
+    d_iata = CITY_IATA.get(to)
+    if not o_iata or not d_iata:
+        return None
+    try:
+        token = _amadeus_token()
+        if not token:
+            return None
+        dep = date or "2026-08-14"
+        # Round trip: return ~5 days after departure.
+        ret = _plus_days(dep, 5)
+        params = urllib.parse.urlencode({
+            "originLocationCode": o_iata,
+            "destinationLocationCode": d_iata,
+            "departureDate": dep,
+            "returnDate": ret,
+            "adults": 1,
+            "currencyCode": "USD",
+            "max": 8,
+        })
+        req = urllib.request.Request(
+            "https://test.api.amadeus.com/v2/shopping/flight-offers?" + params,
+            headers={"Authorization": "Bearer " + token})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            body = json.loads(r.read())
+        prices = [float(o["price"]["grandTotal"]) for o in body.get("data", [])]
+        if not prices:
+            return None
+        return (round(min(prices)), round(max(prices)))
+    except Exception:
+        return None
+
+
+def _plus_days(iso, days):
+    import datetime
+    y, m, d = (int(x) for x in iso.split("-"))
+    dt = datetime.date(y, m, d) + datetime.timedelta(days=days)
+    return dt.isoformat()
+
+
+def resolve_fare(frm_raw, to_raw, date):
+    o = coords_for(frm_raw)
+    d = coords_for(to_raw)
+    if not o or not d:
+        return {"source": "unknown", "currency": "USD"}
+
+    miles = round(haversine_miles(o, d))
+    frm = resolve_city(frm_raw)
+    to = resolve_city(to_raw)
+
+    # Live (only for canonical cities with known IATA codes).
+    if os.environ.get("AMADEUS_CLIENT_ID") and frm in CITY_IATA and to in CITY_IATA:
+        live = amadeus_fare(frm, to, date)
+        if live:
+            return {"min": live[0], "max": live[1], "currency": "USD",
+                    "source": "live", "asOf": time.strftime("%Y-%m-%d"), "miles": miles}
+
+    # Curated searched fares (canonical pairs only).
+    if frm and to:
+        key = f"{frm}|{to}"
+        if key in SEARCHED_FARES:
+            lo, hi = SEARCHED_FARES[key]
+            return {"min": lo, "max": hi, "currency": "USD",
+                    "source": "searched", "asOf": FARES_AS_OF, "miles": miles}
+
+    if miles == 0:
+        return {"min": 0, "max": 0, "currency": "USD", "source": "estimated", "miles": 0}
+    est = estimate_fare(miles)
+    return {"min": est[0], "max": est[1], "currency": "USD", "source": "estimated", "miles": miles}
+
+
+# --- Destination photos (Wikipedia REST summary, keyless) ---------------------
+_photo_cache = {}
+_photo_lock = threading.Lock()
+
+
+def wiki_photo(place):
+    """Real photo URL for a place via Wikipedia page summary, or None."""
+    key = (place or "").strip().lower()
+    if not key:
+        return None
+    with _photo_lock:
+        if key in _photo_cache:
+            return _photo_cache[key]
+        url = None
+        try:
+            # Use the part before the first comma ("Goa, India" -> "Goa").
+            title = place.split(",")[0].strip().replace(" ", "_")
+            req = urllib.request.Request(
+                "https://en.wikipedia.org/api/rest_v1/page/summary/"
+                + urllib.parse.quote(title),
+                headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                body = json.loads(r.read())
+            img = body.get("originalimage") or body.get("thumbnail") or {}
+            url = img.get("source")
+        except Exception:
+            url = None
+        _photo_cache[key] = url
+        return url
+
+
+class Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=DIRECTORY, **kwargs)
+
+    def log_message(self, *args):
+        pass  # quiet
+
+    def end_headers(self):
+        # Prototype: never let the browser HTTP-cache files, so edits always
+        # load fresh (the service worker handles real offline caching).
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        super().end_headers()
+
+    def _send_json(self, obj, code=200):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/health":
+            return self._send_json({
+                "ok": True,
+                "live": bool(os.environ.get("AMADEUS_CLIENT_ID")),
+                "asOf": FARES_AS_OF,
+            })
+        if parsed.path == "/api/fare":
+            q = urllib.parse.parse_qs(parsed.query)
+            frm = q.get("from", [""])[0]
+            to = q.get("to", [""])[0]
+            date = q.get("date", [""])[0]
+            return self._send_json(resolve_fare(frm, to, date))
+        if parsed.path == "/api/photo":
+            q = urllib.parse.parse_qs(parsed.query)
+            place = q.get("place", [""])[0]
+            return self._send_json({"place": place, "image": wiki_photo(place)})
+        return super().do_GET()
+
+
+if __name__ == "__main__":
+    with ThreadingHTTPServer(("127.0.0.1", PORT), Handler) as httpd:
+        print(f"Reunly server on http://127.0.0.1:{PORT}  "
+              f"(live fares: {'ON' if os.environ.get('AMADEUS_CLIENT_ID') else 'OFF'})")
+        httpd.serve_forever()
