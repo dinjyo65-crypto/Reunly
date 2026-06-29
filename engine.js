@@ -374,6 +374,62 @@
     return combos.sort((a, b) => b.total - a.total);
   }
 
+  /**
+   * Roll up participant preferences for the host's "group insights" panel.
+   * Returns counts/medians that are safe to render even when fields are blank.
+   */
+  function summarizePrefs(participants) {
+    const out = {
+      total: participants.length,
+      accommodation: 0,
+      kids: 0,
+      withKids: 0,
+      budgets: [],
+      medianBudget: null,
+      food: {},
+      activities: {},
+      accessibility: [],
+    };
+    for (const p of participants) {
+      const pr = p.prefs || {};
+      if (pr.accommodation) out.accommodation += 1;
+      const k = Number(pr.kids) || 0;
+      if (k > 0) {
+        out.kids += k;
+        out.withKids += 1;
+      }
+      const b = parseFloat(pr.budget);
+      if (!Number.isNaN(b) && b > 0) out.budgets.push(b);
+      if (pr.food && pr.food !== "No preference") out.food[pr.food] = (out.food[pr.food] || 0) + 1;
+      (pr.activities || []).forEach((a) => (out.activities[a] = (out.activities[a] || 0) + 1));
+      if (pr.accessibility && pr.accessibility.trim()) {
+        out.accessibility.push({ name: p.name || "Someone", note: pr.accessibility.trim() });
+      }
+    }
+    if (out.budgets.length) {
+      const sorted = [...out.budgets].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      out.medianBudget =
+        sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+      out.minBudget = sorted[0];
+      out.maxBudget = sorted[sorted.length - 1];
+    }
+    // Sort food/activity tallies into ranked [label, count] arrays.
+    out.foodRanked = Object.entries(out.food).sort((a, b) => b[1] - a[1]);
+    out.activitiesRanked = Object.entries(out.activities).sort((a, b) => b[1] - a[1]);
+    return out;
+  }
+
+  /** Whole days from today until an ISO date (negative if past). */
+  function daysUntil(iso) {
+    if (!iso) return null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const target = new Date(iso + "T00:00:00");
+    if (Number.isNaN(target.getTime())) return null;
+    return Math.round((target - today) / 86400000);
+  }
+
   // External deep-link builders (verification, not integration).
   // encodeURIComponent guards against query-string injection.
   function googleFlightsLink(from, to) {
@@ -415,6 +471,8 @@
     // tallies
     tallyDestinations,
     tallyDates,
+    summarizePrefs,
+    daysUntil,
     // scoring
     avgFareTo,
     rankCombinations,

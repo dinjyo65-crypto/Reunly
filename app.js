@@ -23,12 +23,23 @@
   // ---- App state (persisted to localStorage; see saveState/loadState) ----
   const state = {
     user: null, // {name, email, city}
-    reunion: { name: "", type: "Family", code: "—" },
-    participants: D.SEED_PARTICIPANTS.map((p) => ({ ...p })),
+    reunion: { name: "", type: "Friends meetup", code: "—" },
+    participants: [], // starts empty — the organizer is added on entry
+    me: null, // participant id of the current user
+    role: null, // "organizer" | "participant"
     editingId: null, // which participant card is open for editing
+    phase: "decide", // active dashboard tab
     currencyMode: "local", // "local" (per traveller) | "usd"
     fromInvite: false, // arrived via a shared invite link
+    demoMode: false, // sample group loaded?
+    lockedPlan: null, // { destination, dateStart, dateEnd, dateLabel } once confirmed
+    ballot: null, // { open, openedBy, options:[...], votesByParticipant:{ id:{optionId} } }
+    memories: [], // [{ id, authorId, authorName, type:"note"|"photo", text, dataUrl?, ts }]
   };
+  let memoryPreview = false; // organiser previewing the wall before the event
+
+  const isMe = (p) => p.id === state.me;
+  const canEdit = (p) => state.role === "organizer" || isMe(p);
 
   // Fare provider injected into the engine: prefer a fetched (live/searched)
   // fare from the proxy cache, fall back to the synchronous engine estimate.
@@ -37,6 +48,8 @@
 
   // ---- Persistence ----
   const LS_STATE = "reunly_state_v1";
+  // Returns true on success, false if storage failed (e.g. quota exceeded by a
+  // large photo) — callers that add heavy data check the result.
   function saveState() {
     try {
       localStorage.setItem(
@@ -45,11 +58,19 @@
           user: state.user,
           reunion: state.reunion,
           participants: state.participants,
+          me: state.me,
+          role: state.role,
+          phase: state.phase,
           currencyMode: state.currencyMode,
+          demoMode: state.demoMode,
+          lockedPlan: state.lockedPlan,
+          ballot: state.ballot,
+          memories: state.memories,
         })
       );
+      return true;
     } catch (e) {
-      /* storage unavailable — prototype still works in-memory */
+      return false; // storage unavailable / full — prototype still works in-memory
     }
   }
   function loadState() {
@@ -58,8 +79,15 @@
       if (s && Array.isArray(s.participants)) {
         state.user = s.user || null;
         state.reunion = s.reunion || state.reunion;
-        state.participants = s.participants;
+        state.participants = s.participants.map(D.normalizeParticipant);
+        state.me = s.me || null;
+        state.role = s.role || "organizer";
+        state.phase = s.phase || "decide";
         state.currencyMode = s.currencyMode || "local";
+        state.demoMode = !!s.demoMode;
+        state.lockedPlan = s.lockedPlan || null;
+        state.ballot = s.ballot || null;
+        state.memories = Array.isArray(s.memories) ? s.memories : [];
         return true;
       }
     } catch (e) {
@@ -131,7 +159,7 @@
       name: state.reunion.name,
       type: state.reunion.type,
       p: state.participants.map((p) => ({
-        n: p.name, e: p.email, c: p.city, d: p.dates, x: p.destinations,
+        n: p.name, e: p.email, c: p.city, d: p.dates, x: p.destinations, pr: p.prefs,
       })),
     };
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
@@ -149,7 +177,9 @@
           code: data.code || generateInviteCode(data.type),
         };
         state.participants = data.p.map((x) =>
-          D.makeParticipant({ name: x.n, email: x.e, city: x.c, dates: x.d, destinations: x.x })
+          D.normalizeParticipant({
+            name: x.n, email: x.e, city: x.c, dates: x.d, destinations: x.x, prefs: x.pr,
+          })
         );
         return true;
       }
@@ -174,6 +204,52 @@
     } catch (e) {
       window.prompt("Copy this invite link:", url);
     }
+  }
+
+  // ---- Smart invitations modal (WhatsApp / SMS / Email / Copy) ----
+  function inviteMessage() {
+    const name = state.reunion.name || "our get-together";
+    return `You're invited to ${name} on Reunly 🎉 Add your dates & preferences here: ${buildShareUrl()}`;
+  }
+  let inviteOpener = null;
+  function openInviteModal() {
+    inviteOpener = document.activeElement;
+    const url = buildShareUrl();
+    const msg = inviteMessage();
+    $("#inviteLink").value = url;
+    $("#inviteWhatsApp").href = `https://wa.me/?text=${encodeURIComponent(msg)}`;
+    $("#inviteSms").href = `sms:?&body=${encodeURIComponent(msg)}`;
+    $("#inviteEmail").href =
+      `mailto:?subject=${encodeURIComponent("You're invited: " + (state.reunion.name || "Reunly get-together"))}` +
+      `&body=${encodeURIComponent(msg)}`;
+    $("#inviteModal").hidden = false;
+    $("#inviteClose").focus();
+  }
+  function closeInviteModal() {
+    $("#inviteModal").hidden = true;
+    if (inviteOpener && inviteOpener.focus) inviteOpener.focus();
+  }
+  function wireInviteModal() {
+    $("#inviteClose").addEventListener("click", closeInviteModal);
+    $("#inviteModal").addEventListener("click", (e) => {
+      if (e.target.id === "inviteModal") closeInviteModal(); // click backdrop
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !$("#inviteModal").hidden) closeInviteModal();
+    });
+    $("#inviteSms").addEventListener("click", () => setTimeout(closeInviteModal, 50));
+    $("#inviteEmail").addEventListener("click", () => setTimeout(closeInviteModal, 50));
+    $("#inviteWhatsApp").addEventListener("click", () => setTimeout(closeInviteModal, 50));
+    $("#inviteCopy").addEventListener("click", async () => {
+      const url = $("#inviteLink").value;
+      try {
+        await navigator.clipboard.writeText(url);
+        toast("Invite link copied");
+      } catch (e) {
+        $("#inviteLink").select();
+        window.prompt("Copy this invite link:", url);
+      }
+    });
   }
 
   // ---- Tiny DOM helpers ----
@@ -202,7 +278,7 @@
   function toast(msg) {
     let t = document.getElementById("toast");
     if (!t) {
-      t = el("div", { id: "toast", class: "toast" });
+      t = el("div", { id: "toast", class: "toast", role: "status", "aria-live": "polite" });
       document.body.appendChild(t);
     }
     t.textContent = msg;
@@ -231,6 +307,13 @@
     const dl = $("#cityList");
     dl.textContent = "";
     D.CITY_LIST.forEach((city) => dl.appendChild(el("option", { value: city })));
+  }
+
+  function populateEventTypes() {
+    const sel = $("#reunionType");
+    sel.textContent = "";
+    D.EVENT_TYPES.forEach((t) => sel.appendChild(el("option", { value: t, text: t })));
+    sel.value = state.reunion.type;
   }
 
   // -------------------------------------------------------------------------
@@ -264,40 +347,42 @@
   // -------------------------------------------------------------------------
   // Screen: Choose path
   // -------------------------------------------------------------------------
+  // Ensure the current user exists in the roster and return them. Sets state.me.
   function addCurrentUserAsParticipant() {
-    // Add the registering user to the roster if not already present (by email).
-    if (!state.user) return;
-    const exists = state.participants.some(
+    if (!state.user) return null;
+    let mine = state.participants.find(
       (p) => p.email.toLowerCase() === state.user.email.toLowerCase()
     );
-    if (exists) return;
-    state.participants.unshift(
-      D.makeParticipant({
+    if (!mine) {
+      mine = D.makeParticipant({
         name: state.user.name,
         email: state.user.email,
         city: state.user.city,
-      })
-    );
+      });
+      state.participants.unshift(mine);
+    }
+    state.me = mine.id;
+    return mine;
   }
 
   function enterDashboard(mode, code) {
-    addCurrentUserAsParticipant();
-    state.reunion.code = code || generateInviteCode(state.reunion.type);
-    if (mode === "setup") {
-      state.reunion.name = state.reunion.name || "Untitled Reunion";
+    if (mode !== "resume") {
+      const mine = addCurrentUserAsParticipant();
+      state.role = mode === "join" ? "participant" : "organizer";
+      state.reunion.code = code || generateInviteCode(state.reunion.type);
+      if (mode === "setup") {
+        state.reunion.name = state.reunion.name || "Untitled get-together";
+      }
+      // Open the current user's card so they can fill in their own answers.
+      state.editingId = mine ? mine.id : null;
+      // Invitees land on People (answer for yourself); organizers on Decide.
+      state.phase = state.role === "participant" ? "people" : "decide";
     }
+    populateEventTypes();
     $("#reunionName").value = state.reunion.name;
     $("#reunionType").value = state.reunion.type;
-    // The current user's card starts open so they can fill their preferences.
-    // Look them up by email rather than assuming a list position.
-    const me =
-      (state.user &&
-        state.participants.find(
-          (p) => p.email.toLowerCase() === state.user.email.toLowerCase()
-        )) ||
-      state.participants[0];
-    state.editingId = me ? me.id : null;
     showScreen("dashboard");
+    showPhase(state.phase || "decide");
     renderAll();
   }
 
@@ -327,7 +412,8 @@
       saveState();
     });
     $("#restartBtn").addEventListener("click", () => fullReset());
-    $("#shareBtn").addEventListener("click", shareInvite);
+    $("#shareBtn").addEventListener("click", openInviteModal);
+    wireInviteModal();
     $("#currencyToggle").addEventListener("click", () => {
       state.currencyMode = state.currencyMode === "usd" ? "local" : "usd";
       updateCurrencyToggle();
@@ -417,6 +503,9 @@
     destGroup.appendChild(helper);
     wrap.appendChild(destGroup);
 
+    // Preferences (the broader "how should we meet" answers)
+    wrap.appendChild(buildPrefsGroup(p));
+
     // Actions
     const actions = el("div", { class: "btn-row" });
     actions.appendChild(
@@ -429,19 +518,112 @@
         },
       })
     );
-    actions.appendChild(
-      el("button", {
-        class: "btn danger sm",
-        text: "Remove",
-        onClick: () => {
-          state.participants = state.participants.filter((x) => x.id !== p.id);
-          if (state.editingId === p.id) state.editingId = null;
-          renderAll();
-        },
-      })
-    );
+    // Only an organiser can remove others — and never themselves.
+    if (state.role === "organizer" && !isMe(p)) {
+      actions.appendChild(
+        el("button", {
+          class: "btn danger sm",
+          text: "Remove",
+          onClick: () => {
+            state.participants = state.participants.filter((x) => x.id !== p.id);
+            if (state.editingId === p.id) state.editingId = null;
+            renderAll();
+          },
+        })
+      );
+    }
     wrap.appendChild(actions);
     return wrap;
+  }
+
+  // Preferences sub-form: budget, food, accommodation, kids, accessibility,
+  // activities. All optional; each writes straight into p.prefs.
+  function buildPrefsGroup(p) {
+    const pr = p.prefs;
+    const group = el("div", { class: "field-group" });
+    group.appendChild(el("div", { class: "gl", text: "Preferences (optional)" }));
+
+    const row = el("div", { class: "row" });
+    // Budget
+    const bWrap = el("div");
+    bWrap.appendChild(el("label", { text: "Max budget / person (USD)" }));
+    bWrap.appendChild(
+      el("input", {
+        type: "number", min: "0", inputmode: "numeric", value: pr.budget || "",
+        placeholder: "e.g. 800",
+        onInput: (e) => { pr.budget = e.target.value; scheduleRecompute(); },
+      })
+    );
+    row.appendChild(bWrap);
+    // Food
+    const fWrap = el("div");
+    fWrap.appendChild(el("label", { text: "Food preference" }));
+    const fSel = el("select", {
+      onChange: (e) => { pr.food = e.target.value; scheduleRecompute(); },
+    });
+    D.FOOD_OPTIONS.forEach((o) => fSel.appendChild(el("option", { value: o, text: o })));
+    fSel.value = pr.food || "No preference";
+    fWrap.appendChild(fSel);
+    row.appendChild(fWrap);
+    group.appendChild(row);
+
+    const row2 = el("div", { class: "row" });
+    // Kids
+    const kWrap = el("div");
+    kWrap.appendChild(el("label", { text: "Kids attending" }));
+    kWrap.appendChild(
+      el("input", {
+        type: "number", min: "0", inputmode: "numeric", value: pr.kids || 0,
+        onInput: (e) => { pr.kids = Math.max(0, parseInt(e.target.value || "0", 10)); scheduleRecompute(); },
+      })
+    );
+    row2.appendChild(kWrap);
+    // Accommodation (toggle styled as checkbox row)
+    const aWrap = el("div");
+    aWrap.appendChild(el("label", { text: "Needs accommodation" }));
+    const toggle = el("label", { class: "check-row" });
+    const cb = el("input", { type: "checkbox" });
+    cb.checked = !!pr.accommodation;
+    cb.addEventListener("change", (e) => { pr.accommodation = e.target.checked; scheduleRecompute(); });
+    toggle.appendChild(cb);
+    toggle.appendChild(el("span", { text: "Yes, needs a place to stay" }));
+    aWrap.appendChild(toggle);
+    row2.appendChild(aWrap);
+    group.appendChild(row2);
+
+    // Accessibility
+    const accWrap = el("div", { class: "field-group" });
+    accWrap.appendChild(el("label", { text: "Accessibility needs" }));
+    accWrap.appendChild(
+      el("input", {
+        type: "text", value: pr.accessibility || "",
+        placeholder: "e.g. step-free access",
+        onInput: (e) => { pr.accessibility = e.target.value; scheduleRecompute(); },
+      })
+    );
+    group.appendChild(accWrap);
+
+    // Activities (multi-select chips)
+    group.appendChild(el("div", { class: "gl", text: "Activity interests", style: "margin-top:10px" }));
+    const chips = el("div", { class: "chip-select" });
+    D.ACTIVITY_OPTIONS.forEach((a) => {
+      const on = pr.activities.includes(a);
+      const c = el("button", {
+        type: "button",
+        class: `chip-toggle${on ? " on" : ""}`,
+        text: a,
+        onClick: (e) => {
+          const i = pr.activities.indexOf(a);
+          if (i >= 0) pr.activities.splice(i, 1);
+          else pr.activities.push(a);
+          e.currentTarget.classList.toggle("on");
+          scheduleRecompute();
+        },
+      });
+      chips.appendChild(c);
+    });
+    group.appendChild(chips);
+    return group;
   }
 
   // --- Field builders: each writes straight into the participant object ---
@@ -515,37 +697,61 @@
   function renderParticipants() {
     const list = $("#participantList");
     list.textContent = "";
-    if (!state.participants.length) {
-      list.appendChild(el("div", { class: "empty", text: "No participants yet." }));
-      return;
+
+    // Empty state: only the organiser themselves, no sample data.
+    const others = state.participants.filter((p) => !isMe(p));
+    if (state.role === "organizer" && others.length === 0 && !state.demoMode) {
+      const cta = el("div", { class: "card empty-cta" });
+      cta.appendChild(el("div", { class: "empty-emoji", text: "🪄" }));
+      cta.appendChild(el("div", { class: "empty-title", text: "It's just you so far" }));
+      cta.appendChild(
+        el("div", {
+          class: "empty-sub",
+          text: "Invite your group, or explore with a sample group to see how Reunly decides.",
+        })
+      );
+      const row = el("div", { class: "btn-row" });
+      row.appendChild(el("button", { class: "btn", text: "📨 Invite people", onClick: openInviteModal }));
+      row.appendChild(el("button", { class: "btn secondary", text: "Explore sample group", onClick: loadDemo }));
+      cta.appendChild(row);
+      list.appendChild(cta);
     }
-    state.participants.forEach((p, idx) => {
+
+    // Own card first, then the rest.
+    const ordered = [...state.participants].sort(
+      (a, b) => (isMe(b) ? 1 : 0) - (isMe(a) ? 1 : 0)
+    );
+    ordered.forEach((p, idx) => {
       const editing = state.editingId === p.id;
+      const mine = isMe(p);
       const card = el("div", {
         id: `pcard-${p.id}`,
-        class: `card stagger${editing ? " highlight" : ""}`,
+        class: `card stagger${editing ? " highlight" : ""}${mine ? " is-me" : ""}`,
       });
       card.style.animationDelay = `${Math.min(idx, 8) * 0.04}s`;
 
       const head = el("div", { class: "pcard-head" });
-      head.appendChild(
-        el("div", { class: "pcard-avatar", text: D.cityEmoji(p.city) })
-      );
+      head.appendChild(el("div", { class: "pcard-avatar", text: D.cityEmoji(p.city) }));
       const who = el("div", { class: "who" });
-      who.appendChild(el("div", { class: "name", text: headerName(p) }));
+      const nameLine = el("div", { class: "name" });
+      nameLine.appendChild(el("span", { text: headerName(p) }));
+      if (mine) nameLine.appendChild(el("span", { class: "you-badge", text: "You" }));
+      who.appendChild(nameLine);
       who.appendChild(el("div", { class: "meta", text: headerMeta(p) }));
       head.appendChild(who);
-      head.appendChild(
-        el("button", {
-          class: "btn secondary sm",
-          style: "width:auto",
-          text: editing ? "Close" : "Edit",
-          onClick: () => {
-            state.editingId = editing ? null : p.id;
-            renderAll();
-          },
-        })
-      );
+      if (canEdit(p)) {
+        head.appendChild(
+          el("button", {
+            class: "btn secondary sm",
+            style: "width:auto",
+            text: editing ? "Close" : mine ? "Edit yours" : "Edit",
+            onClick: () => {
+              state.editingId = editing ? null : p.id;
+              renderAll();
+            },
+          })
+        );
+      }
       card.appendChild(head);
 
       if (editing) {
@@ -571,7 +777,14 @@
     cell.appendChild(el("div", { class: "lbl", text: lbl }));
     cell.appendChild(el("div", { class: "val", text: value }));
     if (fraction != null) {
-      const bar = el("div", { class: "bar" });
+      const bar = el("div", {
+        class: "bar",
+        role: "progressbar",
+        "aria-valuenow": String(Math.round(Math.max(0, Math.min(1, fraction)) * 100)),
+        "aria-valuemin": "0",
+        "aria-valuemax": "100",
+        "aria-label": `${lbl} score`,
+      });
       const span = el("span");
       const target = pct(Math.max(0, Math.min(1, fraction)));
       // Animate width from 0 -> target (double rAF so the 0 state paints first).
@@ -600,15 +813,53 @@
       // Not yet fetched — request once, then re-render recommendations.
       photoReqDest = dest;
       window.ReunlyFares.fetchPhoto(dest).then((url) => {
-        if (url) renderRecommendations();
+        if (url) renderWinner();
       });
     }
     const label = el("div", { class: "rec-photo-label" });
     label.appendChild(el("span", { class: "rec-photo-emoji", text: D.cityEmoji(dest) }));
     label.appendChild(el("span", { text: dest }));
-    banner.appendChild(el("span", { class: "rec-photo-pin", text: "🏆 Top pick" }));
+    banner.appendChild(el("span", { class: "rec-photo-pin", text: "Top pick" }));
     banner.appendChild(label);
     card.appendChild(banner);
+  }
+
+  // One-line plain-English reason the top option wins (transparency).
+  function winnerReason(c) {
+    const parts = [];
+    if (c.destScore >= 0.6) parts.push("most-wanted place");
+    if (c.dateScore >= 0.6) parts.push("works for most people");
+    if (c.costScore >= 0.6) parts.push("easiest on budgets");
+    return parts.length ? `Wins on ${parts.join(" · ")}` : "Best overall balance";
+  }
+
+  function lockState(c) {
+    return (
+      state.lockedPlan &&
+      state.lockedPlan.destination === c.destination &&
+      state.lockedPlan.dateLabel === c.dateLabel
+    );
+  }
+  function toggleLock(c) {
+    const locked = lockState(c);
+    if (!locked && state.role !== "organizer") {
+      toast("Only the organiser can lock the plan");
+      return;
+    }
+    if (!locked && state.lockedPlan) {
+      if (!window.confirm(`Lock ${c.destination} on ${c.dateLabel} for everyone?`)) return;
+    }
+    state.lockedPlan = locked
+      ? null
+      : {
+          destination: c.destination,
+          dateStart: c.dateRange.start,
+          dateEnd: c.dateRange.end,
+          dateLabel: c.dateLabel,
+        };
+    state.phase = "decide";
+    renderAll();
+    if (!locked) confetti();
   }
 
   // Fire a one-off confetti burst when a clear winner is newly decided.
@@ -641,55 +892,194 @@
     setTimeout(() => layer.remove(), 2600);
   }
 
-  function renderRecommendations() {
-    const list = $("#recList");
-    list.textContent = "";
-    const combos = E.rankCombinations(state.participants, undefined, fareProvider).slice(0, 3);
+  // Cache the ranked combos for a single render pass (winner + others share them).
+  function rankedCombos() {
+    return E.rankCombinations(state.participants, undefined, fareProvider);
+  }
+
+  // The #1 option as a hero: photo, name+date, why-it-won, scores, primary Lock.
+  function renderWinner() {
+    const hero = $("#winnerHero");
+    hero.textContent = "";
+    const combos = rankedCombos();
     if (!combos.length) {
-      list.appendChild(
+      hero.appendChild(
         el("div", {
           class: "empty",
-          text: "Add dates and destinations to participants to see recommendations.",
+          text: "Add dates and destinations on the People tab to see the best option.",
         })
       );
       return;
     }
-    // Celebrate a newly-decided winner (see maybeCelebrate).
     maybeCelebrate(combos);
+    const c = combos[0];
+    const locked = lockState(c);
+    const card = el("div", { class: "card winner-card stagger" });
 
-    const medals = ["🥇", "🥈", "🥉"];
-    combos.forEach((c, i) => {
-      const card = el("div", { class: `card rec-card stagger${i === 0 ? " gold" : ""}` });
-      card.style.animationDelay = `${i * 0.07}s`;
+    addRecPhoto(card, c.destination);
 
-      // Real destination photo banner on the #1 pick (Wikipedia via proxy).
-      if (i === 0) addRecPhoto(card, c.destination);
+    const body = el("div", { class: "winner-body" });
+    body.appendChild(el("div", { class: "winner-when", text: `📅 ${c.dateLabel}` }));
+    body.appendChild(el("div", { class: "winner-reason", text: winnerReason(c) }));
 
-      const top = el("div", { class: "rec-top" });
-      top.appendChild(el("div", { class: "pos", text: medals[i] || `#${i + 1}` }));
-      const titleWrap = el("div", { style: "flex:1;min-width:0" });
-      const title = el("div", { class: "rec-title" });
-      title.appendChild(el("span", { class: "rec-emoji", text: D.cityEmoji(c.destination) }));
-      title.appendChild(el("span", { text: c.destination }));
-      titleWrap.appendChild(title);
-      titleWrap.appendChild(el("div", { class: "rec-sub", text: `📅 ${c.dateLabel}` }));
-      top.appendChild(titleWrap);
-      card.appendChild(top);
+    const grid = el("div", { class: "score-grid" });
+    grid.appendChild(scoreCell("Date", pct(c.dateScore), c.dateScore));
+    grid.appendChild(scoreCell("Place", pct(c.destScore), c.destScore));
+    grid.appendChild(scoreCell("Cost", pct(c.costScore), c.costScore));
+    grid.appendChild(
+      scoreCell("Avg fare", c.avgFare != null ? `$${Math.round(c.avgFare)}` : "—", null)
+    );
+    body.appendChild(grid);
 
-      const grid = el("div", { class: "score-grid" });
-      grid.appendChild(scoreCell("Date", pct(c.dateScore), c.dateScore));
-      grid.appendChild(scoreCell("Place", pct(c.destScore), c.destScore));
-      grid.appendChild(scoreCell("Cost", pct(c.costScore), c.costScore));
-      grid.appendChild(
-        scoreCell(
-          c.fareSearched ? "Avg fare ●" : "Avg fare ~",
-          c.avgFare != null ? `$${Math.round(c.avgFare)}` : "—",
-          null
+    const lockBtn = el("button", {
+      class: locked ? "btn secondary" : "btn",
+      style: "width:100%;margin-top:14px",
+      text: locked ? "✓ Locked — tap to unlock" : "🔒 Lock this plan",
+      onClick: () => toggleLock(c),
+    });
+    body.appendChild(lockBtn);
+    card.appendChild(body);
+    hero.appendChild(card);
+  }
+
+  // The runners-up (combos 2 & 3): compact rows, no photo/medal noise.
+  function renderRecommendations() {
+    const list = $("#recList");
+    list.textContent = "";
+    const others = rankedCombos().slice(1, 3);
+    const section = list.closest(".section");
+    if (section) section.hidden = !others.length;
+    others.forEach((c, i) => {
+      const row = el("div", { class: "card tight alt-option stagger" });
+      row.style.animationDelay = `${i * 0.06}s`;
+      const head = el("div", { class: "alt-head" });
+      head.appendChild(el("span", { class: "alt-emoji", text: D.cityEmoji(c.destination) }));
+      const w = el("div", { style: "flex:1;min-width:0" });
+      w.appendChild(el("div", { class: "alt-title", text: c.destination }));
+      w.appendChild(el("div", { class: "alt-sub", text: `${c.dateLabel} · ~$${Math.round(c.avgFare || 0)} avg` }));
+      head.appendChild(w);
+      head.appendChild(
+        el("button", {
+          class: "btn ghost sm",
+          style: "width:auto",
+          text: lockState(c) ? "Locked" : "Lock",
+          onClick: () => toggleLock(c),
+        })
+      );
+      row.appendChild(head);
+      list.appendChild(row);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Dashboard: countdown (shown once a plan is locked)
+  // -------------------------------------------------------------------------
+  function renderCountdown() {
+    const box = $("#countdown");
+    const plan = state.lockedPlan;
+    if (!plan) {
+      box.hidden = true;
+      box.textContent = "";
+      return;
+    }
+    box.hidden = false;
+    box.textContent = "";
+    const days = E.daysUntil(plan.dateStart);
+    const big =
+      days == null ? "Locked" : days > 0 ? `${days}` : days === 0 ? "Today" : "Past";
+    box.appendChild(el("div", { class: "cd-emoji", text: D.cityEmoji(plan.destination) }));
+    const mid = el("div", { class: "cd-mid" });
+    mid.appendChild(
+      el("div", {
+        class: "cd-line",
+        text:
+          days > 0
+            ? `${plan.destination} in`
+            : days === 0
+            ? `It's today — ${plan.destination}!`
+            : plan.destination,
+      })
+    );
+    if (days > 0) {
+      const big2 = el("div", { class: "cd-big" });
+      big2.appendChild(el("span", { class: "cd-num", text: big }));
+      big2.appendChild(el("span", { class: "cd-days", text: days === 1 ? "day" : "days" }));
+      mid.appendChild(big2);
+    }
+    mid.appendChild(el("div", { class: "cd-sub", text: `📅 ${plan.dateLabel}` }));
+    box.appendChild(mid);
+  }
+
+  // -------------------------------------------------------------------------
+  // Dashboard: group insights (preference roll-up)
+  // -------------------------------------------------------------------------
+  function statTile(big, label) {
+    const t = el("div", { class: "stat-tile" });
+    t.appendChild(el("div", { class: "stat-big", text: big }));
+    t.appendChild(el("div", { class: "stat-label", text: label }));
+    return t;
+  }
+  function renderInsights() {
+    const list = $("#insightsList");
+    list.textContent = "";
+    const s = E.summarizePrefs(state.participants);
+    if (!s.total) {
+      list.appendChild(el("div", { class: "empty", text: "No responses yet." }));
+      return;
+    }
+    const card = el("div", { class: "card" });
+    const grid = el("div", { class: "stat-grid" });
+    grid.appendChild(statTile(`${s.total}`, "people"));
+    grid.appendChild(
+      statTile(
+        s.medianBudget != null ? `$${s.medianBudget}` : "—",
+        s.medianBudget != null ? "median budget" : "budget"
+      )
+    );
+    grid.appendChild(statTile(`${s.accommodation}`, "need a stay"));
+    grid.appendChild(statTile(`${s.kids}`, s.kids === 1 ? "child" : "kids"));
+    card.appendChild(grid);
+
+    // Food mix
+    if (s.foodRanked.length) {
+      const fr = el("div", { class: "insight-row" });
+      fr.appendChild(el("span", { class: "insight-key", text: "🍽️ Dietary" }));
+      const tags = el("div", { class: "insight-tags" });
+      s.foodRanked.forEach(([label, n]) =>
+        tags.appendChild(el("span", { class: "badge gray", text: `${label} ×${n}` }))
+      );
+      fr.appendChild(tags);
+      card.appendChild(fr);
+    }
+    // Top activities
+    if (s.activitiesRanked.length) {
+      const ar = el("div", { class: "insight-row" });
+      ar.appendChild(el("span", { class: "insight-key", text: "🎯 Top activities" }));
+      const tags = el("div", { class: "insight-tags" });
+      s.activitiesRanked.slice(0, 5).forEach(([label, n]) =>
+        tags.appendChild(el("span", { class: "badge", text: `${label} ×${n}` }))
+      );
+      ar.appendChild(tags);
+      card.appendChild(ar);
+    }
+    // Budget range
+    if (s.medianBudget != null) {
+      card.appendChild(
+        el("div", {
+          class: "insight-note",
+          text: `Budgets range $${s.minBudget}–$${s.maxBudget} per person (USD).`,
+        })
+      );
+    }
+    // Accessibility callouts
+    if (s.accessibility.length) {
+      s.accessibility.forEach((a) =>
+        card.appendChild(
+          el("div", { class: "insight-note", text: `♿ ${a.name}: ${a.note}` })
         )
       );
-      card.appendChild(grid);
-      list.appendChild(card);
-    });
+    }
+    list.appendChild(card);
   }
 
   // -------------------------------------------------------------------------
@@ -710,14 +1100,16 @@
     };
   }
 
-  function costCardSide(p, toCity, heading) {
-    const side = el("div", { class: "card tight" });
-    side.appendChild(el("div", { class: "cost-sub", text: heading }));
+  function costCardSide(p, toCity, heading, opts = {}) {
+    const side = el("div", { class: "cost-side" });
+    if (heading) side.appendChild(el("div", { class: "cost-sub", text: heading }));
     if (!toCity) {
       side.appendChild(el("div", { class: "muted", text: "—" }));
       return side;
     }
-    side.appendChild(el("div", { class: "badge gray", text: `${D.cityEmoji(toCity)} ${toCity}` }));
+    if (opts.showDest !== false) {
+      side.appendChild(el("div", { class: "badge gray", text: `${D.cityEmoji(toCity)} ${toCity}` }));
+    }
     const info = fareRangeFor(p.city, toCity);
     if (!info) {
       // Distinguish "still fetching from the proxy" from "proxy gave up".
@@ -786,57 +1178,504 @@
   function renderCosts() {
     const list = $("#costList");
     list.textContent = "";
-    const combos = E.rankCombinations(state.participants, undefined, fareProvider);
+    const combos = rankedCombos();
     const groupBest = combos.length ? combos[0].destination : null;
-    $("#costDestHint").textContent = groupBest
-      ? `group best: ${groupBest}`
-      : "no group pick yet";
+    // Name the destination ONCE in the heading instead of on every card.
+    $("#costsHeading").textContent = groupBest
+      ? `Getting to ${D.cityEmoji(groupBest)} ${groupBest}`
+      : "Travel costs";
 
     if (!groupBest) {
       list.appendChild(
-        el("div", { class: "empty", text: "No destination data yet." })
+        el("div", { class: "empty", text: "Add destinations on People to see travel costs." })
       );
       return;
     }
+    const withCity = state.participants.filter((p) => p.city);
+    if (!withCity.length) {
+      list.appendChild(el("div", { class: "empty", text: "No home cities entered yet." }));
+      return;
+    }
 
-    state.participants.forEach((p, idx) => {
-      if (!p.city) return;
-      const card = el("div", { class: "card stagger" });
+    withCity.forEach((p, idx) => {
+      const card = el("div", { class: "card stagger cost-row" });
       card.style.animationDelay = `${Math.min(idx, 8) * 0.04}s`;
       const head = el("div", { class: "pcard-head" });
       head.appendChild(el("div", { class: "pcard-avatar", text: D.cityEmoji(p.city) }));
       const who = el("div", { class: "who" });
-      who.appendChild(el("div", { class: "name", text: p.name || "Unnamed" }));
+      who.appendChild(
+        el("div", { class: "name", text: (p.name || "Unnamed") + (isMe(p) ? " (you)" : "") })
+      );
       who.appendChild(el("div", { class: "meta", text: `from ${p.city}` }));
       head.appendChild(who);
       card.appendChild(head);
-
-      const grid = el("div", { class: "cost-grid", style: "margin-top:10px" });
-      grid.appendChild(costCardSide(p, groupBest, "Group best destination"));
-      const pref = p.destinations[0] || "";
-      const prefIsGroupBest =
-        pref && pref.trim().toLowerCase() === groupBest.trim().toLowerCase();
-      if (prefIsGroupBest) {
-        const side = el("div", { class: "card tight side-note" });
-        side.appendChild(el("div", { class: "cost-sub", text: "Their 1st preference" }));
-        side.appendChild(el("span", { class: "badge good", text: "🎯 Same as group best" }));
-      grid.appendChild(side);
-      } else {
-        grid.appendChild(costCardSide(p, pref, "Their 1st preference"));
-      }
-      card.appendChild(grid);
+      // Single fare side to the agreed/best destination — no redundant labels.
+      card.appendChild(costCardSide(p, groupBest, null, { showDest: false }));
       list.appendChild(card);
     });
   }
 
   // -------------------------------------------------------------------------
+  // Voting ("Decide" — the group converges; engine score is the seed/tiebreak)
+  // -------------------------------------------------------------------------
+  function optionId(c) {
+    return `${c.destination}|${c.dateLabel}`;
+  }
+  function openBallot() {
+    const combos = rankedCombos().slice(0, 4);
+    if (combos.length < 2) {
+      toast("Need at least two options to vote on");
+      return;
+    }
+    state.ballot = {
+      open: true,
+      openedBy: state.me,
+      options: combos.map((c) => ({
+        id: optionId(c),
+        destination: c.destination,
+        dateStart: c.dateRange.start,
+        dateEnd: c.dateRange.end,
+        dateLabel: c.dateLabel,
+        seedTotal: c.total,
+      })),
+      votesByParticipant: {},
+    };
+    renderAll();
+    toast("Voting opened — cast your vote!");
+  }
+  function closeBallot() {
+    if (state.ballot) state.ballot.open = false;
+    renderAll();
+  }
+  function reopenBallot() {
+    if (state.ballot) state.ballot.open = true;
+    renderAll();
+  }
+  function clearBallot() {
+    state.ballot = null;
+    renderAll();
+  }
+  function castVote(id) {
+    if (!state.ballot || !state.ballot.open) return;
+    if (!state.me) {
+      toast("Register to vote");
+      return;
+    }
+    state.ballot.votesByParticipant[state.me] = { optionId: id };
+    saveState();
+    renderVote();
+  }
+  function weightedPick(weights) {
+    const sum = weights.reduce((a, b) => a + b, 0) || 1;
+    let r = Math.random() * sum;
+    for (let i = 0; i < weights.length; i++) {
+      r -= weights[i];
+      if (r <= 0) return i;
+    }
+    return weights.length - 1;
+  }
+  function seedDemoVotes() {
+    if (!state.ballot) return;
+    const opts = state.ballot.options;
+    state.participants.forEach((p) => {
+      if (isMe(p)) return; // leave the user's own vote intact
+      const idx = weightedPick(opts.map((o) => Math.max(0.05, o.seedTotal)));
+      state.ballot.votesByParticipant[p.id] = { optionId: opts[idx].id };
+    });
+    saveState();
+    renderVote();
+  }
+  function lockBallotOption(o) {
+    if (!window.confirm(`Lock ${o.destination} on ${o.dateLabel} for everyone?`)) return;
+    state.lockedPlan = {
+      destination: o.destination,
+      dateStart: o.dateStart,
+      dateEnd: o.dateEnd,
+      dateLabel: o.dateLabel,
+    };
+    state.phase = "decide";
+    renderAll();
+    confetti();
+  }
+
+  function renderVote() {
+    const panel = $("#votePanel");
+    if (!panel) return;
+    panel.textContent = "";
+    const b = state.ballot;
+    const combos = rankedCombos();
+
+    // No ballot yet — organiser can open one.
+    if (!b) {
+      if (state.role === "organizer" && combos.length >= 2) {
+        const card = el("div", { class: "card vote-cta" });
+        card.appendChild(el("div", { class: "vote-cta-title", text: "🗳️ Can't agree? Put it to a vote" }));
+        card.appendChild(
+          el("div", { class: "vote-cta-sub", text: "Let everyone pick from the top options — the group decides, the score just breaks ties." })
+        );
+        card.appendChild(
+          el("button", { class: "btn", style: "width:100%;margin-top:12px", text: "Open a vote", onClick: openBallot })
+        );
+        panel.appendChild(card);
+      }
+      return;
+    }
+
+    // Tally.
+    const counts = {};
+    let totalVotes = 0;
+    Object.values(b.votesByParticipant).forEach((v) => {
+      counts[v.optionId] = (counts[v.optionId] || 0) + 1;
+      totalVotes += 1;
+    });
+    const myVote = state.me ? (b.votesByParticipant[state.me] || {}).optionId : null;
+    const ordered = [...b.options].sort(
+      (a, c) => (counts[c.id] || 0) - (counts[a.id] || 0) || c.seedTotal - a.seedTotal
+    );
+    const maxCount = Math.max(1, ...b.options.map((o) => counts[o.id] || 0));
+
+    const card = el("div", { class: "card vote-card" });
+    const head = el("div", { class: "vote-head" });
+    head.appendChild(el("h3", { class: "vote-title", text: b.open ? "🗳️ Vote for the plan" : "🏁 Vote results" }));
+    head.appendChild(el("span", { class: "hint", text: `${totalVotes} of ${state.participants.length} voted` }));
+    card.appendChild(head);
+
+    ordered.forEach((o, i) => {
+      const n = counts[o.id] || 0;
+      const leading = !b.open && i === 0 && n > 0;
+      const row = el("button", {
+        class: `vote-opt${myVote === o.id ? " mine" : ""}${leading ? " winner" : ""}`,
+        onClick: b.open ? () => castVote(o.id) : null,
+      });
+      if (!b.open) row.disabled = true;
+      const top = el("div", { class: "vote-opt-top" });
+      top.appendChild(el("span", { class: "vote-emoji", text: D.cityEmoji(o.destination) }));
+      const w = el("div", { style: "flex:1;min-width:0" });
+      const t = el("div", { class: "vote-opt-title" });
+      t.appendChild(el("span", { text: o.destination }));
+      if (myVote === o.id) t.appendChild(el("span", { class: "vote-you", text: "✓ you" }));
+      if (leading) t.appendChild(el("span", { class: "vote-you win", text: "winner" }));
+      w.appendChild(t);
+      w.appendChild(el("div", { class: "vote-opt-sub", text: o.dateLabel }));
+      top.appendChild(w);
+      top.appendChild(el("span", { class: "vote-count", text: String(n) }));
+      row.appendChild(top);
+      const bar = el("div", { class: "vote-bar" });
+      const span = el("span");
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          span.style.width = `${Math.round((n / maxCount) * 100)}%`;
+        })
+      );
+      bar.appendChild(span);
+      row.appendChild(bar);
+      card.appendChild(row);
+    });
+
+    // Organiser controls.
+    if (state.role === "organizer") {
+      const ctrl = el("div", { class: "vote-controls" });
+      if (b.open) {
+        ctrl.appendChild(el("button", { class: "btn secondary sm", text: "Close voting", onClick: closeBallot }));
+        if (state.demoMode) {
+          ctrl.appendChild(el("button", { class: "btn ghost sm", text: "Seed demo votes", onClick: seedDemoVotes }));
+        }
+      } else {
+        ctrl.appendChild(
+          el("button", { class: "btn sm", text: `🔒 Lock ${ordered[0].destination}`, onClick: () => lockBallotOption(ordered[0]) })
+        );
+        ctrl.appendChild(el("button", { class: "btn ghost sm", text: "Reopen", onClick: reopenBallot }));
+        ctrl.appendChild(el("button", { class: "btn ghost sm", text: "Clear", onClick: clearBallot }));
+      }
+      card.appendChild(ctrl);
+    } else if (b.open && !myVote) {
+      card.appendChild(el("div", { class: "vote-hintline", text: "Tap an option above to cast your vote." }));
+    }
+    panel.appendChild(card);
+  }
+
+  // -------------------------------------------------------------------------
   // Render orchestration + debounced recompute
   // -------------------------------------------------------------------------
+  function hasResponded(p) {
+    return p.destinations.some(Boolean) || p.dates.some(E.isValidRange);
+  }
   function renderMeta() {
     $("#inviteChip").textContent = `Invite code: ${state.reunion.code}`;
-    $("#countChip").textContent = `${state.participants.length} participant${
-      state.participants.length === 1 ? "" : "s"
-    }`;
+    $("#countChip").textContent = `${state.participants.length} invited`;
+    const responded = state.participants.filter(hasResponded).length;
+    const hint = $("#respondedHint");
+    if (hint) hint.textContent = `${responded} of ${state.participants.length} responded`;
+    renderDemoBanner();
+  }
+
+  // ---- Demo mode (sample group) ----
+  function renderDemoBanner() {
+    const b = $("#demoBanner");
+    if (!b) return;
+    b.textContent = "";
+    if (!state.demoMode) {
+      b.hidden = true;
+      return;
+    }
+    b.hidden = false;
+    b.appendChild(el("span", { text: "🧪 Demo mode — sample people loaded. " }));
+    b.appendChild(el("button", { class: "link-btn", text: "Clear sample data", onClick: clearDemo }));
+  }
+  function loadDemo() {
+    const have = new Set(state.participants.map((p) => p.id));
+    D.SEED_PARTICIPANTS.map(D.normalizeParticipant).forEach((p) => {
+      if (!have.has(p.id)) state.participants.push(p);
+    });
+    state.demoMode = true;
+    renderAll();
+  }
+  function clearDemo() {
+    state.participants = state.participants.filter(
+      (p) => isMe(p) || !String(p.id).startsWith("p_seed_")
+    );
+    state.demoMode = false;
+    state.lockedPlan = null;
+    renderAll();
+  }
+
+  // ---- Tabs / phases ----
+  function showPhase(phase) {
+    state.phase = phase;
+    document.querySelectorAll(".phase").forEach((node) => {
+      node.hidden = node.getAttribute("data-phase") !== phase;
+    });
+    document.querySelectorAll(".phase-tab").forEach((t) => {
+      const on = t.getAttribute("data-phase") === phase;
+      t.classList.toggle("active", on);
+      t.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    saveState();
+  }
+  function wirePhases() {
+    document.querySelectorAll(".phase-tab").forEach((t) => {
+      t.addEventListener("click", () => {
+        showPhase(t.getAttribute("data-phase"));
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    });
+  }
+
+  // ---- Memory wall (real: photos + notes, author-tagged, on-device storage) ----
+  const MEMORY_PHOTO_CAP = 12;
+  function meName() {
+    const m = state.participants.find(isMe);
+    return (m && m.name) || state.user?.name || "You";
+  }
+  function authorEmoji(authorId) {
+    const a = state.participants.find((p) => p.id === authorId);
+    return a ? D.cityEmoji(a.city) : "📍";
+  }
+  function timeAgo(ts) {
+    const s = Math.round((Date.now() - ts) / 1000);
+    if (s < 60) return "just now";
+    const m = Math.round(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.round(h / 24)}d ago`;
+  }
+  // Downscale an image file to a JPEG dataURL so it fits in localStorage.
+  function downscaleImage(file, maxDim, quality) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          let { width, height } = img;
+          if (width >= height && width > maxDim) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else if (height > maxDim) {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL("image/jpeg", quality));
+        };
+        img.onerror = reject;
+        img.src = reader.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+  function addNote(text) {
+    const t = (text || "").trim();
+    if (!t) return;
+    state.memories.unshift({
+      id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      authorId: state.me,
+      authorName: meName(),
+      type: "note",
+      text: t,
+      ts: Date.now(),
+    });
+    saveState();
+    renderMemories();
+  }
+  async function addPhoto(file) {
+    if (!file) return;
+    if (state.memories.filter((m) => m.type === "photo").length >= MEMORY_PHOTO_CAP) {
+      toast(`Photo limit reached (${MEMORY_PHOTO_CAP}) on this device`);
+      return;
+    }
+    let dataUrl;
+    try {
+      dataUrl = await downscaleImage(file, 1024, 0.7);
+    } catch (e) {
+      toast("Couldn't read that image");
+      return;
+    }
+    const mem = {
+      id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      authorId: state.me,
+      authorName: meName(),
+      type: "photo",
+      dataUrl,
+      ts: Date.now(),
+    };
+    state.memories.unshift(mem);
+    if (!saveState()) {
+      state.memories.shift(); // roll back — too big for this device's storage
+      toast("Photo too large to save on this device");
+    }
+    renderMemories();
+  }
+  function deleteMemory(id) {
+    state.memories = state.memories.filter((m) => m.id !== id);
+    saveState();
+    renderMemories();
+  }
+
+  function renderMemories() {
+    const panel = $("#memoriesPanel");
+    if (!panel) return;
+    panel.textContent = "";
+
+    if (!state.lockedPlan) {
+      panel.appendChild(
+        el("div", {
+          class: "empty",
+          text: "Lock a plan first — the memory wall opens once your get-together is set.",
+        })
+      );
+      return;
+    }
+
+    const days = E.daysUntil(state.lockedPlan.dateStart);
+    const beforeEvent = days != null && days > 0;
+
+    // Gated teaser before the event (organiser can preview early).
+    if (beforeEvent && !memoryPreview) {
+      const card = el("div", { class: "card memory-teaser" });
+      card.appendChild(el("div", { class: "memory-emoji", text: "📸" }));
+      card.appendChild(el("div", { class: "memory-title", text: "The Memory Wall unlocks on the day" }));
+      card.appendChild(
+        el("div", {
+          class: "memory-sub",
+          text: `Opens for everyone after ${state.lockedPlan.dateLabel} — share photos & notes from ${state.lockedPlan.destination}.`,
+        })
+      );
+      if (state.role === "organizer") {
+        card.appendChild(
+          el("button", {
+            class: "btn ghost sm",
+            style: "margin-top:14px",
+            text: "Preview the wall",
+            onClick: () => {
+              memoryPreview = true;
+              renderMemories();
+            },
+          })
+        );
+      }
+      panel.appendChild(card);
+      return;
+    }
+
+    // Preview banner.
+    if (beforeEvent && memoryPreview) {
+      panel.appendChild(
+        el("div", {
+          class: "demo-banner",
+          text: `👀 Preview — the wall opens for everyone after ${state.lockedPlan.dateLabel}.`,
+        })
+      );
+    }
+
+    // Composer.
+    const composer = el("div", { class: "card memory-composer" });
+    const ta = el("textarea", {
+      class: "memory-input",
+      rows: "2",
+      placeholder: `Share a memory from ${state.lockedPlan.destination}…`,
+    });
+    composer.appendChild(ta);
+    const row = el("div", { class: "memory-actions" });
+    // Hidden file input + button to trigger it.
+    const fileInput = el("input", { type: "file", accept: "image/*", style: "display:none" });
+    fileInput.addEventListener("change", (e) => {
+      addPhoto(e.target.files && e.target.files[0]);
+      e.target.value = "";
+    });
+    row.appendChild(fileInput);
+    row.appendChild(
+      el("button", { class: "btn secondary sm", text: "📷 Photo", onClick: () => fileInput.click() })
+    );
+    row.appendChild(
+      el("button", {
+        class: "btn sm",
+        style: "flex:1",
+        text: "Add note",
+        onClick: () => {
+          addNote(ta.value);
+          ta.value = "";
+        },
+      })
+    );
+    composer.appendChild(row);
+    composer.appendChild(
+      el("div", { class: "memory-note", text: "🔒 Stored only in this browser — these stay on your device." })
+    );
+    panel.appendChild(composer);
+
+    // Feed (newest first).
+    if (!state.memories.length) {
+      panel.appendChild(el("div", { class: "empty", text: "No memories yet — be the first to share." }));
+      return;
+    }
+    const feed = el("div", { class: "memory-feed" });
+    state.memories.forEach((m) => {
+      const item = el("div", { class: "card tight memory-item stagger" });
+      const head = el("div", { class: "memory-item-head" });
+      head.appendChild(el("div", { class: "pcard-avatar sm", text: authorEmoji(m.authorId) }));
+      const who = el("div", { style: "flex:1;min-width:0" });
+      who.appendChild(el("div", { class: "memory-author", text: m.authorName || "Someone" }));
+      who.appendChild(el("div", { class: "memory-time", text: timeAgo(m.ts) }));
+      head.appendChild(who);
+      if (m.authorId === state.me) {
+        head.appendChild(
+          el("button", { class: "icon-btn sm", "aria-label": "Delete", text: "✕", onClick: () => deleteMemory(m.id) })
+        );
+      }
+      item.appendChild(head);
+      if (m.type === "photo" && m.dataUrl) {
+        const img = el("img", { class: "memory-photo", alt: `Photo from ${m.authorName || "someone"}`, src: m.dataUrl });
+        item.appendChild(img);
+      }
+      if (m.text) item.appendChild(el("div", { class: "memory-text", text: m.text }));
+      feed.appendChild(item);
+    });
+    panel.appendChild(feed);
   }
 
   function updateCurrencyToggle() {
@@ -862,6 +1701,7 @@
     window.ReunlyFares.ensureFares(neededRoutes(), () => {
       // New fares arrived — re-render derived sections (not inputs).
       renderMeta();
+      renderWinner();
       renderRecommendations();
       renderCosts();
     }).finally(() => {
@@ -873,8 +1713,13 @@
   // inputs untouched so focus/caret isn't lost while typing.
   function recomputeDerived() {
     renderMeta();
+    renderCountdown();
+    renderWinner();
+    renderVote();
     renderRecommendations();
+    renderInsights();
     renderCosts();
+    renderMemories();
     saveState();
     refreshFares();
   }
@@ -889,9 +1734,14 @@
   function renderAll() {
     clearTimeout(recomputeTimer); // a structural render supersedes any pending debounce
     renderMeta();
+    renderCountdown();
+    renderWinner();
+    renderVote();
     renderParticipants();
     renderRecommendations();
+    renderInsights();
     renderCosts();
+    renderMemories();
     saveState();
     refreshFares();
   }
@@ -901,9 +1751,11 @@
   // -------------------------------------------------------------------------
   function init() {
     populateCityList();
+    populateEventTypes();
     wireRegister();
     wireChoose();
     wireReunionMeta();
+    wirePhases();
     registerServiceWorker();
     updateCurrencyToggle();
     startRotator();

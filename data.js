@@ -145,6 +145,59 @@ function currencyForCity(city) {
 }
 
 /**
+ * Get-together types. Reunly is positioned broadly — any group deciding when,
+ * where and how to meet — so this spans far beyond classic reunions.
+ */
+const EVENT_TYPES = [
+  "Friends meetup",
+  "Family gathering",
+  "School reunion",
+  "University / alumni",
+  "Office / work",
+  "Wedding",
+  "Holiday / group trip",
+  "Sports club",
+  "Birthday",
+  "Other",
+];
+
+/** Dietary options collected per person and rolled up for the host. */
+const FOOD_OPTIONS = [
+  "No preference",
+  "Vegetarian",
+  "Vegan",
+  "Halal",
+  "Kosher",
+  "Gluten-free",
+  "Pescatarian",
+];
+
+/** Activity interests collected per person (multi-select) and rolled up. */
+const ACTIVITY_OPTIONS = [
+  "Beach",
+  "Nightlife",
+  "Sightseeing",
+  "Food & dining",
+  "Nature / hiking",
+  "Relaxation",
+  "Adventure",
+  "Culture",
+  "Shopping",
+];
+
+/** Default preference block for a participant. */
+function defaultPrefs() {
+  return {
+    budget: "", // max spend per person, in USD (number as string)
+    food: "No preference",
+    accommodation: false, // needs a place to stay?
+    kids: 0, // number of children attending
+    accessibility: "", // free-text access needs
+    activities: [], // subset of ACTIVITY_OPTIONS
+  };
+}
+
+/**
  * Factory for a blank participant. Centralizing the shape here means every
  * place that creates a participant (seed, "add demo", future import) stays in
  * sync. Dates and destinations are fixed-length ranked arrays (RANKED_SLOTS).
@@ -160,8 +213,30 @@ function makeParticipant(overrides = {}) {
     dates: Array.from({ length: RANKED_SLOTS }, () => ({ start: "", end: "" })),
     // Ranked destination city names: index 0 = 1st choice, etc.
     destinations: Array.from({ length: RANKED_SLOTS }, () => ""),
+    prefs: defaultPrefs(),
     ...overrides,
   };
+}
+
+/**
+ * Merge a (possibly older / partial) participant object onto the current shape,
+ * filling any missing fields. Used after loadState/import so data saved by an
+ * earlier version never breaks the new UI.
+ */
+function normalizeParticipant(p) {
+  const base = makeParticipant({ id: p && p.id });
+  const out = { ...base, ...(p || {}) };
+  out.dates = Array.from({ length: RANKED_SLOTS }, (_, i) => {
+    const d = (p && p.dates && p.dates[i]) || {};
+    return { start: d.start || "", end: d.end || "" };
+  });
+  out.destinations = Array.from(
+    { length: RANKED_SLOTS },
+    (_, i) => (p && p.destinations && p.destinations[i]) || ""
+  );
+  out.prefs = { ...defaultPrefs(), ...((p && p.prefs) || {}) };
+  out.prefs.activities = Array.isArray(out.prefs.activities) ? out.prefs.activities : [];
+  return out;
 }
 
 // Common candidate date ranges (festive/holiday windows) reused across the
@@ -181,6 +256,7 @@ const SEED_PARTICIPANTS = [
     city: "Dubai, UAE",
     dates: [D.xmas, D.jan, D.nov],
     destinations: ["Bali, Indonesia", "Bangkok, Thailand", "Singapore"],
+    prefs: { budget: "1200", food: "Halal", accommodation: true, kids: 2, accessibility: "", activities: ["Beach", "Relaxation", "Food & dining"] },
   }),
   makeParticipant({
     id: "p_seed_2",
@@ -189,6 +265,7 @@ const SEED_PARTICIPANTS = [
     city: "Singapore",
     dates: [D.xmas, D.nov, D.jan],
     destinations: ["Bangkok, Thailand", "Bali, Indonesia", "Goa, India"],
+    prefs: { budget: "900", food: "No preference", accommodation: true, kids: 0, accessibility: "", activities: ["Nightlife", "Food & dining", "Adventure"] },
   }),
   makeParticipant({
     id: "p_seed_3",
@@ -197,6 +274,7 @@ const SEED_PARTICIPANTS = [
     city: "London, UK",
     dates: [D.jan, D.xmas, D.nov],
     destinations: ["Dubai, UAE", "Goa, India", "Singapore"],
+    prefs: { budget: "1500", food: "No preference", accommodation: true, kids: 0, accessibility: "", activities: ["Sightseeing", "Culture", "Food & dining"] },
   }),
   makeParticipant({
     id: "p_seed_4",
@@ -205,6 +283,7 @@ const SEED_PARTICIPANTS = [
     city: "Mumbai, India",
     dates: [D.xmas, D.jan, D.nov],
     destinations: ["Goa, India", "Dubai, UAE", "Bangkok, Thailand"],
+    prefs: { budget: "600", food: "Vegetarian", accommodation: false, kids: 1, accessibility: "", activities: ["Beach", "Relaxation"] },
   }),
   makeParticipant({
     id: "p_seed_5",
@@ -213,6 +292,7 @@ const SEED_PARTICIPANTS = [
     city: "Delhi, India",
     dates: [D.xmas, D.nov, D.jan],
     destinations: ["Goa, India", "Bangkok, Thailand", "Dubai, UAE"],
+    prefs: { budget: "700", food: "Vegetarian", accommodation: true, kids: 0, accessibility: "", activities: ["Nightlife", "Beach", "Adventure"] },
   }),
   makeParticipant({
     id: "p_seed_6",
@@ -221,6 +301,7 @@ const SEED_PARTICIPANTS = [
     city: "New York, NY",
     dates: [D.nov, D.xmas, D.jan],
     destinations: ["London, UK", "Bali, Indonesia", "Bangkok, Thailand"],
+    prefs: { budget: "2000", food: "Pescatarian", accommodation: true, kids: 0, accessibility: "Step-free access preferred", activities: ["Culture", "Sightseeing", "Shopping"] },
   }),
   makeParticipant({
     id: "p_seed_7",
@@ -229,6 +310,7 @@ const SEED_PARTICIPANTS = [
     city: "Bangalore, India",
     dates: [D.xmas, D.jan, D.nov],
     destinations: ["Goa, India", "Singapore", "Bangkok, Thailand"],
+    prefs: { budget: "800", food: "Vegan", accommodation: false, kids: 0, accessibility: "", activities: ["Beach", "Nature / hiking", "Relaxation"] },
   }),
 ];
 
@@ -243,6 +325,11 @@ window.ReunlyData = {
   currencyForCity,
   cityEmoji,
   RANKED_SLOTS,
+  EVENT_TYPES,
+  FOOD_OPTIONS,
+  ACTIVITY_OPTIONS,
+  defaultPrefs,
   makeParticipant,
+  normalizeParticipant,
   SEED_PARTICIPANTS,
 };

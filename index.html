@@ -7,7 +7,8 @@
         content="default-src 'self'; img-src 'self' data: https://upload.wikimedia.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#080b16" />
-  <title>Reunly — Reunion Planner</title>
+  <title>Reunly — Reconnect. We'll handle the rest.</title>
+  <meta name="description" content="Reunly is the easiest way for groups to decide when, where and how to meet — reunions, family gatherings, alumni events, trips and friend meetups." />
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="icon.svg" />
@@ -18,7 +19,7 @@
     <div class="logo">R</div>
     <div>
       <h1>Reunly</h1>
-      <div class="sub" id="topbarSub">Plan the reunion everyone can make</div>
+      <div class="sub" id="topbarSub">Reconnect. We'll handle the rest.</div>
     </div>
     <div class="spacer"></div>
     <button class="btn ghost sm" id="themeToggle" aria-label="Toggle theme" title="Toggle light/dark">🌙</button>
@@ -37,10 +38,10 @@
         <span class="float f6">🛫</span>
       </div>
       <div class="hero">
-        <div class="hero-badge">✦ Plan together · travel together</div>
-        <h1 class="hero-title">Where will the<br /><span class="grad">crew reunite?</span></h1>
-        <p class="hero-tag">Pool everyone's dates &amp; dream spots — like
-          <span class="rot" id="rotator">Bali 🌺</span></p>
+        <div class="hero-badge">✦ When · where · how, sorted</div>
+        <h1 class="hero-title">Get the group<br /><span class="grad">together.</span></h1>
+        <p class="hero-tag">The easiest way to agree on a
+          <span class="rot" id="rotator">reunion 🎉</span></p>
       </div>
       <div class="card center-card reg-card">
         <label for="regName">Full name</label>
@@ -52,7 +53,7 @@
         <div class="error" id="regError"></div>
         <button class="btn" id="regSubmit" style="margin-top:16px">Get started →</button>
         <p class="muted" style="font-size:.72rem;text-align:center;margin:12px 0 0">
-          No account needed · your data stays on this device
+          No account needed · lives in this browser until you share an invite link
         </p>
       </div>
     </section>
@@ -62,8 +63,8 @@
       <div class="card center-card">
         <div class="section-head"><h2 id="choiceGreeting">What would you like to do?</h2></div>
         <div class="choice-grid">
-          <button class="btn" id="chooseSetup">Set up a reunion</button>
-          <button class="btn secondary" id="chooseJoin">Join a reunion invitation</button>
+          <button class="btn" id="chooseSetup">Plan a get-together</button>
+          <button class="btn secondary" id="chooseJoin">Join with an invite code</button>
         </div>
         <div id="joinPanel" hidden>
           <div class="divider"></div>
@@ -77,69 +78,97 @@
 
     <!-- ============ Screen: Dashboard ============ -->
     <section class="screen" id="screen-dashboard">
-      <!-- Reunion meta -->
+      <!-- Event meta (pinned above the tabs) -->
       <div class="card tight">
         <div class="row">
           <div>
-            <label for="reunionName">Reunion name</label>
-            <input id="reunionName" type="text" placeholder="The Rivera Family Reunion" />
+            <label for="reunionName">Event name</label>
+            <input id="reunionName" type="text" placeholder="e.g. The Class of '15 Reunion" />
           </div>
           <div>
             <label for="reunionType">Type</label>
-            <select id="reunionType">
-              <option>Family</option>
-              <option>School</option>
-              <option>College</option>
-              <option>Friends</option>
-            </select>
+            <select id="reunionType"></select>
           </div>
         </div>
         <div class="pcard-summary" style="margin-top:10px">
           <span class="chip" id="inviteChip">Invite code: —</span>
-          <span class="chip" id="countChip">0 participants</span>
+          <span class="chip" id="countChip">0 invited</span>
         </div>
-        <button class="btn secondary sm" id="shareBtn" style="width:auto;margin-top:10px">🔗 Share invite link</button>
+        <button class="btn secondary sm" id="shareBtn" style="width:auto;margin-top:10px">📨 Invite people</button>
       </div>
 
-      <!-- Recommendations -->
-      <div class="section">
-        <div class="section-head">
-          <h2>Top recommendations</h2>
-          <span class="hint">date 30% · place 30% · cost 40%</span>
+      <!-- Demo-mode banner -->
+      <div class="demo-banner" id="demoBanner" hidden></div>
+
+      <!-- Countdown (pinned once a plan is locked) -->
+      <div class="countdown" id="countdown" hidden></div>
+
+      <!-- Lifecycle tabs -->
+      <nav class="phasebar" id="phasebar" role="tablist" aria-label="Sections">
+        <button class="phase-tab active" role="tab" aria-selected="true" data-phase="decide" id="tab-decide">Decide</button>
+        <button class="phase-tab" role="tab" aria-selected="false" data-phase="people" id="tab-people">People</button>
+        <button class="phase-tab" role="tab" aria-selected="false" data-phase="costs" id="tab-costs">Costs</button>
+        <button class="phase-tab" role="tab" aria-selected="false" data-phase="memories" id="tab-memories">Memories</button>
+      </nav>
+
+      <!-- ===== Decide ===== -->
+      <div class="phase" data-phase="decide" role="tabpanel" aria-labelledby="tab-decide">
+        <div id="winnerHero"></div>
+        <div id="votePanel"></div>
+        <div class="section">
+          <div class="section-head">
+            <h2>Other strong options</h2>
+            <span class="hint" id="respondedHint"></span>
+          </div>
+          <div id="recList"></div>
         </div>
-        <div id="recList"></div>
+        <div class="section" id="insightsSection">
+          <div class="section-head">
+            <h2>Group insights</h2>
+            <span class="hint">from everyone's answers</span>
+          </div>
+          <div id="insightsList"></div>
+        </div>
       </div>
 
-      <!-- Participants -->
-      <div class="section">
-        <div class="section-head">
-          <h2>Participants</h2>
-          <button class="btn secondary sm" id="addParticipant" style="width:auto">+ Add demo participant</button>
+      <!-- ===== People ===== -->
+      <div class="phase" data-phase="people" role="tabpanel" aria-labelledby="tab-people" hidden>
+        <div class="section">
+          <div class="section-head">
+            <h2>People</h2>
+            <button class="btn secondary sm" id="addParticipant" style="width:auto">+ Add someone</button>
+          </div>
+          <div id="participantList"></div>
         </div>
-        <div id="participantList"></div>
       </div>
 
-      <!-- Travel costs -->
-      <div class="section">
-        <div class="section-head">
-          <h2>Travel costs</h2>
-          <button class="btn ghost sm" id="currencyToggle" style="width:auto">Show USD</button>
+      <!-- ===== Costs ===== -->
+      <div class="phase" data-phase="costs" role="tabpanel" aria-labelledby="tab-costs" hidden>
+        <div class="section">
+          <div class="section-head">
+            <h2 id="costsHeading">Travel costs</h2>
+            <button class="btn ghost sm" id="currencyToggle" style="width:auto">Show USD</button>
+          </div>
+          <div id="costList"></div>
+          <div class="disclaimer">
+            Fares are round-trip in <strong>USD</strong>; local amounts use approximate
+            static rates. <span class="badge good">searched</span> fares are real captured
+            ranges; <span class="badge warn">estimated</span> fares are distance-based.
+            Not guaranteed prices — use the search links on each card to confirm.
+          </div>
         </div>
-        <div class="hint" id="costDestHint" style="margin:-4px 0 8px">vs group best</div>
-        <div id="costList"></div>
-        <div class="disclaimer">
-          Fares are round-trip, sourced in <strong>USD</strong>; local-currency amounts
-          use approximate static rates.
-          <span class="badge good">live</span>/<span class="badge good">searched</span>
-          fares come from the fare proxy / captured ranges;
-          <span class="badge warn">estimated</span> fares are distance-based fallbacks.
-          None is a guaranteed price — use the search links on each card to confirm
-          before booking.
+      </div>
+
+      <!-- ===== Memories ===== -->
+      <div class="phase" data-phase="memories" role="tabpanel" aria-labelledby="tab-memories" hidden>
+        <div class="section">
+          <div class="section-head"><h2>Memory wall</h2></div>
+          <div id="memoriesPanel"></div>
         </div>
       </div>
 
       <footer class="app-footer">
-        Reunly · prototype v0.3 — demo data, no booking. Fares for guidance only.
+        Reunly · making get-togethers effortless · prototype v0.7
       </footer>
     </section>
   </main>
@@ -149,19 +178,19 @@
     <div class="onboard-card">
       <div class="onboard-slides" id="onboardSlides">
         <div class="onboard-slide">
-          <div class="onboard-emoji">🗳️</div>
-          <h2>Everyone's in</h2>
-          <p>Each friend adds their available dates and dream destinations — ranked 1st, 2nd, 3rd.</p>
+          <div class="onboard-emoji">📨</div>
+          <h2>Invite the group</h2>
+          <p>Share one link by WhatsApp, SMS or email. Everyone adds their dates, budget and preferences.</p>
         </div>
         <div class="onboard-slide">
           <div class="onboard-emoji">🏆</div>
-          <h2>We find the winner</h2>
-          <p>Reunly ranks the best date &amp; place for the whole crew, with a transparent score.</p>
+          <h2>We decide together</h2>
+          <p>Reunly ranks the best date &amp; place for the whole group — transparently, factoring in cost.</p>
         </div>
         <div class="onboard-slide">
-          <div class="onboard-emoji">✈️</div>
-          <h2>See the real cost</h2>
-          <p>Live flight estimates from everyone's city — shown in their own local currency.</p>
+          <div class="onboard-emoji">🎉</div>
+          <h2>Lock it & count down</h2>
+          <p>Lock the plan, see the countdown and what everyone needs — then just turn up and reconnect.</p>
         </div>
       </div>
       <div class="onboard-dots" id="onboardDots"></div>
@@ -169,6 +198,28 @@
         <button class="btn ghost sm" id="onboardSkip">Skip</button>
         <button class="btn" id="onboardNext" style="flex:1">Next</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ============ Invite modal ============ -->
+  <div id="inviteModal" class="modal" role="dialog" aria-modal="true" aria-label="Invite people" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>Invite people</h2>
+        <button class="icon-btn" id="inviteClose" aria-label="Close">✕</button>
+      </div>
+      <p class="muted" style="font-size:.8rem;margin:0 0 12px">
+        Share one link — invitees add their availability &amp; preferences, no app install.
+        This prototype has no server, so the link carries a snapshot of the event.
+      </p>
+      <div class="invite-grid">
+        <a class="invite-opt" id="inviteWhatsApp" target="_blank" rel="noopener noreferrer"><span>💬</span>WhatsApp</a>
+        <a class="invite-opt" id="inviteSms"><span>📱</span>SMS</a>
+        <a class="invite-opt" id="inviteEmail"><span>✉️</span>Email</a>
+        <button class="invite-opt" id="inviteCopy"><span>🔗</span>Copy link</button>
+      </div>
+      <label for="inviteLink" style="margin-top:14px">Your invite link</label>
+      <input id="inviteLink" type="text" readonly />
     </div>
   </div>
 
