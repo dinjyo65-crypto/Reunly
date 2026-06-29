@@ -214,6 +214,7 @@ function makeParticipant(overrides = {}) {
     // Ranked destination city names: index 0 = 1st choice, etc.
     destinations: Array.from({ length: RANKED_SLOTS }, () => ""),
     prefs: defaultPrefs(),
+    rsvp: "no_response", // "in" | "out" | "no_response"
     ...overrides,
   };
 }
@@ -236,6 +237,7 @@ function normalizeParticipant(p) {
   );
   out.prefs = { ...defaultPrefs(), ...((p && p.prefs) || {}) };
   out.prefs.activities = Array.isArray(out.prefs.activities) ? out.prefs.activities : [];
+  out.rsvp = (p && p.rsvp) || "no_response";
   return out;
 }
 
@@ -313,6 +315,11 @@ const SEED_PARTICIPANTS = [
     prefs: { budget: "800", food: "Vegan", accommodation: false, kids: 0, accessibility: "", activities: ["Beach", "Nature / hiking", "Relaxation"] },
   }),
 ];
+
+// Give the sample group some RSVP variety (most in, one undecided, one out).
+SEED_PARTICIPANTS.forEach((p, i) => {
+  p.rsvp = i === 6 ? "no_response" : i === 5 ? "out" : "in";
+});
 
 // Expose for non-module script usage (loaded via plain <script> tags).
 window.ReunlyData = {

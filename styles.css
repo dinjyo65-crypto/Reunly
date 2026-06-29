@@ -725,6 +725,27 @@ a:focus-visible {
 }
 .memory-text { font-size: 0.9rem; margin-top: 10px; line-height: 1.5; white-space: pre-wrap; }
 
+/* ---- RSVP ---- */
+.rsvp-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+.rsvp-pill {
+  cursor: pointer; font-size: 0.78rem; font-weight: 650; font-family: inherit;
+  background: var(--surface-2); color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 999px; padding: 7px 13px;
+  transition: all 0.16s ease;
+}
+.rsvp-pill:hover { border-color: var(--border-strong); }
+.rsvp-pill.in.on { background: rgba(52,211,153,0.16); color: var(--good); border-color: rgba(52,211,153,0.5); }
+.rsvp-pill.out.on { background: rgba(251,113,133,0.16); color: var(--danger); border-color: rgba(251,113,133,0.5); }
+.rsvp-status { font-size: 0.76rem; font-weight: 600; }
+.rsvp-status.in { color: var(--good); }
+.rsvp-status.out { color: var(--danger); }
+.rsvp-status.no_response { color: var(--text-dim); }
+
+/* ---- Respond-as simulator (demo) ---- */
+.respond-as { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.respond-as-label { margin: 0; font-size: 0.72rem; color: var(--text-dim); font-weight: 600; }
+.respond-as select { width: auto; flex: 1; padding: 8px 10px; font-size: 0.82rem; }
+
 /* Respect reduced-motion preferences */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

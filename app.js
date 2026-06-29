@@ -158,8 +158,9 @@
       code: state.reunion.code,
       name: state.reunion.name,
       type: state.reunion.type,
+      // Privacy: the invite link does NOT carry anyone's email address.
       p: state.participants.map((p) => ({
-        n: p.name, e: p.email, c: p.city, d: p.dates, x: p.destinations, pr: p.prefs,
+        n: p.name, c: p.city, d: p.dates, x: p.destinations, pr: p.prefs, rsvp: p.rsvp,
       })),
     };
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
@@ -178,7 +179,8 @@
         };
         state.participants = data.p.map((x) =>
           D.normalizeParticipant({
-            name: x.n, email: x.e, city: x.c, dates: x.d, destinations: x.x, prefs: x.pr,
+            name: x.n, email: x.e || "", city: x.c, dates: x.d, destinations: x.x,
+            prefs: x.pr, rsvp: x.rsvp,
           })
         );
         return true;
@@ -433,6 +435,30 @@
   // -------------------------------------------------------------------------
   // Dashboard: participant cards (inline editable)
   // -------------------------------------------------------------------------
+  // RSVP control: tappable pills when editable, a status badge otherwise.
+  function rsvpControl(p) {
+    const wrap = el("div", { class: "rsvp-row" });
+    if (canEdit(p)) {
+      const mk = (val, label) =>
+        el("button", {
+          class: `rsvp-pill ${val}${p.rsvp === val ? " on" : ""}`,
+          text: label,
+          onClick: () => {
+            p.rsvp = p.rsvp === val ? "no_response" : val;
+            saveState();
+            renderAll();
+          },
+        });
+      wrap.appendChild(mk("in", isMe(p) ? "✓ I'm in" : "✓ In"));
+      wrap.appendChild(mk("out", isMe(p) ? "Can't make it" : "Out"));
+    } else {
+      const label =
+        p.rsvp === "in" ? "✓ Going" : p.rsvp === "out" ? "✗ Can't make it" : "… No reply yet";
+      wrap.appendChild(el("span", { class: `rsvp-status ${p.rsvp}`, text: label }));
+    }
+    return wrap;
+  }
+
   function chip(emoji, text) {
     const c = el("span", { class: "chip" });
     if (emoji) c.appendChild(el("span", { text: emoji }));
@@ -761,6 +787,7 @@
         summaryChips(p).forEach((c) => summary.appendChild(c));
         card.appendChild(summary);
       }
+      card.appendChild(rsvpControl(p));
       list.appendChild(card);
     });
   }
@@ -1402,7 +1429,8 @@
   }
   function renderMeta() {
     $("#inviteChip").textContent = `Invite code: ${state.reunion.code}`;
-    $("#countChip").textContent = `${state.participants.length} invited`;
+    const going = state.participants.filter((p) => p.rsvp === "in").length;
+    $("#countChip").textContent = `${going} in · ${state.participants.length} invited`;
     const responded = state.participants.filter(hasResponded).length;
     const hint = $("#respondedHint");
     if (hint) hint.textContent = `${responded} of ${state.participants.length} responded`;
@@ -1419,8 +1447,27 @@
       return;
     }
     b.hidden = false;
-    b.appendChild(el("span", { text: "🧪 Demo mode — sample people loaded. " }));
-    b.appendChild(el("button", { class: "link-btn", text: "Clear sample data", onClick: clearDemo }));
+    const line = el("div");
+    line.appendChild(el("span", { text: "🧪 Demo mode — sample people loaded. " }));
+    line.appendChild(el("button", { class: "link-btn", text: "Clear sample data", onClick: clearDemo }));
+    b.appendChild(line);
+    // "Respond as" simulator: experience the app — and vote — as any member.
+    const sim = el("div", { class: "respond-as" });
+    sim.appendChild(el("label", { class: "respond-as-label", text: "Acting as", for: "respondAs" }));
+    const sel = el("select", {
+      id: "respondAs",
+      onChange: (e) => {
+        state.me = e.target.value;
+        renderAll();
+      },
+    });
+    state.participants.forEach((p) => {
+      const opt = el("option", { value: p.id, text: p.name || "Unnamed" });
+      if (p.id === state.me) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sim.appendChild(sel);
+    b.appendChild(sim);
   }
   function loadDemo() {
     const have = new Set(state.participants.map((p) => p.id));
