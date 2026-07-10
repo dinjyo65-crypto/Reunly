@@ -4,9 +4,12 @@
   <meta charset="UTF-8" />
   <!-- Defense-in-depth: no remote script/connect origins; external links open in new tabs. -->
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' data: https://upload.wikimedia.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'" />
+        content="default-src 'self'; img-src 'self' data: blob: https://upload.wikimedia.org https://api.qrserver.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#080b16" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Reunly — Reconnect. We'll handle the rest.</title>
   <meta name="description" content="Reunly is the easiest way for groups to decide when, where and how to meet — reunions, family gatherings, alumni events, trips and friend meetups." />
   <link rel="manifest" href="manifest.json" />
@@ -22,6 +25,7 @@
       <div class="sub" id="topbarSub">Reconnect. We'll handle the rest.</div>
     </div>
     <div class="spacer"></div>
+    <button class="btn ghost sm" id="phoneBtn" aria-label="Open on your phone" title="Open on your phone">📱</button>
     <button class="btn ghost sm" id="themeToggle" aria-label="Toggle theme" title="Toggle light/dark">🌙</button>
     <button class="btn ghost sm" id="restartBtn" hidden>Restart</button>
   </header>
@@ -113,6 +117,7 @@
 
       <!-- ===== Decide ===== -->
       <div class="phase" data-phase="decide" role="tabpanel" aria-labelledby="tab-decide">
+        <div id="planPanel"></div>
         <div id="winnerHero"></div>
         <div id="votePanel"></div>
         <div class="section">
@@ -150,6 +155,7 @@
             <button class="btn ghost sm" id="currencyToggle" style="width:auto">Show USD</button>
           </div>
           <div id="costList"></div>
+          <div id="expensePanel"></div>
           <div class="disclaimer">
             Fares are round-trip in <strong>USD</strong>; local amounts use approximate
             static rates. <span class="badge good">searched</span> fares are real captured
@@ -220,6 +226,30 @@
       </div>
       <label for="inviteLink" style="margin-top:14px">Your invite link</label>
       <input id="inviteLink" type="text" readonly />
+    </div>
+  </div>
+
+  <!-- ============ "Open on your phone" modal ============ -->
+  <div id="phoneModal" class="modal" role="dialog" aria-modal="true" aria-label="Open on your phone" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>📱 Test on your phone</h2>
+        <button class="icon-btn" id="phoneClose" aria-label="Close">✕</button>
+      </div>
+      <ol class="phone-steps">
+        <li>Connect your phone to the <strong>same Wi-Fi</strong> as this computer.</li>
+        <li>Scan the QR code, or type the address below into Chrome.</li>
+        <li>In Chrome, tap <strong>⋮ → Add to Home screen</strong> to install it like an app.</li>
+      </ol>
+      <div class="phone-qr-wrap">
+        <img id="phoneQr" class="phone-qr" alt="QR code linking to this app" width="180" height="180" />
+      </div>
+      <label for="phoneUrl">Address on your Wi-Fi</label>
+      <input id="phoneUrl" type="text" readonly />
+      <p class="muted" style="font-size:.7rem;margin:10px 0 0">
+        If it doesn't load, allow Python through the Windows Firewall (private networks).
+        QR image is generated via api.qrserver.com.
+      </p>
     </div>
   </div>
 

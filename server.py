@@ -22,9 +22,11 @@ Run:  python server.py            (defaults to PORT 4175)
 Live: set AMADEUS_CLIENT_ID and AMADEUS_CLIENT_SECRET, then run.
 """
 
+import datetime
 import json
 import math
 import os
+import socket
 import threading
 import time
 import urllib.parse
@@ -261,6 +263,89 @@ def resolve_fare(frm_raw, to_raw, date):
     return {"min": est[0], "max": est[1], "currency": "USD", "source": "estimated", "miles": miles}
 
 
+# --- LAN address (so phones on the same Wi-Fi can open the app) ---------------
+def lan_ip():
+    """Best-effort LAN IP of this machine (no packets actually sent)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+# --- Weather at destination (Open-Meteo, keyless) ------------------------------
+# Within 15 days we use the real forecast; further out we fetch the same dates
+# last year and label it "typical". Cached per (place, start, end).
+_weather_cache = {}
+_weather_lock = threading.Lock()
+
+
+def _avg(values):
+    vals = [v for v in values if v is not None]
+    return round(sum(vals) / len(vals)) if vals else None
+
+
+def weather_for(place, start, end):
+    key = f"{place}|{start}|{end}".lower()
+    with _weather_lock:
+        if key in _weather_cache:
+            return _weather_cache[key]
+        result = {"ok": False}
+        try:
+            coords = coords_for(place)
+            if coords and start:
+                today = datetime.date.today()
+                s = datetime.date.fromisoformat(start)
+                e = datetime.date.fromisoformat(end) if end else s
+                if e < s:
+                    e = s
+                days_until = (s - today).days
+                if 0 <= days_until <= 15:
+                    mode = "forecast"
+                    qs, qe = s, min(e, s + datetime.timedelta(days=15 - days_until))
+                    url = (
+                        "https://api.open-meteo.com/v1/forecast?"
+                        + urllib.parse.urlencode({
+                            "latitude": coords[0], "longitude": coords[1],
+                            "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+                            "start_date": qs.isoformat(), "end_date": qe.isoformat(),
+                            "timezone": "auto",
+                        })
+                    )
+                else:
+                    mode = "typical"
+                    # Same dates one year earlier (historical archive).
+                    shift = datetime.timedelta(days=365)
+                    qs, qe = s - shift, e - shift
+                    url = (
+                        "https://archive-api.open-meteo.com/v1/archive?"
+                        + urllib.parse.urlencode({
+                            "latitude": coords[0], "longitude": coords[1],
+                            "daily": "temperature_2m_max,temperature_2m_min",
+                            "start_date": qs.isoformat(), "end_date": qe.isoformat(),
+                            "timezone": "auto",
+                        })
+                    )
+                req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    body = json.loads(r.read())
+                daily = body.get("daily", {})
+                tmax = _avg(daily.get("temperature_2m_max", []))
+                tmin = _avg(daily.get("temperature_2m_min", []))
+                rain = _avg(daily.get("precipitation_probability_max", []))
+                if tmax is not None and tmin is not None:
+                    result = {"ok": True, "mode": mode, "tMin": tmin, "tMax": tmax}
+                    if rain is not None:
+                        result["rainPct"] = rain
+        except Exception:
+            result = {"ok": False}
+        _weather_cache[key] = result
+        return result
+
+
 # --- Destination photos (Wikipedia REST summary, keyless) ---------------------
 _photo_cache = {}
 _photo_lock = threading.Lock()
@@ -331,11 +416,24 @@ class Handler(SimpleHTTPRequestHandler):
             q = urllib.parse.parse_qs(parsed.query)
             place = q.get("place", [""])[0]
             return self._send_json({"place": place, "image": wiki_photo(place)})
+        if parsed.path == "/api/host":
+            return self._send_json({"lan": lan_ip(), "port": PORT})
+        if parsed.path == "/api/weather":
+            q = urllib.parse.parse_qs(parsed.query)
+            return self._send_json(
+                weather_for(
+                    q.get("place", [""])[0],
+                    q.get("start", [""])[0],
+                    q.get("end", [""])[0],
+                )
+            )
         return super().do_GET()
 
 
 if __name__ == "__main__":
-    with ThreadingHTTPServer(("127.0.0.1", PORT), Handler) as httpd:
-        print(f"Reunly server on http://127.0.0.1:{PORT}  "
-              f"(live fares: {'ON' if os.environ.get('AMADEUS_CLIENT_ID') else 'OFF'})")
+    # Bind to all interfaces so phones on the same Wi-Fi can open the app.
+    with ThreadingHTTPServer(("0.0.0.0", PORT), Handler) as httpd:
+        print(f"Reunly server on http://127.0.0.1:{PORT}")
+        print(f"  On your phone (same Wi-Fi): http://{lan_ip()}:{PORT}")
+        print(f"  Live fares: {'ON' if os.environ.get('AMADEUS_CLIENT_ID') else 'OFF'}")
         httpd.serve_forever()

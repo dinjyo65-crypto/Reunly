@@ -746,6 +746,73 @@ a:focus-visible {
 .respond-as-label { margin: 0; font-size: 0.72rem; color: var(--text-dim); font-weight: 600; }
 .respond-as select { width: auto; flex: 1; padding: 8px 10px; font-size: 0.82rem; }
 
+/* ---- Trip toolkit ---- */
+.toolkit { margin-bottom: 14px; }
+.toolkit-title { font-size: 1.02rem; font-weight: 750; margin-bottom: 10px; }
+.weather-line {
+  font-size: 0.84rem; font-weight: 600; margin: -2px 0 12px;
+  color: var(--text);
+}
+.tool-grid { margin-top: 2px; }
+.tool-opt { font-size: 0.84rem; }
+
+/* ---- Smart itinerary ---- */
+.itinerary { margin-bottom: 14px; }
+.itin-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.itin-head .toolkit-title { margin-bottom: 0; }
+.itin-sub { font-size: 0.76rem; color: var(--text-dim); margin: 8px 0 4px; }
+.itin-day { margin-top: 14px; }
+.itin-date {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--accent); margin-bottom: 6px;
+}
+.itin-row {
+  display: flex; align-items: center; gap: 10px; text-decoration: none;
+  color: var(--text); padding: 9px 11px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: rgba(255,255,255,0.03);
+  margin-bottom: 6px; transition: border-color 0.16s ease, background 0.16s ease;
+}
+.itin-row:hover { border-color: var(--accent); background: var(--accent-soft); }
+.itin-slot {
+  flex: 0 0 72px; font-size: 0.64rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.4px; color: var(--text-dim);
+}
+.itin-emoji { font-size: 1.1rem; flex: 0 0 auto; }
+.itin-text { font-size: 0.86rem; min-width: 0; }
+
+/* ---- Expenses & settle-up ---- */
+.exp-form { margin: 10px 0 4px; display: grid; gap: 8px; }
+.exp-form-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.exp-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.exp-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: rgba(255,255,255,0.03);
+}
+.exp-desc { font-size: 0.88rem; font-weight: 650; }
+.exp-meta { font-size: 0.7rem; color: var(--text-dim); }
+.exp-amt { font-size: 0.95rem; font-weight: 750; flex: 0 0 auto; }
+.exp-total {
+  margin-top: 12px; font-size: 0.9rem; font-weight: 750; text-align: right;
+  color: var(--accent);
+}
+.exp-transfer {
+  font-size: 0.86rem; font-weight: 600; padding: 8px 12px; margin-top: 6px;
+  border-radius: var(--radius-sm); background: rgba(52, 211, 153, 0.1);
+  border: 1px solid rgba(52, 211, 153, 0.25); color: var(--text);
+}
+
+/* ---- Phone modal ---- */
+.phone-steps { font-size: 0.84rem; color: var(--text-dim); padding-left: 20px; margin: 0 0 14px; }
+.phone-steps li { margin-bottom: 7px; }
+.phone-steps strong { color: var(--text); }
+.phone-qr-wrap { display: grid; place-items: center; margin: 6px 0 10px; }
+.phone-qr {
+  border-radius: 12px; background: #fff; padding: 8px;
+  border: 1px solid var(--border-strong);
+}
+#phoneUrl { font-size: 0.82rem; color: var(--text); text-align: center; font-weight: 650; }
+
 /* Respect reduced-motion preferences */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

@@ -35,6 +35,8 @@
     lockedPlan: null, // { destination, dateStart, dateEnd, dateLabel } once confirmed
     ballot: null, // { open, openedBy, options:[...], votesByParticipant:{ id:{optionId} } }
     memories: [], // [{ id, authorId, authorName, type:"note"|"photo", text, dataUrl?, ts }]
+    expenses: [], // [{ id, payerId, desc, amount(USD), ts }]
+    itinerarySeed: 1, // deterministic seed for the suggested itinerary
   };
   let memoryPreview = false; // organiser previewing the wall before the event
 
@@ -66,6 +68,8 @@
           lockedPlan: state.lockedPlan,
           ballot: state.ballot,
           memories: state.memories,
+          expenses: state.expenses,
+          itinerarySeed: state.itinerarySeed,
         })
       );
       return true;
@@ -88,6 +92,8 @@
         state.lockedPlan = s.lockedPlan || null;
         state.ballot = s.ballot || null;
         state.memories = Array.isArray(s.memories) ? s.memories : [];
+        state.expenses = Array.isArray(s.expenses) ? s.expenses : [];
+        state.itinerarySeed = s.itinerarySeed || 1;
         return true;
       }
     } catch (e) {
@@ -237,7 +243,9 @@
       if (e.target.id === "inviteModal") closeInviteModal(); // click backdrop
     });
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !$("#inviteModal").hidden) closeInviteModal();
+      if (e.key !== "Escape") return;
+      if (!$("#inviteModal").hidden) closeInviteModal();
+      if (!$("#phoneModal").hidden) $("#phoneModal").hidden = true;
     });
     $("#inviteSms").addEventListener("click", () => setTimeout(closeInviteModal, 50));
     $("#inviteEmail").addEventListener("click", () => setTimeout(closeInviteModal, 50));
@@ -252,6 +260,33 @@
         window.prompt("Copy this invite link:", url);
       }
     });
+  }
+
+  // ---- "Open on your phone" modal (LAN URL + QR) ----
+  let lanInfo = null; // cached /api/host result
+  async function openPhoneModal() {
+    const modal = $("#phoneModal");
+    modal.hidden = false;
+    let url = location.origin + location.pathname;
+    try {
+      if (!lanInfo) lanInfo = await (await fetch("/api/host")).json();
+      if (lanInfo && lanInfo.lan) url = `http://${lanInfo.lan}:${lanInfo.port}/`;
+    } catch (e) {
+      /* static hosting / offline — fall back to the current origin */
+    }
+    $("#phoneUrl").value = url;
+    $("#phoneQr").src =
+      "https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=" +
+      encodeURIComponent(url);
+    $("#phoneClose").focus();
+  }
+  function wirePhoneModal() {
+    $("#phoneBtn").addEventListener("click", openPhoneModal);
+    $("#phoneClose").addEventListener("click", () => ($("#phoneModal").hidden = true));
+    $("#phoneModal").addEventListener("click", (e) => {
+      if (e.target.id === "phoneModal") $("#phoneModal").hidden = true;
+    });
+    $("#phoneUrl").addEventListener("click", (e) => e.target.select());
   }
 
   // ---- Tiny DOM helpers ----
@@ -1243,6 +1278,405 @@
   }
 
   // -------------------------------------------------------------------------
+  // Trip toolkit + smart itinerary (shown on Decide once a plan is locked)
+  // -------------------------------------------------------------------------
+  const weatherCache = new Map(); // "place|start" -> result or "pending"
+  function fetchWeather(place, start, end) {
+    const key = `${place}|${start}`;
+    if (weatherCache.has(key)) return;
+    weatherCache.set(key, "pending");
+    const qs = new URLSearchParams({ place, start, end: end || start });
+    fetch(`/api/weather?${qs}`)
+      .then((r) => r.json())
+      .then((w) => {
+        weatherCache.set(key, w && w.ok ? w : null);
+        renderPlan();
+      })
+      .catch(() => weatherCache.set(key, null));
+  }
+
+  // Download an .ics calendar file for the locked plan (all-day, end-exclusive).
+  function downloadIcs() {
+    const plan = state.lockedPlan;
+    if (!plan) return;
+    const clean = (iso) => (iso || "").replace(/-/g, "");
+    const endD = new Date(plan.dateEnd + "T00:00:00");
+    endD.setDate(endD.getDate() + 1); // DTEND is exclusive
+    const endStr = endD.toISOString().slice(0, 10).replace(/-/g, "");
+    const title = `${state.reunion.name || "Get-together"} — ${plan.destination}`;
+    const ics = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//Reunly//EN",
+      "BEGIN:VEVENT",
+      `UID:reunly-${clean(plan.dateStart)}-${Date.now()}@reunly`,
+      `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}Z`,
+      `DTSTART;VALUE=DATE:${clean(plan.dateStart)}`,
+      `DTEND;VALUE=DATE:${endStr}`,
+      `SUMMARY:${title.replace(/[,;]/g, " ")}`,
+      `LOCATION:${plan.destination.replace(/[,;]/g, " ")}`,
+      "DESCRIPTION:Planned with Reunly",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    const blob = new Blob([ics], { type: "text/calendar" });
+    const a = el("a", {
+      href: URL.createObjectURL(blob),
+      download: `${(state.reunion.name || "reunly").replace(/[^\w-]+/g, "-")}.ics`,
+    });
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 500);
+    toast("Calendar file downloaded");
+  }
+
+  // Deterministic PRNG so the itinerary is stable until "shuffled".
+  function mulberry32(seed) {
+    let a = seed >>> 0;
+    return function () {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  // Activity interest -> concrete itinerary ideas. Each idea carries which
+  // day-slots it suits (0 morning, 1 afternoon, 2 evening) so "sunset walk"
+  // never lands in the morning.
+  const IDEA_BANK = {
+    "Beach": [
+      ["🏖️", "Beach time at a top-rated spot", "best beaches near", [0, 1]],
+      ["🌅", "Sunset walk on the shore", "beaches near", [2]],
+    ],
+    "Nightlife": [
+      ["🍸", "Drinks & live music", "best bars near", [2]],
+      ["🪩", "Night out at a popular club", "nightclubs near", [2]],
+    ],
+    "Sightseeing": [
+      ["📸", "See the must-visit landmarks", "top attractions in", [0, 1]],
+      ["🚶", "Guided walking tour", "walking tours in", [0, 1]],
+    ],
+    "Food & dining": [
+      ["🍽️", "Group dinner at a local favourite", "best restaurants in", [2]],
+      ["🥘", "Street-food tasting", "street food in", [1, 2]],
+    ],
+    "Nature / hiking": [
+      ["🥾", "Hike with a view", "hiking trails near", [0]],
+      ["🌿", "Explore a nature spot", "nature parks near", [0, 1]],
+    ],
+    "Relaxation": [
+      ["💆", "Spa or wellness session", "spas in", [1]],
+      ["☕", "Slow start at a great café", "best cafes in", [0]],
+    ],
+    "Adventure": [
+      ["🚤", "Watersports or adventure activity", "adventure activities in", [0, 1]],
+      ["🛶", "Try something adrenaline-fuelled", "things to do in", [1]],
+    ],
+    "Culture": [
+      ["🏛️", "Museum or heritage visit", "museums in", [0, 1]],
+      ["🎭", "Local culture & markets", "cultural attractions in", [1]],
+    ],
+    "Shopping": [
+      ["🛍️", "Markets & shopping streets", "shopping in", [1]],
+    ],
+  };
+  const SLOTS = ["Morning", "Afternoon", "Evening"];
+  function buildItinerary(plan) {
+    const s = E.summarizePrefs(state.participants);
+    let interests = s.activitiesRanked.map(([label]) => label);
+    if (!interests.length) interests = ["Sightseeing", "Food & dining", "Relaxation"];
+    const rand = mulberry32(state.itinerarySeed * 7919 + interests.length);
+    const start = new Date(plan.dateStart + "T00:00:00");
+    const end = new Date(plan.dateEnd + "T00:00:00");
+    const totalDays = Math.max(1, Math.round((end - start) / 86400000) + 1);
+    const days = Math.min(totalDays, 5);
+    const pool = [];
+    interests.forEach((label) => (IDEA_BANK[label] || []).forEach((idea) => pool.push(idea)));
+    const fallback = [
+      ["📸", "See the must-visit landmarks", "top attractions in", [0, 1]],
+      ["🍽️", "Group dinner at a local favourite", "best restaurants in", [2]],
+    ];
+    const out = [];
+    for (let d = 0; d < days; d++) {
+      const date = new Date(start);
+      date.setDate(date.getDate() + d);
+      const label = date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      const usedToday = new Set();
+      const slots = SLOTS.map((_, slotIdx) => {
+        let candidates = pool.filter(
+          (idea) => idea[3].includes(slotIdx) && !usedToday.has(idea[1])
+        );
+        if (!candidates.length) candidates = pool.filter((idea) => idea[3].includes(slotIdx));
+        if (!candidates.length) candidates = fallback.filter((idea) => idea[3].includes(slotIdx));
+        const pick = candidates[Math.floor(rand() * candidates.length)];
+        usedToday.add(pick[1]);
+        return pick;
+      });
+      out.push({ label, slots });
+    }
+    return { days: out, extraDays: totalDays - days };
+  }
+
+  function toolLink(emoji, label, href) {
+    const a = el("a", {
+      class: "invite-opt tool-opt",
+      href,
+      target: "_blank",
+      rel: "noopener noreferrer",
+    });
+    a.appendChild(el("span", { text: emoji }));
+    a.appendChild(el("span", { text: label }));
+    return a;
+  }
+
+  function renderPlan() {
+    const panel = $("#planPanel");
+    if (!panel) return;
+    panel.textContent = "";
+    const plan = state.lockedPlan;
+    if (!plan) return; // toolkit + itinerary only exist once the plan is locked
+
+    const dest = plan.destination;
+
+    // --- Trip toolkit ---
+    const kit = el("div", { class: "card toolkit stagger" });
+    kit.appendChild(el("div", { class: "toolkit-title", text: "🧰 Trip toolkit" }));
+
+    // Weather line (async; live via proxy → Open-Meteo).
+    const wkey = `${dest}|${plan.dateStart}`;
+    const w = weatherCache.get(wkey);
+    if (w === undefined) fetchWeather(dest, plan.dateStart, plan.dateEnd);
+    if (w && w !== "pending") {
+      const rain = w.rainPct != null ? ` · ${w.rainPct}% rain risk` : "";
+      const mode = w.mode === "forecast" ? "Forecast" : "Typically";
+      kit.appendChild(
+        el("div", {
+          class: "weather-line",
+          text: `🌤️ ${mode} ${w.tMin}–${w.tMax}°C in ${dest.split(",")[0]} for your dates${rain}`,
+        })
+      );
+    } else if (w === "pending" || w === undefined) {
+      kit.appendChild(el("div", { class: "weather-line muted", text: "🌤️ Checking the weather…" }));
+    }
+
+    const grid = el("div", { class: "invite-grid tool-grid" });
+    grid.appendChild(toolLink("🏨", "Hotels", `https://www.google.com/travel/hotels?q=${encodeURIComponent(dest)}`));
+    grid.appendChild(toolLink("🏠", "Airbnb", `https://www.airbnb.com/s/${encodeURIComponent(dest)}/homes`));
+    grid.appendChild(toolLink("🗺️", "Explore map", E.mapsSearchLink(dest)));
+    grid.appendChild(toolLink("🍽️", "Restaurants", E.mapsSearchLink(`restaurants in ${dest}`)));
+    kit.appendChild(grid);
+    kit.appendChild(
+      el("button", {
+        class: "btn secondary sm",
+        style: "width:100%;margin-top:10px",
+        text: "📅 Add to calendar (.ics)",
+        onClick: downloadIcs,
+      })
+    );
+    panel.appendChild(kit);
+
+    // --- Smart itinerary ---
+    const it = buildItinerary(plan);
+    const card = el("div", { class: "card itinerary stagger" });
+    const head = el("div", { class: "itin-head" });
+    head.appendChild(el("div", { class: "toolkit-title", text: "✨ Suggested itinerary" }));
+    head.appendChild(
+      el("button", {
+        class: "btn ghost sm",
+        text: "🎲 Shuffle",
+        onClick: () => {
+          state.itinerarySeed += 1;
+          saveState();
+          renderPlan();
+        },
+      })
+    );
+    card.appendChild(head);
+    card.appendChild(
+      el("div", {
+        class: "itin-sub",
+        text: "Built from the group's activity interests — every idea links to a live map search.",
+      })
+    );
+    it.days.forEach((day) => {
+      const d = el("div", { class: "itin-day" });
+      d.appendChild(el("div", { class: "itin-date", text: day.label }));
+      day.slots.forEach(([emoji, text, query], i) => {
+        const row = el("a", {
+          class: "itin-row",
+          href: E.mapsSearchLink(`${query} ${dest}`),
+          target: "_blank",
+          rel: "noopener noreferrer",
+        });
+        row.appendChild(el("span", { class: "itin-slot", text: SLOTS[i] }));
+        row.appendChild(el("span", { class: "itin-emoji", text: emoji }));
+        row.appendChild(el("span", { class: "itin-text", text: text }));
+        d.appendChild(row);
+      });
+      card.appendChild(d);
+    });
+    if (it.extraDays > 0) {
+      card.appendChild(
+        el("div", { class: "itin-sub", text: `…plus ${it.extraDays} more free day${it.extraDays === 1 ? "" : "s"} to play with.` })
+      );
+    }
+    panel.appendChild(card);
+  }
+
+  // -------------------------------------------------------------------------
+  // Expenses & settle-up (Costs tab)
+  // -------------------------------------------------------------------------
+  function money(n) {
+    return `$${(Math.round(n * 100) / 100).toLocaleString("en-US")}`;
+  }
+  function addExpense(payerId, desc, amount) {
+    const amt = parseFloat(amount);
+    if (!payerId || !desc.trim() || Number.isNaN(amt) || amt <= 0) {
+      toast("Enter a payer, description and amount");
+      return;
+    }
+    state.expenses.unshift({
+      id: `x_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      payerId,
+      desc: desc.trim(),
+      amount: amt,
+      ts: Date.now(),
+    });
+    saveState();
+    renderExpenses();
+  }
+  function deleteExpense(id) {
+    state.expenses = state.expenses.filter((x) => x.id !== id);
+    saveState();
+    renderExpenses();
+  }
+  // Balance = what you paid minus your equal share (split between the "in" group).
+  function computeSplit() {
+    const goers = state.participants.filter((p) => p.rsvp === "in");
+    const base = goers.length >= 2 ? goers : state.participants;
+    const total = state.expenses.reduce((s, x) => s + x.amount, 0);
+    const share = base.length ? total / base.length : 0;
+    const paid = {};
+    state.expenses.forEach((x) => (paid[x.payerId] = (paid[x.payerId] || 0) + x.amount));
+    const balances = new Map();
+    const inBase = new Set(base.map((p) => p.id));
+    state.participants.forEach((p) => {
+      const b = (paid[p.id] || 0) - (inBase.has(p.id) ? share : 0);
+      if (Math.abs(b) > 0.005 || inBase.has(p.id)) balances.set(p.id, b);
+    });
+    // Greedy settle-up: biggest debtor pays biggest creditor.
+    const debtors = [], creditors = [];
+    balances.forEach((b, id) => {
+      if (b < -0.01) debtors.push({ id, amt: -b });
+      else if (b > 0.01) creditors.push({ id, amt: b });
+    });
+    debtors.sort((a, b) => b.amt - a.amt);
+    creditors.sort((a, b) => b.amt - a.amt);
+    const transfers = [];
+    let di = 0, ci = 0;
+    while (di < debtors.length && ci < creditors.length) {
+      const pay = Math.min(debtors[di].amt, creditors[ci].amt);
+      transfers.push({ from: debtors[di].id, to: creditors[ci].id, amount: pay });
+      debtors[di].amt -= pay;
+      creditors[ci].amt -= pay;
+      if (debtors[di].amt < 0.01) di++;
+      if (creditors[ci].amt < 0.01) ci++;
+    }
+    return { total, share, base, balances, transfers };
+  }
+  function pName(id) {
+    const p = state.participants.find((x) => x.id === id);
+    return p ? p.name || "Unnamed" : "Someone";
+  }
+  function renderExpenses() {
+    const panel = $("#expensePanel");
+    if (!panel) return;
+    panel.textContent = "";
+    const card = el("div", { class: "card" });
+    card.appendChild(el("div", { class: "toolkit-title", text: "💸 Expenses & settle-up" }));
+
+    const { total, share, base, balances, transfers } = computeSplit();
+    card.appendChild(
+      el("div", {
+        class: "itin-sub",
+        text: `Amounts in USD · split equally between ${base.length} ${
+          base.length === state.participants.length ? "people" : "going"
+        }.`,
+      })
+    );
+
+    // Add-expense form.
+    const form = el("div", { class: "exp-form" });
+    const payerSel = el("select", { "aria-label": "Who paid" });
+    state.participants.forEach((p) => {
+      const o = el("option", { value: p.id, text: p.name || "Unnamed" });
+      if (p.id === state.me) o.selected = true;
+      payerSel.appendChild(o);
+    });
+    const descIn = el("input", { type: "text", placeholder: "What for? e.g. Villa deposit" });
+    const amtIn = el("input", { type: "number", min: "0", step: "0.01", placeholder: "USD", inputmode: "decimal" });
+    form.appendChild(payerSel);
+    form.appendChild(descIn);
+    const row = el("div", { class: "exp-form-row" });
+    row.appendChild(amtIn);
+    row.appendChild(
+      el("button", {
+        class: "btn sm",
+        text: "Add expense",
+        onClick: () => {
+          addExpense(payerSel.value, descIn.value, amtIn.value);
+        },
+      })
+    );
+    form.appendChild(row);
+    card.appendChild(form);
+
+    if (!state.expenses.length) {
+      card.appendChild(el("div", { class: "empty", text: "No expenses yet — add the first one." }));
+      panel.appendChild(card);
+      return;
+    }
+
+    // Expense list.
+    const list = el("div", { class: "exp-list" });
+    state.expenses.forEach((x) => {
+      const r = el("div", { class: "exp-item" });
+      const w = el("div", { style: "flex:1;min-width:0" });
+      w.appendChild(el("div", { class: "exp-desc", text: x.desc }));
+      w.appendChild(el("div", { class: "exp-meta", text: `paid by ${pName(x.payerId)}` }));
+      r.appendChild(w);
+      r.appendChild(el("span", { class: "exp-amt", text: money(x.amount) }));
+      if (state.role === "organizer" || x.payerId === state.me) {
+        r.appendChild(
+          el("button", { class: "icon-btn sm", "aria-label": "Delete expense", text: "✕", onClick: () => deleteExpense(x.id) })
+        );
+      }
+      list.appendChild(r);
+    });
+    card.appendChild(list);
+    card.appendChild(
+      el("div", { class: "exp-total", text: `Total ${money(total)} · ${money(share)} each` })
+    );
+
+    // Settle-up transfers.
+    if (transfers.length) {
+      card.appendChild(el("div", { class: "gl", text: "To settle up", style: "margin-top:12px" }));
+      transfers.forEach((t) => {
+        card.appendChild(
+          el("div", {
+            class: "exp-transfer",
+            text: `${pName(t.from)} → ${pName(t.to)}  ${money(t.amount)}`,
+          })
+        );
+      });
+    }
+    panel.appendChild(card);
+  }
+
+  // -------------------------------------------------------------------------
   // Voting ("Decide" — the group converges; engine score is the seed/tiebreak)
   // -------------------------------------------------------------------------
   function optionId(c) {
@@ -1761,11 +2195,13 @@
   function recomputeDerived() {
     renderMeta();
     renderCountdown();
+    renderPlan();
     renderWinner();
     renderVote();
     renderRecommendations();
     renderInsights();
     renderCosts();
+    renderExpenses();
     renderMemories();
     saveState();
     refreshFares();
@@ -1782,12 +2218,14 @@
     clearTimeout(recomputeTimer); // a structural render supersedes any pending debounce
     renderMeta();
     renderCountdown();
+    renderPlan();
     renderWinner();
     renderVote();
     renderParticipants();
     renderRecommendations();
     renderInsights();
     renderCosts();
+    renderExpenses();
     renderMemories();
     saveState();
     refreshFares();
@@ -1803,6 +2241,7 @@
     wireChoose();
     wireReunionMeta();
     wirePhases();
+    wirePhoneModal();
     registerServiceWorker();
     updateCurrencyToggle();
     startRotator();
