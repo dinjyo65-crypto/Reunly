@@ -823,8 +823,9 @@ a:focus-visible {
   offset-path: path("M 40 120 Q 200 -10 360 120");
   offset-rotate: auto;
   animation: fly 7s ease-in-out infinite;
-  filter: drop-shadow(0 3px 6px rgba(99,102,241,0.5));
+  filter: drop-shadow(0 4px 7px rgba(99,102,241,0.55));
 }
+.plane-window { fill: rgba(255, 255, 255, 0.9); }
 @keyframes fly {
   0% { offset-distance: 0%; opacity: 0; }
   10% { opacity: 1; }
