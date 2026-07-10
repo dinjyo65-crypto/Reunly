@@ -132,6 +132,79 @@ def geocode(name):
         return coord
 
 
+# --- Type-ahead place suggestions (Nominatim search) --------------------------
+_suggest_cache = {}
+_suggest_lock = threading.Lock()
+
+
+def _short_label(item):
+    """Build a concise 'City, Country' label from a Nominatim result."""
+    addr = item.get("address", {})
+    place = (
+        addr.get("city") or addr.get("town") or addr.get("village")
+        or addr.get("municipality") or addr.get("state") or item.get("name")
+        or item.get("display_name", "").split(",")[0]
+    )
+    country = addr.get("country")
+    label = ", ".join([x for x in (place, country) if x])
+    return label or item.get("display_name", "")
+
+
+def suggest_places(q):
+    key = q.strip().lower()
+    if len(key) < 2:
+        return []
+    with _suggest_lock:
+        if key in _suggest_cache:
+            return _suggest_cache[key]
+        results = []
+        try:
+            params = urllib.parse.urlencode({
+                "q": q, "format": "json", "limit": 6, "addressdetails": 1,
+                "featuretype": "city", "accept-language": "en",
+            })
+            req = urllib.request.Request(
+                "https://nominatim.openstreetmap.org/search?" + params,
+                headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                arr = json.loads(r.read())
+            seen = set()
+            for item in arr:
+                label = _short_label(item)
+                if not label or label.lower() in seen:
+                    continue
+                seen.add(label.lower())
+                results.append({
+                    "label": label,
+                    "lat": float(item["lat"]),
+                    "lon": float(item["lon"]),
+                    "cc": (item.get("address", {}).get("country_code") or "").lower(),
+                })
+        except Exception:
+            results = []
+        _suggest_cache[key] = results
+        return results
+
+
+def reverse_geocode(lat, lng):
+    try:
+        params = urllib.parse.urlencode({
+            "lat": lat, "lon": lng, "format": "json", "zoom": 10,
+            "addressdetails": 1, "accept-language": "en",
+        })
+        req = urllib.request.Request(
+            "https://nominatim.openstreetmap.org/reverse?" + params,
+            headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            item = json.loads(r.read())
+        return {
+            "label": _short_label(item),
+            "cc": (item.get("address", {}).get("country_code") or "").lower(),
+        }
+    except Exception:
+        return {"label": "", "cc": ""}
+
+
 def coords_for(name):
     """Return (lat, lng) for a city: known table first, else geocoded."""
     key = resolve_city(name)
@@ -418,6 +491,14 @@ class Handler(SimpleHTTPRequestHandler):
             return self._send_json({"place": place, "image": wiki_photo(place)})
         if parsed.path == "/api/host":
             return self._send_json({"lan": lan_ip(), "port": PORT})
+        if parsed.path == "/api/geosuggest":
+            q = urllib.parse.parse_qs(parsed.query)
+            return self._send_json({"results": suggest_places(q.get("q", [""])[0])})
+        if parsed.path == "/api/reverse":
+            q = urllib.parse.parse_qs(parsed.query)
+            return self._send_json(
+                reverse_geocode(q.get("lat", [""])[0], q.get("lng", [""])[0])
+            )
         if parsed.path == "/api/weather":
             q = urllib.parse.parse_qs(parsed.query)
             return self._send_json(

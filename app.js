@@ -16,9 +16,8 @@
   const D = window.ReunlyData;
   const E = window.ReunlyEngine;
   const CURRENCY = D.CURRENCY;
-  // Ordinal labels derived from the configured number of ranked slots, so adding
-  // a 4th choice only requires bumping RANKED_SLOTS in data.js.
-  const RANK_LABELS = ["1st", "2nd", "3rd", "4th", "5th", "6th"].slice(0, D.RANKED_SLOTS);
+  const ORDINALS = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th"];
+  const ordinal = (i) => ORDINALS[i] || `${i + 1}th`;
 
   // ---- App state (persisted to localStorage; see saveState/loadState) ----
   const state = {
@@ -37,6 +36,7 @@
     memories: [], // [{ id, authorId, authorName, type:"note"|"photo", text, dataUrl?, ts }]
     expenses: [], // [{ id, payerId, desc, amount(USD), ts }]
     itinerarySeed: 1, // deterministic seed for the suggested itinerary
+    pro: false, // Reunly Pro unlocked?
   };
   let memoryPreview = false; // organiser previewing the wall before the event
 
@@ -70,6 +70,7 @@
           memories: state.memories,
           expenses: state.expenses,
           itinerarySeed: state.itinerarySeed,
+          pro: state.pro,
         })
       );
       return true;
@@ -94,6 +95,7 @@
         state.memories = Array.isArray(s.memories) ? s.memories : [];
         state.expenses = Array.isArray(s.expenses) ? s.expenses : [];
         state.itinerarySeed = s.itinerarySeed || 1;
+        state.pro = !!s.pro;
         return true;
       }
     } catch (e) {
@@ -246,6 +248,7 @@
       if (e.key !== "Escape") return;
       if (!$("#inviteModal").hidden) closeInviteModal();
       if (!$("#phoneModal").hidden) $("#phoneModal").hidden = true;
+      if (!$("#proModal").hidden) closeProModal();
     });
     $("#inviteSms").addEventListener("click", () => setTimeout(closeInviteModal, 50));
     $("#inviteEmail").addEventListener("click", () => setTimeout(closeInviteModal, 50));
@@ -311,6 +314,98 @@
     return node;
   };
 
+  // The current user's home display currency (set from their location/city).
+  function myCurrency() {
+    return (state.user && state.user.currency) || D.currencyForCity(state.user && state.user.city);
+  }
+
+  // ---- Live place autocomplete (proxy /api/geosuggest) ----
+  // Attaches a type-ahead dropdown to any text input. onPick(label, suggestion)
+  // fires on selection; the input's own "input" event is also re-dispatched so
+  // existing handlers (which write into state) run.
+  function attachAutocomplete(input, onPick) {
+    let menu = null;
+    let items = [];
+    let active = -1;
+    let timer = null;
+    const close = () => {
+      if (menu) menu.remove();
+      menu = null;
+      items = [];
+      active = -1;
+    };
+    const place = () => {
+      if (!menu) return;
+      const r = input.getBoundingClientRect();
+      menu.style.left = `${r.left}px`;
+      menu.style.top = `${r.bottom + 4}px`;
+      menu.style.width = `${r.width}px`;
+    };
+    const render = () => {
+      if (!menu) {
+        menu = el("div", { class: "ac-menu" });
+        document.body.appendChild(menu);
+        place();
+      }
+      menu.textContent = "";
+      items.forEach((s, i) => {
+        const opt = el("div", { class: `ac-item${i === active ? " active" : ""}`, text: s.label });
+        opt.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          pick(s);
+        });
+        menu.appendChild(opt);
+      });
+    };
+    const pick = (s) => {
+      input.value = s.label;
+      close();
+      if (onPick) onPick(s.label, s);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    const query = async (q) => {
+      try {
+        const res = await fetch(`/api/geosuggest?q=${encodeURIComponent(q)}`, {
+          headers: { Accept: "application/json" },
+        });
+        const data = await res.json();
+        if (input.value.trim() !== q) return; // stale response
+        items = (data.results || []).slice(0, 6);
+        active = -1;
+        if (items.length) render();
+        else close();
+      } catch (e) {
+        close();
+      }
+    };
+    input.addEventListener("input", () => {
+      const q = input.value.trim();
+      clearTimeout(timer);
+      if (q.length < 2) return close();
+      timer = setTimeout(() => query(q), 220);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (!menu) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        active = Math.min(active + 1, items.length - 1);
+        render();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        active = Math.max(active - 1, 0);
+        render();
+      } else if (e.key === "Enter" && active >= 0) {
+        e.preventDefault();
+        pick(items[active]);
+      } else if (e.key === "Escape") {
+        close();
+      }
+    });
+    input.addEventListener("blur", () => setTimeout(close, 150));
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+  }
+
   let toastTimer = null;
   function toast(msg) {
     let t = document.getElementById("toast");
@@ -340,12 +435,6 @@
   // -------------------------------------------------------------------------
   // City datalist
   // -------------------------------------------------------------------------
-  function populateCityList() {
-    const dl = $("#cityList");
-    dl.textContent = "";
-    D.CITY_LIST.forEach((city) => dl.appendChild(el("option", { value: city })));
-  }
-
   function populateEventTypes() {
     const sel = $("#reunionType");
     sel.textContent = "";
@@ -360,7 +449,55 @@
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }
 
+  let regCurrency = null; // currency captured from location detect / suggestion pick
+
   function wireRegister() {
+    // Live suggestions on the home-city field; capture currency from the country.
+    attachAutocomplete($("#regCity"), (label, s) => {
+      if (s && s.cc && D.CC_CURRENCY[s.cc]) regCurrency = D.CC_CURRENCY[s.cc];
+    });
+
+    // "Use my location" — browser geolocation → reverse geocode → fill city.
+    const detect = $("#regDetect");
+    if (detect) {
+      detect.addEventListener("click", () => {
+        if (!navigator.geolocation) {
+          toast("Location isn't available on this device");
+          return;
+        }
+        detect.disabled = true;
+        detect.textContent = "Locating…";
+        navigator.geolocation.getCurrentPosition(
+          async (pos) => {
+            try {
+              const { latitude, longitude } = pos.coords;
+              const r = await fetch(`/api/reverse?lat=${latitude}&lng=${longitude}`);
+              const data = await r.json();
+              if (data.label) {
+                $("#regCity").value = data.label;
+                if (data.cc && D.CC_CURRENCY[data.cc]) regCurrency = D.CC_CURRENCY[data.cc];
+                const cur = regCurrency || D.currencyForCity(data.label);
+                $("#regLocNote").textContent = `📍 ${data.label} · prices will show in ${cur}`;
+              } else {
+                toast("Couldn't find your city — type it in");
+              }
+            } catch (e) {
+              toast("Location lookup failed — type your city");
+            } finally {
+              detect.disabled = false;
+              detect.textContent = "📍 Use my location";
+            }
+          },
+          () => {
+            toast("Location permission denied — type your city");
+            detect.disabled = false;
+            detect.textContent = "📍 Use my location";
+          },
+          { timeout: 8000 }
+        );
+      });
+    }
+
     $("#regSubmit").addEventListener("click", () => {
       const name = $("#regName").value.trim();
       const email = $("#regEmail").value.trim();
@@ -370,7 +507,7 @@
       if (!isValidEmail(email)) return (err.textContent = "Please enter a valid email.");
       if (!city) return (err.textContent = "Please enter your home city.");
       err.textContent = "";
-      state.user = { name, email, city };
+      state.user = { name, email, city, currency: regCurrency || D.currencyForCity(city) };
       // Arrived via a shared invite link → skip the chooser, join straight in.
       if (state.fromInvite) {
         enterDashboard("join", state.reunion.code);
@@ -526,43 +663,10 @@
     idGroup.appendChild(cityInput(p));
     wrap.appendChild(idGroup);
 
-    // Date ranges (3 ranked)
-    const dGroup = el("div", { class: "field-group" });
-    dGroup.appendChild(el("div", { class: "gl", text: "Availability (ranked)" }));
-    RANK_LABELS.forEach((label, i) => {
-      const r = el("div", { class: "rank-row" });
-      r.appendChild(el("span", { class: "badge rank", text: label }));
-      r.appendChild(dateInput(p, i, "start"));
-      r.appendChild(dateInput(p, i, "end"));
-      dGroup.appendChild(r);
-    });
-    wrap.appendChild(dGroup);
-
-    // Destinations (ranked) — type-ahead suggestions keep names consistent.
-    const destGroup = el("div", { class: "field-group" });
-    destGroup.appendChild(el("div", { class: "gl", text: "Destinations (ranked)" }));
-    destGroup.appendChild(
-      el("div", {
-        class: "field-note",
-        text: "Pick from the suggestions as you type so everyone's choices match.",
-      })
-    );
-    RANK_LABELS.forEach((label, i) => {
-      const r = el("div", { class: "rank-row dest" });
-      r.appendChild(el("span", { class: "badge rank", text: label }));
-      r.appendChild(destInput(p, i));
-      destGroup.appendChild(r);
-    });
-    const helper = el("div", { class: "maps-helper" });
-    const lookup = el("a", {
-      href: E.mapsSearchLink("places to visit"),
-      target: "_blank",
-      rel: "noopener noreferrer",
-      text: "🔎 Can't find it? Search on Google Maps",
-    });
-    helper.appendChild(lookup);
-    destGroup.appendChild(helper);
-    wrap.appendChild(destGroup);
+    // Availability — one row to start, add as many as you like (best first).
+    wrap.appendChild(buildDatesGroup(p));
+    // Destinations — same flexible pattern, with live suggestions.
+    wrap.appendChild(buildDestGroup(p));
 
     // Preferences (the broader "how should we meet" answers)
     wrap.appendChild(buildPrefsGroup(p));
@@ -595,6 +699,75 @@
     }
     wrap.appendChild(actions);
     return wrap;
+  }
+
+  // Flexible availability rows (add/remove; top = best).
+  function buildDatesGroup(p) {
+    const g = el("div", { class: "field-group" });
+    g.appendChild(el("div", { class: "gl", text: "When can you make it?" }));
+    g.appendChild(el("div", { class: "field-note", text: "Add your best dates first — as many as you like." }));
+    p.dates.forEach((d, i) => {
+      const r = el("div", { class: "rank-row" });
+      r.appendChild(el("span", { class: "badge rank", text: ordinal(i) }));
+      r.appendChild(dateInput(p, i, "start"));
+      r.appendChild(dateInput(p, i, "end"));
+      if (p.dates.length > 1) {
+        r.appendChild(
+          el("button", {
+            class: "row-del", "aria-label": "Remove this date", text: "✕",
+            onClick: () => {
+              p.dates.splice(i, 1);
+              renderAll();
+            },
+          })
+        );
+      }
+      g.appendChild(r);
+    });
+    g.appendChild(
+      el("button", {
+        class: "btn ghost sm add-row", text: "+ Add another date",
+        onClick: () => {
+          p.dates.push({ start: "", end: "" });
+          renderAll();
+        },
+      })
+    );
+    return g;
+  }
+
+  // Flexible destination rows (add/remove; top = best).
+  function buildDestGroup(p) {
+    const g = el("div", { class: "field-group" });
+    g.appendChild(el("div", { class: "gl", text: "Where would you like to go?" }));
+    g.appendChild(el("div", { class: "field-note", text: "Pick from the suggestions so everyone's choices match up." }));
+    p.destinations.forEach((_, i) => {
+      const r = el("div", { class: "rank-row dest" });
+      r.appendChild(el("span", { class: "badge rank", text: ordinal(i) }));
+      r.appendChild(destInput(p, i));
+      if (p.destinations.length > 1) {
+        r.appendChild(
+          el("button", {
+            class: "row-del", "aria-label": "Remove this place", text: "✕",
+            onClick: () => {
+              p.destinations.splice(i, 1);
+              renderAll();
+            },
+          })
+        );
+      }
+      g.appendChild(r);
+    });
+    g.appendChild(
+      el("button", {
+        class: "btn ghost sm add-row", text: "+ Add another place",
+        onClick: () => {
+          p.destinations.push("");
+          renderAll();
+        },
+      })
+    );
+    return g;
   }
 
   // Preferences sub-form: budget, food, accommodation, kids, accessibility,
@@ -702,20 +875,26 @@
   function cityInput(p) {
     const wrap = el("div", { class: "field-group" });
     wrap.appendChild(el("label", { text: "Home city", for: `city-${p.id}` }));
-    wrap.appendChild(
-      el("input", {
-        id: `city-${p.id}`,
-        type: "text",
-        list: "cityList",
-        value: p.city || "",
-        placeholder: "Type to see suggestions…",
-        onInput: (e) => {
-          p.city = e.target.value;
-          scheduleRecompute();
-        },
-        onChange: () => updateCardHeader(p),
-      })
-    );
+    const input = el("input", {
+      id: `city-${p.id}`,
+      type: "text",
+      autocomplete: "off",
+      value: p.city || "",
+      placeholder: "Start typing a city…",
+      onInput: (e) => {
+        p.city = e.target.value;
+        updateCardHeader(p);
+        scheduleRecompute();
+      },
+    });
+    attachAutocomplete(input, (label, s) => {
+      p.city = label;
+      // A member's own currency follows their home city's country.
+      if (s && s.cc && D.CC_CURRENCY[s.cc] && isMe(p) && state.user) {
+        state.user.currency = D.CC_CURRENCY[s.cc];
+      }
+    });
+    wrap.appendChild(input);
     return wrap;
   }
   function dateInput(p, idx, end) {
@@ -729,17 +908,20 @@
     });
   }
   function destInput(p, idx) {
-    return el("input", {
+    const input = el("input", {
       type: "text",
-      list: "cityList",
       value: p.destinations[idx] || "",
-      placeholder: `Choice ${idx + 1} — type to see suggestions`,
+      placeholder: "Type a city or place…",
       autocomplete: "off",
       onInput: (e) => {
         p.destinations[idx] = e.target.value;
         scheduleRecompute();
       },
     });
+    attachAutocomplete(input, (label) => {
+      p.destinations[idx] = label;
+    });
+    return input;
   }
 
   // Single source of truth for how a participant's name + meta line read.
@@ -1211,10 +1393,12 @@
       fareRow.appendChild(el("span", { class: "badge warn", text: "estimated" }));
     }
     side.appendChild(fareRow);
-    // Show the USD reference when displaying a non-USD local currency.
-    if (fare.min !== 0 && code !== "USD") {
+    // Underneath: the same fare in YOUR home currency, so the organiser reading
+    // the tab always has a familiar number to compare against.
+    const home = state.currencyMode === "usd" ? "USD" : myCurrency();
+    if (fare.min !== 0 && home !== code) {
       side.appendChild(
-        el("div", { class: "cost-meta", text: `≈ $${fare.min}–$${fare.max} USD` })
+        el("div", { class: "cost-meta", text: `≈ ${E.formatRange(fare.min, fare.max, home)} for you (${home})` })
       );
     }
     // Distance + time. Drive time only shown when plausibly drivable (<= 800 mi),
@@ -1432,6 +1616,116 @@
     return a;
   }
 
+  // ---- Reunly Pro (monetisation) ----
+  const PRO_FEATURES = [
+    "Downloadable Trip Pack — a printable one-pager for the whole group",
+    "Unlimited memory-wall photos (free keeps 3)",
+    "Priority live-fare refresh & AI itinerary re-rolls",
+    "Custom event cover & themes · no ads",
+  ];
+  function renderProCard() {
+    const panel = $("#proPanel");
+    if (!panel) return;
+    panel.textContent = "";
+    if (state.pro) return; // no upsell once unlocked
+    const card = el("div", { class: "card pro-card stagger" });
+    card.appendChild(el("div", { class: "pro-emoji", text: "✨" }));
+    card.appendChild(el("div", { class: "pro-title", text: "Reunly Pro" }));
+    card.appendChild(
+      el("div", { class: "pro-sub", text: "Everything to run the perfect trip — for the whole group." })
+    );
+    card.appendChild(
+      el("button", { class: "btn", style: "margin-top:12px", text: "See Pro — £7.99/event", onClick: openProModal })
+    );
+    panel.appendChild(card);
+  }
+  let proOpener = null;
+  function openProModal() {
+    proOpener = document.activeElement;
+    const list = $("#proFeatures");
+    list.textContent = "";
+    PRO_FEATURES.forEach((f) => list.appendChild(el("li", { text: f })));
+    $("#proUnlock").textContent = state.pro ? "✓ Pro is active" : "Unlock Pro (demo)";
+    $("#proUnlock").disabled = state.pro;
+    $("#proModal").hidden = false;
+    $("#proClose").focus();
+  }
+  function closeProModal() {
+    $("#proModal").hidden = true;
+    if (proOpener && proOpener.focus) proOpener.focus();
+  }
+  function unlockPro() {
+    state.pro = true;
+    saveState();
+    closeProModal();
+    toast("✨ Reunly Pro unlocked (demo)");
+    renderAll();
+  }
+  function wireProModal() {
+    $("#proClose").addEventListener("click", closeProModal);
+    $("#proUnlock").addEventListener("click", unlockPro);
+    $("#proModal").addEventListener("click", (e) => {
+      if (e.target.id === "proModal") closeProModal();
+    });
+  }
+
+  // Trip Pack: a self-contained, printable HTML summary the organiser can save
+  // as PDF or share. Built from our own data with escaped user text.
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
+  }
+  function downloadTripPack() {
+    const plan = state.lockedPlan;
+    if (!plan) return;
+    const days = E.daysUntil(plan.dateStart);
+    const it = buildItinerary(plan);
+    const goers = state.participants.filter((p) => p.rsvp === "in");
+    const rows = goers
+      .filter((p) => p.city)
+      .map((p) => {
+        const f = fareProvider(p.city, plan.destination);
+        const fare = f && f.min != null ? `$${f.min}–$${f.max}` : "—";
+        return `<tr><td>${escapeHtml(p.name || "Guest")}</td><td>${escapeHtml(p.city)}</td><td>${fare}</td></tr>`;
+      })
+      .join("");
+    const itHtml = it.days
+      .map(
+        (d) =>
+          `<h4>${escapeHtml(d.label)}</h4><ul>` +
+          d.slots.map((s, i) => `<li><b>${["Morning", "Afternoon", "Evening"][i]}:</b> ${escapeHtml(s[1])}</li>`).join("") +
+          `</ul>`
+      )
+      .join("");
+    const html =
+      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Trip Pack — ${escapeHtml(state.reunion.name)}</title>` +
+      `<style>body{font-family:system-ui,Segoe UI,Roboto,sans-serif;max-width:680px;margin:32px auto;padding:0 20px;color:#1a2233}` +
+      `h1{margin:0 0 4px}h2{border-bottom:2px solid #6366f1;padding-bottom:4px;margin-top:28px;color:#4f46e5}` +
+      `.hero{background:linear-gradient(135deg,#6366f1,#ec4899);color:#fff;padding:24px;border-radius:16px}` +
+      `.big{font-size:2.4rem;font-weight:800}table{width:100%;border-collapse:collapse;margin-top:8px}` +
+      `td,th{text-align:left;padding:8px;border-bottom:1px solid #eee}ul{margin:4px 0 12px}` +
+      `.foot{margin-top:32px;color:#888;font-size:12px}@media print{.hero{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style>` +
+      `</head><body>` +
+      `<div class="hero"><div style="opacity:.85">Reunly Trip Pack</div>` +
+      `<h1>${escapeHtml(state.reunion.name || "Our get-together")}</h1>` +
+      `<div class="big">📍 ${escapeHtml(plan.destination)}</div>` +
+      `<div>${escapeHtml(plan.dateLabel)}${days > 0 ? ` · ${days} days to go` : ""}</div></div>` +
+      `<h2>Who's going (${goers.length})</h2><table><tr><th>Name</th><th>From</th><th>Est. fare</th></tr>${rows}</table>` +
+      `<h2>Suggested itinerary</h2>${itHtml}` +
+      `<div class="foot">Generated by Reunly · fares are estimates, confirm before booking.</div>` +
+      `</body></html>`;
+    const blob = new Blob([html], { type: "text/html" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `Reunly-TripPack-${(state.reunion.name || "trip").replace(/[^a-z0-9]+/gi, "-")}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast("Trip pack downloaded — open it to print or share");
+  }
+
   function renderPlan() {
     const panel = $("#planPanel");
     if (!panel) return;
@@ -1468,14 +1762,21 @@
     grid.appendChild(toolLink("🗺️", "Explore map", E.mapsSearchLink(dest)));
     grid.appendChild(toolLink("🍽️", "Restaurants", E.mapsSearchLink(`restaurants in ${dest}`)));
     kit.appendChild(grid);
-    kit.appendChild(
+    const kitBtns = el("div", { class: "btn-row" });
+    kitBtns.appendChild(
       el("button", {
-        class: "btn secondary sm",
-        style: "width:100%;margin-top:10px",
-        text: "📅 Add to calendar (.ics)",
-        onClick: downloadIcs,
+        class: "btn secondary sm", style: "flex:1",
+        text: "📅 Add to calendar", onClick: downloadIcs,
       })
     );
+    kitBtns.appendChild(
+      el("button", {
+        class: "btn secondary sm", style: "flex:1",
+        text: state.pro ? "📄 Trip pack" : "📄 Trip pack ✨",
+        onClick: () => (state.pro ? downloadTripPack() : openProModal()),
+      })
+    );
+    kit.appendChild(kitBtns);
     panel.appendChild(kit);
 
     // --- Smart itinerary ---
@@ -1868,6 +2169,8 @@
     const responded = state.participants.filter(hasResponded).length;
     const hint = $("#respondedHint");
     if (hint) hint.textContent = `${responded} of ${state.participants.length} responded`;
+    const proBadge = $("#proBadge");
+    if (proBadge) proBadge.hidden = !state.pro;
     renderDemoBanner();
   }
 
@@ -1943,7 +2246,7 @@
   }
 
   // ---- Memory wall (real: photos + notes, author-tagged, on-device storage) ----
-  const MEMORY_PHOTO_CAP = 12;
+  const photoCap = () => (state.pro ? 40 : 3); // free tier: 3 photos; Pro: 40
   function meName() {
     const m = state.participants.find(isMe);
     return (m && m.name) || state.user?.name || "You";
@@ -2005,8 +2308,12 @@
   }
   async function addPhoto(file) {
     if (!file) return;
-    if (state.memories.filter((m) => m.type === "photo").length >= MEMORY_PHOTO_CAP) {
-      toast(`Photo limit reached (${MEMORY_PHOTO_CAP}) on this device`);
+    if (state.memories.filter((m) => m.type === "photo").length >= photoCap()) {
+      if (!state.pro) {
+        openProModal();
+        return;
+      }
+      toast(`Photo limit reached (${photoCap()}) on this device`);
       return;
     }
     let dataUrl;
@@ -2200,6 +2507,7 @@
     renderVote();
     renderRecommendations();
     renderInsights();
+    renderProCard();
     renderCosts();
     renderExpenses();
     renderMemories();
@@ -2224,6 +2532,7 @@
     renderParticipants();
     renderRecommendations();
     renderInsights();
+    renderProCard();
     renderCosts();
     renderExpenses();
     renderMemories();
@@ -2235,16 +2544,17 @@
   // Boot
   // -------------------------------------------------------------------------
   function init() {
-    populateCityList();
     populateEventTypes();
     wireRegister();
     wireChoose();
     wireReunionMeta();
     wirePhases();
     wirePhoneModal();
+    wireProModal();
     registerServiceWorker();
     updateCurrencyToggle();
     startRotator();
+    startFlight();
     initTheme();
 
     // Boot precedence: shared invite link > saved session > fresh registration.
@@ -2344,6 +2654,29 @@
       void node.offsetWidth; // reflow to restart the CSS animation
       node.style.animation = "";
     }, 2200);
+  }
+
+  // Ambient flight animation: pick a fresh random route each time the plane
+  // completes its arc (on the CSS animation's iteration boundary).
+  function startFlight() {
+    const plane = document.querySelector(".flight-plane");
+    const fromEl = $("#flightFrom");
+    const toEl = $("#flightTo");
+    if (!plane || !fromEl || !toEl) return;
+    const cities = [
+      "London", "Delhi", "New York", "Dubai", "Singapore", "Tokyo", "Paris",
+      "Sydney", "Bangkok", "Mumbai", "Toronto", "Cape Town", "Rome", "Istanbul",
+      "Bali", "Hong Kong", "Los Angeles", "Barcelona", "Goa",
+    ];
+    const roll = () => {
+      const a = Math.floor(Math.random() * cities.length);
+      let b = Math.floor(Math.random() * cities.length);
+      while (b === a) b = Math.floor(Math.random() * cities.length);
+      fromEl.textContent = cities[a];
+      toEl.textContent = cities[b];
+    };
+    roll();
+    plane.addEventListener("animationiteration", roll);
   }
 
   // Register the PWA service worker. Guarded: it only works over http(s), so it

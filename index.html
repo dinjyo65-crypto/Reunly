@@ -21,7 +21,7 @@
   <header class="topbar">
     <div class="logo">R</div>
     <div>
-      <h1>Reunly</h1>
+      <h1>Reunly<span class="pro-badge" id="proBadge" hidden>Pro</span></h1>
       <div class="sub" id="topbarSub">Reconnect. We'll handle the rest.</div>
     </div>
     <div class="spacer"></div>
@@ -33,13 +33,23 @@
   <main class="app">
     <!-- ============ Screen: Register ============ -->
     <section class="screen active" id="screen-register">
-      <div class="hero-deco" aria-hidden="true">
-        <span class="float f1">✈️</span>
-        <span class="float f2">🏝️</span>
-        <span class="float f3">🗺️</span>
-        <span class="float f4">🌍</span>
-        <span class="float f5">🧳</span>
-        <span class="float f6">🛫</span>
+      <!-- Ambient flight animation: a plane arcs between two cities that change
+           each loop. Purely decorative. -->
+      <div class="flight-anim" aria-hidden="true">
+        <svg viewBox="0 0 400 150" preserveAspectRatio="xMidYMid meet">
+          <path id="flightPath" class="flight-arc" d="M 40 120 Q 200 -10 360 120" fill="none" />
+          <circle class="flight-dot" cx="40" cy="120" r="3.5" />
+          <circle class="flight-dot" cx="360" cy="120" r="3.5" />
+          <g class="flight-plane">
+            <path d="M -9 0 L 7 0 L 3 -3 L 9 -3 L 12 0 L 9 3 L 3 3 L 7 0 Z M -9 0 L -12 -4 M -9 0 L -12 4"
+                  fill="currentColor" stroke="currentColor" stroke-width="1.4"
+                  stroke-linecap="round" stroke-linejoin="round" />
+          </g>
+        </svg>
+        <div class="flight-labels">
+          <span class="flight-from" id="flightFrom">London</span>
+          <span class="flight-to" id="flightTo">Delhi</span>
+        </div>
       </div>
       <div class="hero">
         <div class="hero-badge">✦ When · where · how, sorted</div>
@@ -53,7 +63,9 @@
         <label for="regEmail">Email address</label>
         <input id="regEmail" type="email" autocomplete="email" placeholder="jordan@example.com" />
         <label for="regCity">Home city</label>
-        <input id="regCity" type="text" list="cityList" autocomplete="off" placeholder="Type to see suggestions…" />
+        <input id="regCity" type="text" autocomplete="off" placeholder="Start typing a city…" />
+        <button class="btn ghost sm" id="regDetect" type="button" style="margin-top:8px">📍 Use my location</button>
+        <div class="loc-note" id="regLocNote"></div>
         <div class="error" id="regError"></div>
         <button class="btn" id="regSubmit" style="margin-top:16px">Get started →</button>
         <p class="muted" style="font-size:.72rem;text-align:center;margin:12px 0 0">
@@ -134,6 +146,7 @@
           </div>
           <div id="insightsList"></div>
         </div>
+        <div id="proPanel" style="margin-top:16px"></div>
       </div>
 
       <!-- ===== People ===== -->
@@ -253,8 +266,19 @@
     </div>
   </div>
 
-  <!-- Shared city suggestions -->
-  <datalist id="cityList"></datalist>
+  <!-- ============ Reunly Pro modal ============ -->
+  <div id="proModal" class="modal" role="dialog" aria-modal="true" aria-label="Reunly Pro" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>✨ Reunly Pro</h2>
+        <button class="icon-btn" id="proClose" aria-label="Close">✕</button>
+      </div>
+      <p class="muted" style="font-size:.84rem;margin:0 0 4px">Make the trip unforgettable — and effortless to run.</p>
+      <ul class="pro-feats" id="proFeatures"></ul>
+      <button class="btn" id="proUnlock" style="width:100%">Unlock Pro (demo)</button>
+      <p class="pro-price">£7.99 per event · or Reunly+ £2.99/mo for unlimited events. Demo unlock is free & local.</p>
+    </div>
+  </div>
 
   <script src="data.js"></script>
   <script src="engine.js"></script>

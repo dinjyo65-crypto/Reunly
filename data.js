@@ -115,24 +115,44 @@ const CURRENCIES = {
   MYR: { symbol: "RM", rate: 4.7 },
   HKD: { symbol: "HK$", rate: 7.8 },
   AUD: { symbol: "A$", rate: 1.52 },
+  JPY: { symbol: "¥", rate: 157 },
+  CNY: { symbol: "CN¥", rate: 7.2 },
+  CAD: { symbol: "C$", rate: 1.36 },
+  CHF: { symbol: "CHF ", rate: 0.88 },
 };
 
-/** Map a city's country (parsed from its name) to a display currency code. */
+/**
+ * Map a city's country (parsed from its name) to a display currency code.
+ * Includes the short forms our own city list uses AND the full country names
+ * the live geocoder (OpenStreetMap) returns, so typed suggestions work too.
+ */
 const COUNTRY_CURRENCY = {
   India: "INR",
-  UK: "GBP",
-  UAE: "AED",
-  France: "EUR",
+  UK: "GBP", "United Kingdom": "GBP", England: "GBP", Scotland: "GBP", Wales: "GBP",
+  UAE: "AED", "United Arab Emirates": "AED",
+  France: "EUR", Germany: "EUR", Spain: "EUR", Italy: "EUR", Ireland: "EUR",
+  Netherlands: "EUR", Portugal: "EUR", Greece: "EUR", Belgium: "EUR", Austria: "EUR",
   Thailand: "THB",
   Indonesia: "IDR",
   Malaysia: "MYR",
   Australia: "AUD",
+  Singapore: "SGD",
+  "Hong Kong": "HKD",
+  Japan: "JPY", China: "CNY", Canada: "CAD", Switzerland: "CHF",
+  "United States": "USD", USA: "USD", "United States of America": "USD",
+};
+
+/** ISO-3166 country code → currency (used with live reverse/suggest geocoding). */
+const CC_CURRENCY = {
+  us: "USD", gb: "GBP", in: "INR", ae: "AED", sg: "SGD", hk: "HKD",
+  fr: "EUR", de: "EUR", es: "EUR", it: "EUR", ie: "EUR", nl: "EUR", pt: "EUR",
+  gr: "EUR", be: "EUR", at: "EUR", th: "THB", id: "IDR", my: "MYR", au: "AUD",
+  jp: "JPY", cn: "CNY", ca: "CAD", ch: "CHF",
 };
 
 /**
- * Pick the local display currency for a city name. US state suffixes and
- * "Washington, DC" → USD; "Singapore"/"Hong Kong" handled explicitly; otherwise
- * the part after the last comma is treated as a country.
+ * Pick the local display currency for a city name. Uses the country segment
+ * (after the last comma). Falls back to USD for anything unmapped.
  */
 function currencyForCity(city) {
   const name = (city || "").trim();
@@ -140,8 +160,7 @@ function currencyForCity(city) {
   if (name === "Singapore") return "SGD";
   if (name === "Hong Kong") return "HKD";
   const tail = name.includes(",") ? name.split(",").pop().trim() : name;
-  if (COUNTRY_CURRENCY[tail]) return COUNTRY_CURRENCY[tail];
-  return "USD"; // US states + anything unmapped
+  return COUNTRY_CURRENCY[tail] || "USD";
 }
 
 /**
@@ -198,21 +217,18 @@ function defaultPrefs() {
 }
 
 /**
- * Factory for a blank participant. Centralizing the shape here means every
- * place that creates a participant (seed, "add demo", future import) stays in
- * sync. Dates and destinations are fixed-length ranked arrays (RANKED_SLOTS).
+ * Factory for a blank participant. Dates and destinations are now VARIABLE
+ * length — people add as many ranked options as they like (index 0 = top
+ * choice). A fresh participant starts with one empty row of each.
  */
-const RANKED_SLOTS = 3;
 function makeParticipant(overrides = {}) {
   return {
     id: overrides.id || `p_${Math.random().toString(36).slice(2, 9)}`,
     name: "",
     email: "",
     city: "",
-    // Ranked date ranges: index 0 = 1st choice, etc. Each = {start, end}.
-    dates: Array.from({ length: RANKED_SLOTS }, () => ({ start: "", end: "" })),
-    // Ranked destination city names: index 0 = 1st choice, etc.
-    destinations: Array.from({ length: RANKED_SLOTS }, () => ""),
+    dates: [{ start: "", end: "" }],
+    destinations: [""],
     prefs: defaultPrefs(),
     rsvp: "no_response", // "in" | "out" | "no_response"
     ...overrides,
@@ -222,19 +238,18 @@ function makeParticipant(overrides = {}) {
 /**
  * Merge a (possibly older / partial) participant object onto the current shape,
  * filling any missing fields. Used after loadState/import so data saved by an
- * earlier version never breaks the new UI.
+ * earlier version never breaks the new UI. Preserves variable-length lists and
+ * guarantees at least one row of each.
  */
 function normalizeParticipant(p) {
   const base = makeParticipant({ id: p && p.id });
   const out = { ...base, ...(p || {}) };
-  out.dates = Array.from({ length: RANKED_SLOTS }, (_, i) => {
-    const d = (p && p.dates && p.dates[i]) || {};
-    return { start: d.start || "", end: d.end || "" };
-  });
-  out.destinations = Array.from(
-    { length: RANKED_SLOTS },
-    (_, i) => (p && p.destinations && p.destinations[i]) || ""
-  );
+  const rawDates = p && Array.isArray(p.dates) ? p.dates : [];
+  out.dates = rawDates.map((d) => ({ start: (d && d.start) || "", end: (d && d.end) || "" }));
+  if (!out.dates.length) out.dates = [{ start: "", end: "" }];
+  const rawDest = p && Array.isArray(p.destinations) ? p.destinations : [];
+  out.destinations = rawDest.map((d) => d || "");
+  if (!out.destinations.length) out.destinations = [""];
   out.prefs = { ...defaultPrefs(), ...((p && p.prefs) || {}) };
   out.prefs.activities = Array.isArray(out.prefs.activities) ? out.prefs.activities : [];
   out.rsvp = (p && p.rsvp) || "no_response";
@@ -329,9 +344,9 @@ window.ReunlyData = {
   SEARCHED_FARES,
   CURRENCY,
   CURRENCIES,
+  CC_CURRENCY,
   currencyForCity,
   cityEmoji,
-  RANKED_SLOTS,
   EVENT_TYPES,
   FOOD_OPTIONS,
   ACTIVITY_OPTIONS,

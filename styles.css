@@ -813,6 +813,74 @@ a:focus-visible {
 }
 #phoneUrl { font-size: 0.82rem; color: var(--text); text-align: center; font-weight: 650; }
 
+/* ---- Ambient flight animation (registration) ---- */
+.flight-anim { position: relative; height: 116px; margin: 8px 0 -6px; }
+.flight-anim svg { width: 100%; height: 100%; overflow: visible; }
+.flight-arc { stroke: var(--border-strong); stroke-width: 2; stroke-dasharray: 3 7; stroke-linecap: round; }
+.flight-dot { fill: var(--accent); }
+.flight-plane {
+  color: var(--accent);
+  offset-path: path("M 40 120 Q 200 -10 360 120");
+  offset-rotate: auto;
+  animation: fly 7s ease-in-out infinite;
+  filter: drop-shadow(0 3px 6px rgba(99,102,241,0.5));
+}
+@keyframes fly {
+  0% { offset-distance: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+.flight-labels { position: absolute; inset: 0; pointer-events: none; }
+.flight-from, .flight-to {
+  position: absolute; bottom: -2px; font-size: 0.74rem; font-weight: 650; color: var(--text-dim);
+}
+.flight-from { left: 4%; }
+.flight-to { right: 4%; }
+.flight-from::before, .flight-to::before { content: "📍 "; }
+
+/* ---- Live place autocomplete ---- */
+.ac-menu {
+  position: fixed; z-index: 500; max-height: 250px; overflow-y: auto;
+  background: var(--surface-solid); border: 1px solid var(--border-strong);
+  border-radius: 12px; box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+}
+.ac-item { padding: 12px 14px; font-size: 0.88rem; color: var(--text); cursor: pointer; }
+.ac-item + .ac-item { border-top: 1px solid var(--border); }
+.ac-item.active, .ac-item:hover { background: var(--accent-soft); color: var(--accent); }
+.loc-note { font-size: 0.74rem; color: var(--good); text-align: center; margin-top: 8px; min-height: 1em; }
+
+/* ---- Flexible ranked rows (dates / destinations) ---- */
+.rank-row { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; flex-wrap: wrap; }
+.rank-row .badge.rank { flex: 0 0 auto; }
+.rank-row input[type="date"] { flex: 1 1 130px; min-width: 120px; }
+.rank-row.dest input { flex: 1 1 60%; min-width: 0; }
+.row-del {
+  flex: 0 0 auto; width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-dim);
+  font-size: 0.78rem;
+}
+.row-del:hover { color: var(--danger); border-color: var(--danger); }
+.add-row { margin-top: 2px; }
+
+/* ---- Reunly Pro ---- */
+.pro-card {
+  text-align: center; padding: 20px;
+  background: linear-gradient(135deg, rgba(99,102,241,0.16), rgba(236,72,153,0.14));
+  border: 1px solid var(--border-strong);
+}
+.pro-emoji { font-size: 2rem; }
+.pro-title { font-size: 1.15rem; font-weight: 800; margin-top: 6px; letter-spacing: -0.02em; }
+.pro-sub { font-size: 0.86rem; color: var(--text-dim); margin: 6px 0 4px; }
+.pro-badge {
+  font-size: 0.58rem; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase;
+  background: var(--grad); color: #fff; padding: 3px 8px; border-radius: 999px; margin-left: 7px;
+}
+.pro-feats { list-style: none; padding: 0; margin: 14px 0; text-align: left; }
+.pro-feats li { font-size: 0.9rem; padding: 7px 0; display: flex; gap: 9px; align-items: flex-start; }
+.pro-feats li::before { content: "✓"; color: var(--good); font-weight: 800; flex: 0 0 auto; }
+.pro-price { font-size: 0.78rem; color: var(--text-dim); margin-top: 10px; }
+
 /* Respect reduced-motion preferences */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

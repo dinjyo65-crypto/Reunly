@@ -58,10 +58,16 @@
   /** Tunable weights. Kept as named constants so they're easy to retune. */
   const WEIGHTS = { date: 0.3, destination: 0.3, cost: 0.4 };
 
-  /** Points awarded by preference rank (index 0 = 1st choice). */
-  const RANK_POINTS = [3, 2, 1]; // 1st, 2nd, 3rd
-  // Use max (not [0]) so normalization stays correct even if points are reordered.
-  const MAX_RANK_POINTS = Math.max(...RANK_POINTS);
+  /**
+   * Points awarded by preference rank (index 0 = 1st choice). Now that people
+   * can add ANY number of ranked dates/places, this is a function with a floor
+   * of 1 — the top three decay 3→2→1 and every extra still counts (weight 1),
+   * so a long list never produces zero-weight (ignored) preferences.
+   */
+  const MAX_RANK_POINTS = 3;
+  function rankPoints(rank) {
+    return Math.max(1, MAX_RANK_POINTS - rank);
+  }
 
   // ---------------------------------------------------------------------------
   // Geo + cost estimation (all ESTIMATES — never presented as live fares)
@@ -209,7 +215,7 @@
         if (!key) return;
         const entry =
           tally.get(key) || { ...baseEntry(item, key), points: 0, votes: 0, firstChoices: 0 };
-        entry.points += RANK_POINTS[rank] || 0;
+        entry.points += rankPoints(rank);
         entry.votes += 1;
         if (rank === 0) entry.firstChoices += 1;
         tally.set(key, entry);
@@ -261,7 +267,7 @@
       let best = 0;
       p.dates.forEach((r, rank) => {
         if (rangesOverlap(r, candidateRange)) {
-          best = Math.max(best, RANK_POINTS[rank] || 0);
+          best = Math.max(best, rankPoints(rank));
         }
       });
       sum += best / MAX_RANK_POINTS;
@@ -278,7 +284,7 @@
       let best = 0;
       p.destinations.forEach((d, rank) => {
         if ((d || "").trim().toLowerCase() === target) {
-          best = Math.max(best, RANK_POINTS[rank] || 0);
+          best = Math.max(best, rankPoints(rank));
         }
       });
       sum += best / MAX_RANK_POINTS;
@@ -451,7 +457,7 @@
 
   window.ReunlyEngine = {
     WEIGHTS,
-    RANK_POINTS,
+    rankPoints,
     // currency
     convertFromUSD,
     formatMoney,
