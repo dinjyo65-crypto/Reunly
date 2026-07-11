@@ -635,6 +635,46 @@ a:focus-visible {
   color: var(--accent);
 }
 
+/* ---- Confirm step (does the group's current pick work for you?) ---- */
+.confirm-card { padding: 0; overflow: hidden; }
+.confirm-card .rec-photo { margin: 0; height: 150px; border-radius: 0; }
+.confirm-body { padding: 16px; }
+.confirm-title { font-size: 1.05rem; font-weight: 750; }
+.confirm-sub { font-size: 0.86rem; color: var(--text-dim); margin-top: 4px; }
+.confirm-q { margin-top: 16px; }
+.confirm-q-label { font-size: 0.9rem; font-weight: 620; margin-bottom: 8px; }
+.confirm-yn { display: flex; gap: 8px; }
+.yn-btn {
+  flex: 1; padding: 11px; border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 0.88rem; font-weight: 650; font-family: inherit;
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  transition: all 0.16s ease;
+}
+.yn-btn:hover { border-color: var(--border-strong); }
+.yn-btn.on.yes { background: rgba(52,211,153,0.16); color: var(--good); border-color: rgba(52,211,153,0.5); }
+.yn-btn.on.no { background: rgba(251,113,133,0.16); color: var(--danger); border-color: rgba(251,113,133,0.5); }
+.confirm-q .field-group { margin-top: 10px; }
+
+/* ---- Notification bell (organiser: someone responded) ---- */
+.bell-wrap { position: relative; }
+.notif-dot {
+  position: absolute; top: 4px; right: 4px; width: 8px; height: 8px;
+  border-radius: 999px; background: var(--danger);
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.notif-panel {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 50;
+  width: 280px; max-height: 340px; overflow-y: auto;
+  background: var(--surface-solid); border: 1px solid var(--border-strong);
+  border-radius: 14px; box-shadow: 0 14px 34px rgba(0,0,0,0.45);
+  padding: 6px;
+}
+.notif-item { padding: 10px 12px; border-radius: 10px; font-size: 0.82rem; }
+.notif-item + .notif-item { border-top: 1px solid var(--border); }
+.notif-item .notif-name { font-weight: 700; }
+.notif-item .notif-meta { color: var(--text-dim); font-size: 0.74rem; margin-top: 2px; }
+.notif-empty { padding: 16px; text-align: center; color: var(--text-dim); font-size: 0.82rem; }
+
 /* ---- Runner-up options (compact, quiet) ---- */
 .alt-option { margin-bottom: 10px; }
 .alt-head { display: flex; align-items: center; gap: 11px; }

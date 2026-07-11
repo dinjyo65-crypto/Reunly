@@ -37,8 +37,11 @@
     expenses: [], // [{ id, payerId, desc, amount(USD), ts }]
     itinerarySeed: 1, // deterministic seed for the suggested itinerary
     pro: false, // Reunly Pro unlocked?
+    notifSeen: 0, // ts of the last notification the organiser has viewed
   };
   let memoryPreview = false; // organiser previewing the wall before the event
+  let notifItems = []; // in-memory only — latest fetch from /api/notify
+  let notifPollTimer = null;
 
   const isMe = (p) => p.id === state.me;
   const canEdit = (p) => state.role === "organizer" || isMe(p);
@@ -71,6 +74,7 @@
           expenses: state.expenses,
           itinerarySeed: state.itinerarySeed,
           pro: state.pro,
+          notifSeen: state.notifSeen,
         })
       );
       return true;
@@ -96,6 +100,7 @@
         state.expenses = Array.isArray(s.expenses) ? s.expenses : [];
         state.itinerarySeed = s.itinerarySeed || 1;
         state.pro = !!s.pro;
+        state.notifSeen = s.notifSeen || 0;
         return true;
       }
     } catch (e) {
@@ -169,6 +174,7 @@
       // Privacy: the invite link does NOT carry anyone's email address.
       p: state.participants.map((p) => ({
         n: p.name, c: p.city, d: p.dates, x: p.destinations, pr: p.prefs, rsvp: p.rsvp,
+        dc: p.dateConfirmed, xc: p.destConfirmed,
       })),
     };
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
@@ -188,7 +194,7 @@
         state.participants = data.p.map((x) =>
           D.normalizeParticipant({
             name: x.n, email: x.e || "", city: x.c, dates: x.d, destinations: x.x,
-            prefs: x.pr, rsvp: x.rsvp,
+            prefs: x.pr, rsvp: x.rsvp, dateConfirmed: x.dc, destConfirmed: x.xc,
           })
         );
         return true;
@@ -1148,11 +1154,190 @@
     return E.rankCombinations(state.participants, undefined, fareProvider);
   }
 
+  // -------------------------------------------------------------------------
+  // "Does the group's current pick work for you?" — a one-time confirm step
+  // shown to anyone (organiser or invitee) who lands on Decide with a group
+  // pick already forming but no data of their own yet. Both the date and the
+  // destination question must be answered independently — you can accept one
+  // and reject the other — and any "No" needs a real alternative before you
+  // can continue.
+  // -------------------------------------------------------------------------
+
+  // True once EITHER field has been answered, since both are always written
+  // together (atomically) in confirmSubmit — so checking one is enough, but we
+  // check both for robustness against older/partial imported data.
+  function hasAnsweredConfirm(p) {
+    return p.dateConfirmed !== null || p.destConfirmed !== null;
+  }
+  function needsConfirmStep(p) {
+    if (!p) return false;
+    if (hasAnsweredConfirm(p)) return false; // already submitted the confirm step
+    // Once they've started answering (clicked Yes/No on either question), stay
+    // in the flow even if typing an alternative date/place makes hasResponded()
+    // true — that's expected mid-flow, not evidence they entered data some
+    // other way. Only treat pre-existing data as a reason to skip the step
+    // BEFORE they've touched it at all.
+    const draft = getConfirmDraft(p.id);
+    const inProgress = draft.dateOk !== null || draft.destOk !== null;
+    if (!inProgress && hasResponded(p)) return false; // had their own data already
+    return inProgress || rankedCombos().length > 0;
+  }
+
+  // Transient (not persisted) yes/no answers while the confirm card is open.
+  // Keyed to the current participant id so switching people (or a fresh join)
+  // always starts blank, but re-renders triggered while filling in an
+  // alternative (typing a date/place) don't lose the in-progress answers.
+  let confirmDraft = { forId: null, dateOk: null, destOk: null };
+  function getConfirmDraft(meId) {
+    if (confirmDraft.forId !== meId) confirmDraft = { forId: meId, dateOk: null, destOk: null };
+    return confirmDraft;
+  }
+
+  function yesNoRow(draft, key) {
+    const row = el("div", { class: "confirm-yn" });
+    row.appendChild(
+      el("button", {
+        type: "button",
+        class: `yn-btn${draft[key] === true ? " on yes" : ""}`,
+        text: "✓ Yes",
+        onClick: () => {
+          draft[key] = true;
+          renderWinner();
+        },
+      })
+    );
+    row.appendChild(
+      el("button", {
+        type: "button",
+        class: `yn-btn${draft[key] === false ? " on no" : ""}`,
+        text: "✕ No",
+        onClick: () => {
+          draft[key] = false;
+          renderWinner();
+        },
+      })
+    );
+    return row;
+  }
+
+  // Fire-and-forget: tell the server this person answered, so the organiser's
+  // app can show a notification. Best-effort only — if the request fails
+  // (offline, server asleep, etc.) the local confirmation still goes through.
+  function notifyOrganiser(p, top, draft) {
+    try {
+      fetch("/api/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: state.reunion.code,
+          name: p.name || "Someone",
+          destination: top.destination,
+          dateLabel: top.dateLabel,
+          dateOk: draft.dateOk,
+          destOk: draft.destOk,
+        }),
+      }).catch(() => {});
+    } catch (e) {
+      /* ignore — notification is a nice-to-have, not required for the app to work */
+    }
+  }
+
+  function confirmSubmit(p, top, draft) {
+    if (draft.dateOk) {
+      p.dates = [{ start: top.dateRange.start, end: top.dateRange.end }];
+    }
+    // If dateOk === false, p.dates already holds whatever alternative they
+    // typed into the inline form below (validated before Continue enables).
+    if (draft.destOk) {
+      p.destinations = [top.destination];
+    }
+    p.dateConfirmed = draft.dateOk;
+    p.destConfirmed = draft.destOk;
+    saveState();
+    notifyOrganiser(p, top, draft);
+    toast("Thanks! Just a few more details…");
+    goEditMine();
+  }
+
+  // The Yes/No confirm card itself: reuses the photo banner + the existing
+  // flexible date/destination editors for the "No, here's my alternative" path.
+  function renderConfirmStep(hero, p, top) {
+    const draft = getConfirmDraft(p.id);
+    const card = el("div", { class: "card confirm-card stagger" });
+    addRecPhoto(card, top.destination);
+
+    const body = el("div", { class: "confirm-body" });
+    body.appendChild(el("div", { class: "confirm-title", text: "Does this work for you?" }));
+    body.appendChild(
+      el("div", {
+        class: "confirm-sub",
+        text: `The group's leaning towards ${top.destination}, ${top.dateLabel}.`,
+      })
+    );
+
+    // --- Date question ---
+    const dq = el("div", { class: "confirm-q" });
+    dq.appendChild(el("div", { class: "confirm-q-label", text: `📅 ${top.dateLabel} — does this date work?` }));
+    dq.appendChild(yesNoRow(draft, "dateOk"));
+    if (draft.dateOk === false) dq.appendChild(buildDatesGroup(p));
+    body.appendChild(dq);
+
+    // --- Destination question ---
+    const xq = el("div", { class: "confirm-q" });
+    xq.appendChild(el("div", { class: "confirm-q-label", text: `📍 ${top.destination} — does this place work?` }));
+    xq.appendChild(yesNoRow(draft, "destOk"));
+    if (draft.destOk === false) xq.appendChild(buildDestGroup(p));
+    body.appendChild(xq);
+
+    const continueBtn = el("button", {
+      class: "btn",
+      style: "width:100%;margin-top:16px",
+      text: "Continue →",
+      onClick: () => confirmSubmit(p, top, draft),
+    });
+    const hint = el("div", { class: "confirm-sub" });
+    body.appendChild(continueBtn);
+    body.appendChild(hint);
+
+    // Both questions must be answered, and any "No" needs a real alternative.
+    // This only toggles the button/hint text on the EXISTING nodes above (never
+    // rebuilds the card), so it can safely run on every keystroke in the
+    // date/place inputs without stealing focus mid-type.
+    function updateContinueState() {
+      const dateAnswered = draft.dateOk !== null;
+      const destAnswered = draft.destOk !== null;
+      const dateAltOk = draft.dateOk !== false || p.dates.some(E.isValidRange);
+      const destAltOk = draft.destOk !== false || p.destinations.some((d) => d && d.trim());
+      const canContinue = dateAnswered && destAnswered && dateAltOk && destAltOk;
+      if (canContinue) continueBtn.removeAttribute("disabled");
+      else continueBtn.setAttribute("disabled", "disabled");
+      if (dateAnswered && !dateAltOk) hint.textContent = "Add at least one date you could do.";
+      else if (destAnswered && !destAltOk) hint.textContent = "Add at least one place you'd like instead.";
+      else hint.textContent = "";
+    }
+    updateContinueState();
+    // Event delegation: catches typing in any nested date/place input (native
+    // "input" events bubble) without needing buildDatesGroup/buildDestGroup to
+    // know about this card.
+    card.addEventListener("input", updateContinueState);
+
+    card.appendChild(body);
+    hero.appendChild(card);
+  }
+
   // The #1 option as a hero: photo, name+date, why-it-won, scores, primary Lock.
   function renderWinner() {
     const hero = $("#winnerHero");
     hero.textContent = "";
     const combos = rankedCombos();
+    const me = state.participants.find(isMe);
+    // Guard combos.length here too: needsConfirmStep can stay true mid-flow
+    // even if combos briefly become empty (e.g. clearing demo data while
+    // mid-confirm), and combos[0] would otherwise be undefined.
+    if (needsConfirmStep(me) && combos.length > 0) {
+      renderConfirmStep(hero, me, combos[0]);
+      return;
+    }
     if (!combos.length) {
       const card = el("div", { class: "card empty-cta" });
       card.appendChild(el("div", { class: "empty-emoji", text: "🗓️" }));
@@ -2191,6 +2376,82 @@
     const proBadge = $("#proBadge");
     if (proBadge) proBadge.hidden = !state.pro;
     renderDemoBanner();
+    const notifWrap = $("#notifWrap");
+    if (notifWrap) notifWrap.hidden = state.role !== "organizer";
+  }
+
+  // ---- Notifications: "someone responded" (organiser only, cross-device) ----
+  // Backed by a tiny in-memory endpoint on the server (see server.py /api/notify).
+  // This is the one piece of Reunly that isn't purely local-device state — it's
+  // how the organiser finds out an invitee (on a different phone entirely)
+  // answered the confirm step. Best-effort: if the server is asleep/offline,
+  // this silently does nothing and the rest of the app is unaffected.
+  function renderNotifDot() {
+    const dot = $("#notifDot");
+    if (!dot) return;
+    dot.hidden = !notifItems.some((n) => n.ts > state.notifSeen);
+  }
+  function renderNotifPanel() {
+    const panel = $("#notifPanel");
+    if (!panel) return;
+    panel.textContent = "";
+    if (!notifItems.length) {
+      panel.appendChild(
+        el("div", { class: "notif-empty", text: "No responses yet — they'll show up here as people confirm." })
+      );
+      return;
+    }
+    [...notifItems]
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, 30)
+      .forEach((n) => {
+        const item = el("div", { class: "notif-item" });
+        item.appendChild(el("div", { class: "notif-name", text: `${n.name || "Someone"} responded` }));
+        const bits = [];
+        bits.push(n.destOk ? `✓ ${n.destination}` : `wants a different place`);
+        bits.push(n.dateOk ? `✓ ${n.dateLabel}` : `different dates`);
+        item.appendChild(el("div", { class: "notif-meta", text: bits.join(" · ") }));
+        panel.appendChild(item);
+      });
+  }
+  async function pollNotifications() {
+    const code = state.reunion.code;
+    if (state.role !== "organizer" || !code || code === "—") return;
+    try {
+      const res = await fetch(`/api/notify?code=${encodeURIComponent(code)}&since=0`);
+      const data = await res.json();
+      notifItems = Array.isArray(data.results) ? data.results : [];
+      renderNotifDot();
+      if (!$("#notifPanel").hidden) renderNotifPanel();
+    } catch (e) {
+      /* server asleep (Render free tier) or offline — try again next tick */
+    }
+  }
+  function wireNotifBell() {
+    const btn = $("#notifBtn");
+    const panel = $("#notifPanel");
+    if (!btn || !panel) return;
+    btn.addEventListener("click", () => {
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) {
+        renderNotifPanel();
+        const newest = notifItems.reduce((m, n) => Math.max(m, n.ts), 0);
+        if (newest > state.notifSeen) {
+          state.notifSeen = newest;
+          saveState();
+        }
+        renderNotifDot();
+      }
+    });
+    document.addEventListener("click", (e) => {
+      const wrap = $("#notifWrap");
+      if (wrap && !panel.hidden && !wrap.contains(e.target)) panel.hidden = true;
+    });
+  }
+  function startNotifPolling() {
+    clearInterval(notifPollTimer);
+    pollNotifications();
+    notifPollTimer = setInterval(pollNotifications, 20000);
   }
 
   // ---- Demo mode (sample group) ----
@@ -2530,7 +2791,12 @@
     renderMeta();
     renderCountdown();
     renderPlan();
-    renderWinner();
+    // NOTE: renderWinner() is deliberately NOT called here (same reasoning as
+    // renderParticipants() below) — its confirm-step can contain live text
+    // inputs (the "No, here's my alternative" date/place editors), and
+    // rebuilding them on every debounced keystroke would steal focus while
+    // typing. It's refreshed explicitly wherever the confirm step itself
+    // changes (Yes/No clicks, add/remove row) and by the full renderAll().
     renderVote();
     renderRecommendations();
     renderInsights();
@@ -2578,6 +2844,7 @@
     wirePhases();
     wirePhoneModal();
     wireProModal();
+    wireNotifBell();
     registerServiceWorker();
     updateCurrencyToggle();
     startRotator();
@@ -2596,6 +2863,7 @@
       showScreen("register");
     }
     initOnboarding();
+    startNotifPolling(); // no-ops until state.role === "organizer" with a real code
   }
 
   // ---- Theme (light/dark) ----

@@ -231,6 +231,11 @@ function makeParticipant(overrides = {}) {
     destinations: [""],
     prefs: defaultPrefs(),
     rsvp: "no_response", // "in" | "out" | "no_response"
+    // Answers to "does the group's current top date/place work for you?" —
+    // null = not asked yet, true = accepted the group pick, false = provided
+    // their own alternative instead. Set once via the Decide-tab confirm step.
+    dateConfirmed: null,
+    destConfirmed: null,
     ...overrides,
   };
 }
@@ -253,6 +258,9 @@ function normalizeParticipant(p) {
   out.prefs = { ...defaultPrefs(), ...((p && p.prefs) || {}) };
   out.prefs.activities = Array.isArray(out.prefs.activities) ? out.prefs.activities : [];
   out.rsvp = (p && p.rsvp) || "no_response";
+  // Preserve explicit true/false — collapse missing/undefined to null (not-yet-asked).
+  out.dateConfirmed = p && p.dateConfirmed !== undefined ? p.dateConfirmed : null;
+  out.destConfirmed = p && p.destConfirmed !== undefined ? p.destConfirmed : null;
   return out;
 }
 

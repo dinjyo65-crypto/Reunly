@@ -450,6 +450,37 @@ def wiki_photo(place):
         return url
 
 
+# --- Cross-device "someone responded" notifications --------------------------
+# In-memory only, keyed by invite code (uppercased). This is a lightweight
+# prototype mechanism, NOT durable storage: it resets whenever the server
+# process restarts (e.g. Render's free tier spins the service down after
+# ~15 min idle, or on redeploy). Fine for a live testing session; a real
+# product would put this in a database.
+_notify_lock = threading.Lock()
+_notify_store = {}  # code -> [ {name, destination, dateLabel, dateOk, destOk, ts}, ... ]
+_NOTIFY_MAX_PER_CODE = 200
+
+
+def add_notification(code, entry):
+    key = (code or "").strip().upper()
+    if not key:
+        return
+    entry = dict(entry)
+    entry["ts"] = time.time()
+    with _notify_lock:
+        bucket = _notify_store.setdefault(key, [])
+        bucket.append(entry)
+        if len(bucket) > _NOTIFY_MAX_PER_CODE:
+            del bucket[: len(bucket) - _NOTIFY_MAX_PER_CODE]
+
+
+def get_notifications(code, since):
+    key = (code or "").strip().upper()
+    with _notify_lock:
+        bucket = _notify_store.get(key, [])
+        return [e for e in bucket if e["ts"] > since]
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DIRECTORY, **kwargs)
@@ -517,7 +548,40 @@ class Handler(SimpleHTTPRequestHandler):
                     q.get("end", [""])[0],
                 )
             )
+        if parsed.path == "/api/notify":
+            q = urllib.parse.parse_qs(parsed.query)
+            code = q.get("code", [""])[0]
+            try:
+                since = float(q.get("since", ["0"])[0])
+            except ValueError:
+                since = 0.0
+            return self._send_json({"results": get_notifications(code, since)})
         return super().do_GET()
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/notify":
+            try:
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                # Reject absurdly large bodies rather than reading unbounded input.
+                if length <= 0 or length > 8192:
+                    raise ValueError("bad content length")
+                raw = self.rfile.read(length)
+                data = json.loads(raw)
+                code = str(data.get("code", ""))[:32]
+                entry = {
+                    "name": str(data.get("name", "Someone"))[:80],
+                    "destination": str(data.get("destination", ""))[:120],
+                    "dateLabel": str(data.get("dateLabel", ""))[:60],
+                    "dateOk": bool(data.get("dateOk")),
+                    "destOk": bool(data.get("destOk")),
+                }
+                add_notification(code, entry)
+                return self._send_json({"ok": True})
+            except Exception:
+                return self._send_json({"ok": False}, code=400)
+        self.send_response(404)
+        self.end_headers()
 
 
 if __name__ == "__main__":

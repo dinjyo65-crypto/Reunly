@@ -9,7 +9,7 @@
  * Bump CACHE_VERSION whenever shell files change.
  */
 
-const CACHE_VERSION = "reunly-v28";
+const CACHE_VERSION = "reunly-v29";
 const SHELL = [
   "index.html",
   "styles.css",
