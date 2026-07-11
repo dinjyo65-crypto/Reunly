@@ -273,7 +273,13 @@
     let url = location.origin + location.pathname;
     try {
       if (!lanInfo) lanInfo = await (await fetch("/api/host")).json();
-      if (lanInfo && lanInfo.lan) url = `http://${lanInfo.lan}:${lanInfo.port}/`;
+      if (lanInfo && lanInfo.publicUrl) {
+        // Deployed (e.g. Render) — this IS the address other people should use.
+        url = lanInfo.publicUrl.replace(/\/$/, "") + "/";
+      } else if (lanInfo && lanInfo.lan) {
+        // Running locally — LAN address works for phones on the same Wi-Fi.
+        url = `http://${lanInfo.lan}:${lanInfo.port}/`;
+      }
     } catch (e) {
       /* static hosting / offline — fall back to the current origin */
     }

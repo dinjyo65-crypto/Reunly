@@ -1,0 +1,13 @@
+# Render.com Blueprint for Reunly.
+# Lets you deploy with "New +" -> "Blueprint" pointed at this repo, instead of
+# manually filling in the service settings by hand.
+services:
+  - type: web
+    name: reunly
+    runtime: python
+    plan: free
+    buildCommand: "echo 'no build step — stdlib only'"
+    startCommand: "python server.py"
+    envVars:
+      - key: PORT
+        value: 10000

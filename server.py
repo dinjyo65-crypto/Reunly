@@ -490,7 +490,16 @@ class Handler(SimpleHTTPRequestHandler):
             place = q.get("place", [""])[0]
             return self._send_json({"place": place, "image": wiki_photo(place)})
         if parsed.path == "/api/host":
-            return self._send_json({"lan": lan_ip(), "port": PORT})
+            # On a real hosting platform (Render, etc.) there's a public HTTPS URL
+            # in the environment — prefer that over the local LAN IP so the
+            # "test on your phone" QR code points somewhere reachable from
+            # anywhere, not just this machine's Wi-Fi.
+            public_url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("PUBLIC_URL")
+            return self._send_json({
+                "lan": lan_ip(),
+                "port": PORT,
+                "publicUrl": public_url,
+            })
         if parsed.path == "/api/geosuggest":
             q = urllib.parse.parse_qs(parsed.query)
             return self._send_json({"results": suggest_places(q.get("q", [""])[0])})
