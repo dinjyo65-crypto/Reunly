@@ -549,8 +549,9 @@
       }
       // Open the current user's card so they can fill in their own answers.
       state.editingId = mine ? mine.id : null;
-      // Invitees land on People (answer for yourself); organizers on Decide.
-      state.phase = state.role === "participant" ? "people" : "decide";
+      // Everyone lands on Decide: it shows the "add your dates & places" CTA
+      // (which jumps to editing). People is for reviewing everyone's answers.
+      state.phase = "decide";
     }
     populateEventTypes();
     $("#reunionName").value = state.reunion.name;
@@ -1147,12 +1148,24 @@
     hero.textContent = "";
     const combos = rankedCombos();
     if (!combos.length) {
-      hero.appendChild(
+      const card = el("div", { class: "card empty-cta" });
+      card.appendChild(el("div", { class: "empty-emoji", text: "🗓️" }));
+      card.appendChild(el("div", { class: "empty-title", text: "Add your dates & places" }));
+      card.appendChild(
         el("div", {
-          class: "empty",
-          text: "Add dates and destinations on the People tab to see the best option.",
+          class: "empty-sub",
+          text: "Tell us when you're free and where you'd like to go — then invite the group and we'll find the best option.",
         })
       );
+      const row = el("div", { class: "btn-row" });
+      row.appendChild(
+        el("button", { class: "btn", text: "➕ Add your availability", onClick: goEditMine })
+      );
+      row.appendChild(
+        el("button", { class: "btn secondary", text: "📨 Invite people", onClick: openInviteModal })
+      );
+      card.appendChild(row);
+      hero.appendChild(card);
       return;
     }
     maybeCelebrate(combos);
@@ -2243,6 +2256,14 @@
         window.scrollTo({ top: 0, behavior: "smooth" });
       });
     });
+  }
+  // Jump to the People tab with the current user's own card open for editing.
+  function goEditMine() {
+    state.editingId = state.me;
+    showPhase("people");
+    renderAll();
+    const node = document.getElementById(`pcard-${state.me}`);
+    if (node) node.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   // ---- Memory wall (real: photos + notes, author-tagged, on-device storage) ----
