@@ -1406,6 +1406,9 @@
     const body = el("div", { class: "winner-body" });
     body.appendChild(el("div", { class: "winner-when", text: `📅 ${c.dateLabel}` }));
     body.appendChild(el("div", { class: "winner-reason", text: winnerReason(c) }));
+    // Seasonality shown pre-lock, so nobody commits to monsoon season blind.
+    const wNote = weatherNote(c.destination, c.dateRange.start, c.dateRange.end);
+    if (wNote) body.appendChild(el("div", { class: "winner-weather", text: wNote }));
 
     const grid = el("div", { class: "score-grid" });
     grid.appendChild(scoreCell("Date", pct(c.dateScore), c.dateScore));
@@ -1730,7 +1733,7 @@
   // Trip toolkit + smart itinerary (shown on Decide once a plan is locked)
   // -------------------------------------------------------------------------
   const weatherCache = new Map(); // "place|start" -> result or "pending"
-  function fetchWeather(place, start, end) {
+  function fetchWeather(place, start, end, onDone) {
     const key = `${place}|${start}`;
     if (weatherCache.has(key)) return;
     weatherCache.set(key, "pending");
@@ -1739,9 +1742,33 @@
       .then((r) => r.json())
       .then((w) => {
         weatherCache.set(key, w && w.ok ? w : null);
-        renderPlan();
+        (onDone || renderPlan)();
       })
-      .catch(() => weatherCache.set(key, null));
+      .catch(() => {
+        // Leave a definitive "no data" rather than a stuck "pending", so the UI
+        // stops showing a loading state if the weather API is down.
+        weatherCache.set(key, null);
+        (onDone || renderPlan)();
+      });
+  }
+
+  /**
+   * A short weather line for a candidate date+place, used on the recommendation
+   * BEFORE anyone locks it — seasonality is exactly the kind of thing a group
+   * should see while they can still change their minds.
+   * Returns null while loading or when we have nothing useful to say.
+   */
+  function weatherNote(destination, dateStart, dateEnd) {
+    if (!destination || !dateStart) return null;
+    const w = weatherCache.get(`${destination}|${dateStart}`);
+    if (w === undefined) {
+      fetchWeather(destination, dateStart, dateEnd, renderWinner);
+      return null;
+    }
+    if (!w || w === "pending") return null;
+    const mode = w.mode === "forecast" ? "Forecast" : "Typically";
+    const rain = w.rainPct != null ? ` · ${w.rainPct}% rain risk` : "";
+    return `🌤️ ${mode} ${w.tMin}–${w.tMax}°C${rain}`;
   }
 
   // Download an .ics calendar file for the locked plan (all-day, end-exclusive).
@@ -2098,17 +2125,25 @@
   function money(n) {
     return `$${(Math.round(n * 100) / 100).toLocaleString("en-US")}`;
   }
-  function addExpense(payerId, desc, amount) {
+  function addExpense(payerId, desc, amount, sharedWith) {
     const amt = parseFloat(amount);
     if (!payerId || !desc.trim() || Number.isNaN(amt) || amt <= 0) {
       toast("Enter a payer, description and amount");
       return;
     }
+    // Pin WHO this expense applies to at the moment it's logged. Without this,
+    // someone who joins next week would silently be back-charged for a dinner
+    // they never attended (the old behaviour recomputed the split live).
+    const applies =
+      Array.isArray(sharedWith) && sharedWith.length
+        ? sharedWith.slice()
+        : splitBase().map((p) => p.id);
     state.expenses.unshift({
       id: `x_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       payerId,
       desc: desc.trim(),
       amount: amt,
+      sharedWith: applies,
       ts: Date.now(),
     });
     saveState();
@@ -2119,18 +2154,40 @@
     saveState();
     renderExpenses();
   }
-  // Balance = what you paid minus your equal share (split between the "in" group).
-  function computeSplit() {
+  /** Who a new expense defaults to being split between: the confirmed goers. */
+  function splitBase() {
     const goers = state.participants.filter((p) => p.rsvp === "in");
-    const base = goers.length >= 2 ? goers : state.participants;
+    return goers.length >= 2 ? goers : state.participants;
+  }
+  /**
+   * Balance = what you paid minus your share of each expense you're part of.
+   *
+   * Each expense carries its OWN sharedWith list (pinned when logged), so
+   * shares can differ per expense and latecomers aren't retroactively charged.
+   * Legacy expenses saved before this existed fall back to the current base.
+   */
+  function computeSplit() {
+    const base = splitBase();
+    const baseIds = base.map((p) => p.id);
+    const alive = new Set(state.participants.map((p) => p.id));
     const total = state.expenses.reduce((s, x) => s + x.amount, 0);
-    const share = base.length ? total / base.length : 0;
     const paid = {};
-    state.expenses.forEach((x) => (paid[x.payerId] = (paid[x.payerId] || 0) + x.amount));
+    const owed = {};
+    state.expenses.forEach((x) => {
+      paid[x.payerId] = (paid[x.payerId] || 0) + x.amount;
+      // Only split between people who still exist in the roster, so removing
+      // someone can't strand part of an expense unassigned.
+      let sharers = (Array.isArray(x.sharedWith) && x.sharedWith.length ? x.sharedWith : baseIds)
+        .filter((id) => alive.has(id));
+      if (!sharers.length) sharers = [x.payerId]; // degenerate: payer covers it
+      const each = x.amount / sharers.length;
+      sharers.forEach((id) => (owed[id] = (owed[id] || 0) + each));
+    });
+    const share = base.length ? total / base.length : 0; // display-only average
     const balances = new Map();
-    const inBase = new Set(base.map((p) => p.id));
+    const inBase = new Set(baseIds);
     state.participants.forEach((p) => {
-      const b = (paid[p.id] || 0) - (inBase.has(p.id) ? share : 0);
+      const b = (paid[p.id] || 0) - (owed[p.id] || 0);
       if (Math.abs(b) > 0.005 || inBase.has(p.id)) balances.set(p.id, b);
     });
     // Greedy settle-up: biggest debtor pays biggest creditor.
@@ -2168,9 +2225,10 @@
     card.appendChild(
       el("div", {
         class: "itin-sub",
-        text: `Amounts in USD · split equally between ${base.length} ${
-          base.length === state.participants.length ? "people" : "going"
-        }.`,
+        text:
+          `Amounts in USD · new expenses default to splitting between the ${base.length} ` +
+          `${base.length === state.participants.length ? "people here" : "going"}. ` +
+          "Untick anyone an expense shouldn't apply to.",
       })
     );
 
@@ -2186,6 +2244,32 @@
     const amtIn = el("input", { type: "number", min: "0", step: "0.01", placeholder: "USD", inputmode: "decimal" });
     form.appendChild(payerSel);
     form.appendChild(descIn);
+
+    // Per-expense "split between" picker — this is what makes unequal shares
+    // and late joiners work correctly (see addExpense/computeSplit).
+    const baseIds = new Set(base.map((p) => p.id));
+    const chosen = new Set(baseIds);
+    const whoWrap = el("div", { class: "exp-who" });
+    whoWrap.appendChild(el("div", { class: "exp-who-label", text: "Split between" }));
+    const chips = el("div", { class: "chip-select" });
+    state.participants.forEach((p) => {
+      const on = chosen.has(p.id);
+      chips.appendChild(
+        el("button", {
+          type: "button",
+          class: `chip-toggle${on ? " on" : ""}`,
+          text: p.name || "Unnamed",
+          onClick: (e) => {
+            if (chosen.has(p.id)) chosen.delete(p.id);
+            else chosen.add(p.id);
+            e.currentTarget.classList.toggle("on");
+          },
+        })
+      );
+    });
+    whoWrap.appendChild(chips);
+    form.appendChild(whoWrap);
+
     const row = el("div", { class: "exp-form-row" });
     row.appendChild(amtIn);
     row.appendChild(
@@ -2193,7 +2277,11 @@
         class: "btn sm",
         text: "Add expense",
         onClick: () => {
-          addExpense(payerSel.value, descIn.value, amtIn.value);
+          if (!chosen.size) {
+            toast("Pick at least one person to split between");
+            return;
+          }
+          addExpense(payerSel.value, descIn.value, amtIn.value, [...chosen]);
         },
       })
     );
@@ -2212,7 +2300,17 @@
       const r = el("div", { class: "exp-item" });
       const w = el("div", { style: "flex:1;min-width:0" });
       w.appendChild(el("div", { class: "exp-desc", text: x.desc }));
-      w.appendChild(el("div", { class: "exp-meta", text: `paid by ${pName(x.payerId)}` }));
+      // Show the split scope so an unequal share is visible, not hidden.
+      const alive = new Set(state.participants.map((q) => q.id));
+      const sharers = (Array.isArray(x.sharedWith) ? x.sharedWith : []).filter((id) => alive.has(id));
+      let scope = "";
+      if (sharers.length && sharers.length !== state.participants.length) {
+        scope =
+          sharers.length <= 3
+            ? ` · split between ${sharers.map(pName).join(", ")}`
+            : ` · split ${sharers.length} ways`;
+      }
+      w.appendChild(el("div", { class: "exp-meta", text: `paid by ${pName(x.payerId)}${scope}` }));
       r.appendChild(w);
       r.appendChild(el("span", { class: "exp-amt", text: money(x.amount) }));
       if (state.role === "organizer" || x.payerId === state.me) {
@@ -2223,8 +2321,17 @@
       list.appendChild(r);
     });
     card.appendChild(list);
+    // "each" is only meaningful when every expense is split the same way;
+    // otherwise show the average so it isn't mistaken for an exact figure.
+    const uniform = state.expenses.every((x) => {
+      const s = Array.isArray(x.sharedWith) ? x.sharedWith : [];
+      return !s.length || s.length === base.length;
+    });
     card.appendChild(
-      el("div", { class: "exp-total", text: `Total ${money(total)} · ${money(share)} each` })
+      el("div", {
+        class: "exp-total",
+        text: `Total ${money(total)} · ${uniform ? `${money(share)} each` : `${money(share)} avg per person`}`,
+      })
     );
 
     // Settle-up transfers.

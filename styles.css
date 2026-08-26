@@ -635,6 +635,11 @@ a:focus-visible {
   color: var(--accent);
 }
 
+/* Pre-lock seasonality line on the winner card */
+.winner-weather {
+  font-size: 0.8rem; color: var(--text-dim); margin-top: 6px;
+}
+
 /* Scope disclosure (e.g. "flights only") above estimate lists */
 .scope-note {
   margin: 0 0 12px; padding: 9px 12px; border-radius: 10px;
@@ -837,6 +842,12 @@ a:focus-visible {
 
 /* ---- Expenses & settle-up ---- */
 .exp-form { margin: 10px 0 4px; display: grid; gap: 8px; }
+/* Per-expense "split between" picker */
+.exp-who { display: grid; gap: 6px; }
+.exp-who-label {
+  font-size: 0.72rem; color: var(--text-dim); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.4px;
+}
 .exp-form-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
 .exp-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 .exp-item {
