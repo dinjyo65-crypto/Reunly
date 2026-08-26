@@ -226,7 +226,6 @@ function defaultPrefs() {
  */
 function makeParticipant(overrides = {}) {
   return {
-    id: overrides.id || `p_${Math.random().toString(36).slice(2, 9)}`,
     name: "",
     email: "",
     city: "",
@@ -240,6 +239,10 @@ function makeParticipant(overrides = {}) {
     dateConfirmed: null,
     destConfirmed: null,
     ...overrides,
+    // AFTER the spread: an explicit `id: undefined` in overrides must not
+    // clobber the generated id. Participants from invite links carry no id,
+    // and without one they can't be referenced by expenses, votes or RSVP.
+    id: (overrides && overrides.id) || `p_${Math.random().toString(36).slice(2, 9)}`,
   };
 }
 
@@ -252,6 +255,10 @@ function makeParticipant(overrides = {}) {
 function normalizeParticipant(p) {
   const base = makeParticipant({ id: p && p.id });
   const out = { ...base, ...(p || {}) };
+  // Spreading `p` can clobber the generated id with an explicit `undefined`
+  // (e.g. participants arriving from an invite link, which carries no ids).
+  // Without an id they can't be referenced by expenses, votes or RSVP.
+  if (!out.id) out.id = base.id;
   const rawDates = p && Array.isArray(p.dates) ? p.dates : [];
   out.dates = rawDates.map((d) => ({ start: (d && d.start) || "", end: (d && d.end) || "" }));
   if (!out.dates.length) out.dates = [{ start: "", end: "" }];

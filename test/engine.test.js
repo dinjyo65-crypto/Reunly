@@ -196,6 +196,21 @@ test("scoring stays neutral (no crash, no fake signal) when budgets are absent",
   assert.strictEqual(c.costScore, c.relCostScore, "falls back to the relative measure alone");
 });
 
+// ---- Participant normalization --------------------------------------------
+test("normalizeParticipant always assigns an id, even with none supplied", () => {
+  // Invite-link payloads carry no ids. Without one, a participant can't be
+  // referenced by expenses, votes or RSVP — they silently break.
+  const fromLink = D.normalizeParticipant({ name: "NewPerson", city: "Paris, France" });
+  assert.ok(fromLink.id, "must generate an id");
+  const explicitUndefined = D.normalizeParticipant({ id: undefined, name: "X" });
+  assert.ok(explicitUndefined.id, "explicit undefined id must not survive");
+  const kept = D.normalizeParticipant({ id: "p_keepme", name: "Y" });
+  assert.strictEqual(kept.id, "p_keepme", "an existing id must be preserved");
+  const a = D.normalizeParticipant({ name: "A" });
+  const b = D.normalizeParticipant({ name: "B" });
+  assert.notStrictEqual(a.id, b.id, "generated ids must be unique");
+});
+
 // ---- Money formatting ------------------------------------------------------
 test("currency conversion uses the configured rate", () => {
   const gbp = E.convertFromUSD(100, "GBP");
