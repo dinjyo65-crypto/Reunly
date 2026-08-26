@@ -115,6 +115,52 @@
   }
 
   /**
+   * Rough per-person nightly lodging bands (USD, sharing a twin room). Mirrors
+   * NIGHTLY_RATES in server.py — keep the two in step. Deliberately coarse: the
+   * UI must present these as estimates, never as quoted prices.
+   */
+  const DEFAULT_NIGHTLY = [70, 130];
+  const NIGHTLY_RATES = {
+    "london, uk": [110, 210], "paris, france": [105, 200],
+    "new york, ny": [130, 250], "san francisco, ca": [130, 240],
+    singapore: [95, 180], "dubai, uae": [90, 190],
+    "hong kong": [95, 180], "sydney, australia": [100, 190],
+    "tokyo, japan": [85, 165], "zurich, switzerland": [140, 260],
+    "rome, italy": [80, 150], "barcelona, spain": [80, 150],
+    "lisbon, portugal": [70, 135], "berlin, germany": [75, 140],
+    "toronto, on": [95, 175], "chicago, il": [100, 185],
+    "bangkok, thailand": [35, 80], "bali, indonesia": [30, 75],
+    "goa, india": [30, 70], "delhi, india": [30, 70],
+    "mumbai, india": [40, 90], "kuala lumpur, malaysia": [35, 80],
+    "istanbul, turkey": [45, 95], "mexico city, mexico": [45, 95],
+  };
+
+  /** Estimated per-person lodging for a stay, or null if not applicable. */
+  function estimateLodging(destination, nights) {
+    if (!destination || !nights || nights <= 0) return null;
+    const key = (destination || "").trim().toLowerCase();
+    const band = NIGHTLY_RATES[key] || DEFAULT_NIGHTLY;
+    return { min: Math.round(band[0] * nights), max: Math.round(band[1] * nights), source: "estimated" };
+  }
+
+  /**
+   * Total estimated per-person trip cost: travel + lodging for the nights of
+   * the chosen window. Budget checks that ignore lodging systematically
+   * under-report what a trip actually costs, which is exactly the number
+   * people compare against their stated budget.
+   */
+  function tripCostFor(fromCity, destination, dateRange, fareProvider = getFare) {
+    const f = fareProvider(fromCity, destination);
+    if (!f || f.min == null) return null;
+    const travel = (f.min + f.max) / 2;
+    // Nights = nights slept, so one fewer than the inclusive day count.
+    const nights = Math.max(0, rangeDays(dateRange) - 1);
+    const lodge = estimateLodging(destination, nights);
+    const lodging = lodge ? (lodge.min + lodge.max) / 2 : 0;
+    return { travel, lodging, nights, total: travel + lodging, source: f.source };
+  }
+
+  /**
    * Resolve a fare for a route, preferring a real searched fare and falling
    * back to the distance estimate. Always tags the result with its provenance:
    *   { min, max, mode, source: "searched"|"estimated", asOf? }
@@ -192,6 +238,28 @@
     return a.start <= b.end && b.start <= a.end;
   }
 
+  const MS_PER_DAY = 86400000;
+  /** Inclusive length of a range in days (a single-day range === 1). */
+  function rangeDays(r) {
+    if (!isValidRange(r)) return 0;
+    const start = Date.parse(r.start + "T00:00:00Z");
+    const end = Date.parse(r.end + "T00:00:00Z");
+    if (Number.isNaN(start) || Number.isNaN(end)) return 0;
+    return Math.round((end - start) / MS_PER_DAY) + 1;
+  }
+  /** The shared window between two ranges, or null when they don't overlap. */
+  function rangeIntersection(a, b) {
+    if (!rangesOverlap(a, b)) return null;
+    return {
+      start: a.start > b.start ? a.start : b.start,
+      end: a.end < b.end ? a.end : b.end,
+    };
+  }
+  /** How many days two ranges share (0 when they don't overlap). */
+  function overlapDays(a, b) {
+    return rangeDays(rangeIntersection(a, b));
+  }
+
   // ---------------------------------------------------------------------------
   // Tallies — the core "loop through participants and count" logic
   // ---------------------------------------------------------------------------
@@ -251,6 +319,38 @@
     );
   }
 
+  /**
+   * Candidate date windows to score.
+   *
+   * The ranges people literally typed are rarely the answer. If Ann is free
+   * Dec 19-26 and Bob Dec 22-29, a human organiser instantly suggests Dec
+   * 22-26 — but that window appears in nobody's list, so scoring only the
+   * submitted ranges could never surface it. This adds the pairwise
+   * intersections (the windows where people genuinely coincide) alongside the
+   * originals.
+   *
+   * @param minDays  ignore slivers shorter than this (default 2 — a single
+   *                 shared day is rarely a trip)
+   */
+  function dateCandidatesFor(participants, minDays = 2) {
+    const submitted = tallyDates(participants).map((d) => d.range);
+    const seen = new Set(submitted.map(rangeKey));
+    const out = submitted.slice();
+    // Pairwise intersections of the submitted ranges.
+    for (let i = 0; i < submitted.length; i++) {
+      for (let j = i + 1; j < submitted.length; j++) {
+        const shared = rangeIntersection(submitted[i], submitted[j]);
+        if (!shared) continue;
+        if (rangeDays(shared) < minDays) continue;
+        const key = rangeKey(shared);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(shared);
+      }
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------------------
   // Per-candidate scoring
   // ---------------------------------------------------------------------------
@@ -262,13 +362,18 @@
    */
   function dateScoreFor(candidateRange, participants) {
     if (!participants.length) return 0;
+    const candidateLength = rangeDays(candidateRange) || 1;
     let sum = 0;
     for (const p of participants) {
       let best = 0;
       p.dates.forEach((r, rank) => {
-        if (rangesOverlap(r, candidateRange)) {
-          best = Math.max(best, rankPoints(rank));
-        }
+        const shared = overlapDays(r, candidateRange);
+        if (!shared) return;
+        // Weight by HOW MUCH of the candidate window this person can actually
+        // make. Treating a single shared day the same as the whole week made
+        // "works for most people" routinely untrue.
+        const coverage = Math.min(1, shared / candidateLength);
+        best = Math.max(best, rankPoints(rank) * coverage);
       });
       sum += best / MAX_RANK_POINTS;
     }
@@ -326,26 +431,37 @@
    * (1 = comfortably inside everyone's budget), or null when nobody supplied a
    * budget — in which case callers should stay neutral rather than guess.
    */
-  function budgetFitFor(destination, participants, fareProvider = getFare) {
+  function budgetFitFor(destination, participants, fareProvider = getFare, dateRange = null) {
     const ratios = [];
     const overNames = [];
     for (const p of participants) {
       const budget = parseFloat(p.prefs && p.prefs.budget);
       if (!p.city || Number.isNaN(budget) || budget <= 0) continue;
-      const f = fareProvider(p.city, destination);
-      if (!f || f.min == null) continue;
-      const fare = (f.min + f.max) / 2;
-      const ratio = fare / budget; // <1 = affordable, >1 = over budget
+      // Compare against the whole trip (travel + lodging) when we know the
+      // dates — that's the number people actually have to find.
+      const trip = dateRange ? tripCostFor(p.city, destination, dateRange, fareProvider) : null;
+      let cost;
+      if (trip) {
+        cost = trip.total;
+      } else {
+        const f = fareProvider(p.city, destination);
+        if (!f || f.min == null) continue;
+        cost = (f.min + f.max) / 2;
+      }
+      const ratio = cost / budget; // <1 = affordable, >1 = over budget
       ratios.push(ratio);
       if (ratio > 1) overNames.push(p.name || "Someone");
     }
     if (!ratios.length) return null;
-    // Score each person: 1.0 when the fare uses <=50% of their budget (leaves
-    // room for lodging/food), sliding to 0 as it reaches/exceeds the ceiling.
+    // Score each person: full marks while the trip stays comfortably inside
+    // their budget, sliding to 0 as it reaches/exceeds the ceiling. When the
+    // figure already includes lodging we can allow more of the budget to be
+    // used before penalising; a travel-only figure needs headroom left over.
+    const comfort = dateRange ? 0.8 : 0.5;
     const perPerson = ratios.map((r) => {
-      if (r <= 0.5) return 1;
+      if (r <= comfort) return 1;
       if (r >= 1) return 0;
-      return 1 - (r - 0.5) / 0.5;
+      return 1 - (r - comfort) / (1 - comfort);
     });
     let fit = perPerson.reduce((s, v) => s + v, 0) / perPerson.length;
     // An average re-hides the very person this check exists to protect: four
@@ -374,9 +490,15 @@
    *      avgFare, budgetFit, overBudgetCount, overBudgetNames, total }]
    */
   function rankCombinations(participants, weights = WEIGHTS, fareProvider = getFare) {
-    const dateCandidates = tallyDates(participants).map((d) => d.range);
+    // Includes windows where people's availability overlaps, not just the
+    // ranges they typed — see dateCandidatesFor().
+    const dateCandidates = dateCandidatesFor(participants);
     const destCandidates = tallyDestinations(participants).map((d) => d.destination);
     if (!dateCandidates.length || !destCandidates.length) return [];
+    // Which candidates did somebody actually type, vs which did we derive from
+    // overlapping availability? The UI should say so rather than presenting a
+    // computed window as though someone proposed it.
+    const submittedKeys = new Set(tallyDates(participants).map((d) => rangeKey(d.range)));
 
     // Pre-compute average fares per destination so we can normalize cost.
     const fareByDest = new Map(); // dest -> avg fare (number) or null
@@ -403,15 +525,19 @@
     for (const dest of destCandidates) {
       const destScore = destScoreFor(dest, participants);
       const relCost = relativeCostFor(dest);
-      const budget = budgetFitFor(dest, participants, fareProvider);
-      // Blend "cheap vs the alternatives" with "actually affordable for the
-      // people going". When nobody stated a budget we fall back to the
-      // relative measure alone rather than inventing an affordability signal.
-      const costScore = budget ? relCost * 0.5 + budget.fit * 0.5 : relCost;
       const avgFare = fareByDest.get(dest);
       const fareSearched = searchedByDest.get(dest);
       for (const dateRange of dateCandidates) {
         const dateScore = dateScoreFor(dateRange, participants);
+        // Budget fit depends on the window as well as the place: a longer stay
+        // means more nights of lodging, so it's evaluated per combination.
+        const budget = budgetFitFor(dest, participants, fareProvider, dateRange);
+        // Blend "cheap vs the alternatives" with "actually affordable for the
+        // people going". When nobody stated a budget we fall back to the
+        // relative measure alone rather than inventing an affordability signal.
+        const costScore = budget ? relCost * 0.5 + budget.fit * 0.5 : relCost;
+        const nights = Math.max(0, rangeDays(dateRange) - 1);
+        const lodge = estimateLodging(dest, nights);
         const total =
           weights.date * dateScore +
           weights.destination * destScore +
@@ -420,6 +546,9 @@
           destination: dest,
           dateRange,
           dateLabel: rangeLabel(dateRange),
+          // True when we derived this window from overlapping availability
+          // rather than someone proposing it outright.
+          dateSuggested: !submittedKeys.has(rangeKey(dateRange)),
           dateScore,
           destScore,
           costScore,
@@ -430,6 +559,12 @@
           budgetChecked: budget ? budget.checked : 0,
           avgFare,
           fareSearched,
+          nights,
+          lodgingMin: lodge ? lodge.min : null,
+          lodgingMax: lodge ? lodge.max : null,
+          // Per-person all-in estimate: average fare + mid lodging.
+          avgTripCost:
+            avgFare != null && lodge ? avgFare + (lodge.min + lodge.max) / 2 : avgFare,
           total,
         });
       }
@@ -531,6 +666,10 @@
     isValidRange,
     rangesOverlap,
     rangeLabel,
+    rangeDays,
+    rangeIntersection,
+    overlapDays,
+    dateCandidatesFor,
     // tallies
     tallyDestinations,
     tallyDates,
@@ -539,6 +678,8 @@
     // scoring
     avgFareTo,
     budgetFitFor,
+    estimateLodging,
+    tripCostFor,
     rankCombinations,
     // links
     googleFlightsLink,

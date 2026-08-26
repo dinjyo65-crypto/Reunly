@@ -245,6 +245,39 @@ def estimate_fare(miles):
     return (round(mid * 0.82 / 5) * 5, round(mid * 1.28 / 5) * 5)
 
 
+# Rough nightly lodging bands (USD, per person sharing a twin room) for the
+# cities we know. These are deliberately coarse: the UI must label them as
+# estimates, never quote them as prices. Anything unlisted falls back to
+# DEFAULT_NIGHTLY.
+DEFAULT_NIGHTLY = (70, 130)
+NIGHTLY_RATES = {
+    # Pricier hubs
+    "London, UK": (110, 210), "Paris, France": (105, 200),
+    "New York, NY": (130, 250), "San Francisco, CA": (130, 240),
+    "Singapore": (95, 180), "Dubai, UAE": (90, 190),
+    "Hong Kong": (95, 180), "Sydney, Australia": (100, 190),
+    "Tokyo, Japan": (85, 165), "Zurich, Switzerland": (140, 260),
+    # Mid
+    "Rome, Italy": (80, 150), "Barcelona, Spain": (80, 150),
+    "Lisbon, Portugal": (70, 135), "Berlin, Germany": (75, 140),
+    "Toronto, ON": (95, 175), "Chicago, IL": (100, 185),
+    # Value
+    "Bangkok, Thailand": (35, 80), "Bali, Indonesia": (30, 75),
+    "Goa, India": (30, 70), "Delhi, India": (30, 70),
+    "Mumbai, India": (40, 90), "Kuala Lumpur, Malaysia": (35, 80),
+    "Istanbul, Turkey": (45, 95), "Mexico City, Mexico": (45, 95),
+}
+
+
+def estimate_lodging(destination, nights):
+    """Estimated per-person lodging for a stay. Returns (min, max) or None."""
+    if not destination or not nights or nights <= 0:
+        return None
+    key = resolve_city(destination) or destination
+    low, high = NIGHTLY_RATES.get(key, DEFAULT_NIGHTLY)
+    return (int(low * nights), int(high * nights))
+
+
 # --- Amadeus live path (optional) --------------------------------------------
 _token_cache = {"token": None, "exp": 0}
 
@@ -541,6 +574,21 @@ class Handler(SimpleHTTPRequestHandler):
             q = urllib.parse.parse_qs(parsed.query)
             place = q.get("place", [""])[0]
             return self._send_json({"place": place, "image": wiki_photo(place)})
+        if parsed.path == "/api/lodging":
+            q = urllib.parse.parse_qs(parsed.query)
+            place = q.get("place", [""])[0]
+            try:
+                nights = int(q.get("nights", ["0"])[0])
+            except ValueError:
+                nights = 0
+            est = estimate_lodging(place, nights)
+            if not est:
+                return self._send_json({"ok": False})
+            return self._send_json({
+                "ok": True, "place": place, "nights": nights,
+                "min": est[0], "max": est[1],
+                "currency": "USD", "source": "estimated",
+            })
         if parsed.path == "/api/host":
             # On a real hosting platform (Render, etc.) there's a public HTTPS URL
             # in the environment — prefer that over the local LAN IP so the

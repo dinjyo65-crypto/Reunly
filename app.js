@@ -1464,7 +1464,13 @@
     addRecPhoto(card, c.destination);
 
     const body = el("div", { class: "winner-body" });
-    body.appendChild(el("div", { class: "winner-when", text: `📅 ${c.dateLabel}` }));
+    const whenLine = el("div", { class: "winner-when", text: `📅 ${c.dateLabel}` });
+    // Be clear when the window was derived from overlapping availability
+    // rather than proposed by someone.
+    if (c.dateSuggested) {
+      whenLine.appendChild(el("span", { class: "when-tag", text: "overlap" }));
+    }
+    body.appendChild(whenLine);
     body.appendChild(el("div", { class: "winner-reason", text: winnerReason(c) }));
     // Seasonality shown pre-lock, so nobody commits to monsoon season blind.
     const wNote = weatherNote(c.destination, c.dateRange.start, c.dateRange.end);
@@ -1474,10 +1480,25 @@
     grid.appendChild(scoreCell("Date", pct(c.dateScore), c.dateScore));
     grid.appendChild(scoreCell("Place", pct(c.destScore), c.destScore));
     grid.appendChild(scoreCell("Cost", pct(c.costScore), c.costScore));
+    // Show the all-in per-person figure (travel + lodging) rather than airfare
+    // alone — the fare on its own reads as "what the trip costs" and isn't.
     grid.appendChild(
-      scoreCell("Avg fare", c.avgFare != null ? `$${Math.round(c.avgFare)}` : "—", null)
+      scoreCell(
+        c.avgTripCost != null && c.nights > 0 ? "Per person" : "Avg fare",
+        c.avgTripCost != null ? `$${Math.round(c.avgTripCost)}` : "—",
+        null
+      )
     );
     body.appendChild(grid);
+
+    if (c.nights > 0 && c.lodgingMin != null && c.avgFare != null) {
+      body.appendChild(
+        el("div", {
+          class: "cost-breakdown",
+          text: `≈ $${Math.round(c.avgFare)} travel + $${c.lodgingMin}–$${c.lodgingMax} stay (${c.nights} night${c.nights === 1 ? "" : "s"}) · estimates, excludes food & activities`,
+        })
+      );
+    }
 
     // Surface a budget clash BEFORE anyone locks the plan — this is the moment
     // it's cheap to change course, not after money's been spent.
@@ -1487,7 +1508,7 @@
       body.appendChild(
         el("div", {
           class: "budget-warn",
-          text: `⚠️ Estimated flights alone exceed the stated budget for ${names}${more}. Worth checking before locking.`,
+          text: `⚠️ Estimated travel + stay exceeds the stated budget for ${names}${more}. Worth checking before locking.`,
         })
       );
     }
@@ -1517,7 +1538,13 @@
       head.appendChild(el("span", { class: "alt-emoji", text: D.cityEmoji(c.destination) }));
       const w = el("div", { style: "flex:1;min-width:0" });
       w.appendChild(el("div", { class: "alt-title", text: c.destination }));
-      w.appendChild(el("div", { class: "alt-sub", text: `${c.dateLabel} · ~$${Math.round(c.avgFare || 0)} avg` }));
+      const perPerson = c.avgTripCost != null ? c.avgTripCost : c.avgFare;
+      w.appendChild(
+        el("div", {
+          class: "alt-sub",
+          text: `${c.dateLabel} · ~$${Math.round(perPerson || 0)} pp`,
+        })
+      );
       head.appendChild(w);
       head.appendChild(
         el("button", {

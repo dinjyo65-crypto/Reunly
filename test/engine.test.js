@@ -63,6 +63,82 @@ test("rangesOverlap matches partial overlaps, not just identical ranges", () => 
   assert.ok(!E.rangesOverlap(a, { start: "2026-08-11", end: "2026-08-20" }), "adjacent, no overlap");
 });
 
+// ---- Date window maths -----------------------------------------------------
+test("rangeDays counts inclusively", () => {
+  assert.strictEqual(E.rangeDays({ start: "2026-08-01", end: "2026-08-01" }), 1);
+  assert.strictEqual(E.rangeDays({ start: "2026-08-01", end: "2026-08-07" }), 7);
+  assert.strictEqual(E.rangeDays({ start: "", end: "" }), 0);
+});
+
+test("rangeIntersection finds the shared window", () => {
+  const shared = E.rangeIntersection(
+    { start: "2026-12-19", end: "2026-12-26" },
+    { start: "2026-12-22", end: "2026-12-29" }
+  );
+  assert.deepStrictEqual(shared, { start: "2026-12-22", end: "2026-12-26" });
+  assert.strictEqual(E.overlapDays({ start: "2026-12-19", end: "2026-12-26" }, { start: "2026-12-22", end: "2026-12-29" }), 5);
+  assert.strictEqual(
+    E.rangeIntersection({ start: "2026-08-01", end: "2026-08-05" }, { start: "2026-09-01", end: "2026-09-05" }),
+    null
+  );
+});
+
+test("dateCandidatesFor proposes the mutual window nobody typed", () => {
+  // The whole point: Ann and Bob never entered Dec 22-26, but that's the
+  // window a human organiser would suggest immediately.
+  const people = [
+    person({ dates: [{ start: "2026-12-19", end: "2026-12-26" }] }),
+    person({ dates: [{ start: "2026-12-22", end: "2026-12-29" }] }),
+  ];
+  const cands = E.dateCandidatesFor(people);
+  const labels = cands.map((c) => `${c.start}..${c.end}`);
+  assert.ok(labels.includes("2026-12-22..2026-12-26"), `expected the overlap, got ${labels.join(" | ")}`);
+  assert.ok(labels.includes("2026-12-19..2026-12-26"), "originals must still be candidates");
+});
+
+test("dateCandidatesFor ignores slivers below the minimum", () => {
+  // A single shared day isn't a trip; don't pollute the candidate list.
+  const people = [
+    person({ dates: [{ start: "2026-08-01", end: "2026-08-05" }] }),
+    person({ dates: [{ start: "2026-08-05", end: "2026-08-10" }] }),
+  ];
+  const labels = E.dateCandidatesFor(people).map((c) => `${c.start}..${c.end}`);
+  assert.ok(!labels.includes("2026-08-05..2026-08-05"), "1-day sliver should be skipped");
+});
+
+test("a window everyone fully covers beats one only partly covered", () => {
+  // Both are real candidates; the mutual window should win because everyone
+  // can make all of it, whereas the longer window only suits one person fully.
+  const people = [
+    person({ city: "London, UK", destinations: ["Rome"], dates: [{ start: "2026-12-19", end: "2026-12-26" }] }),
+    person({ city: "Paris, France", destinations: ["Rome"], dates: [{ start: "2026-12-22", end: "2026-12-29" }] }),
+  ];
+  const combos = E.rankCombinations(people, undefined, fixedFares({}));
+  const top = combos[0];
+  assert.strictEqual(top.dateRange.start, "2026-12-22");
+  assert.strictEqual(top.dateRange.end, "2026-12-26");
+});
+
+test("partial availability scores below full availability", () => {
+  const week = { start: "2026-08-01", end: "2026-08-07" };
+  const fullyFree = [
+    person({ city: "London, UK", destinations: ["Rome"], dates: [week] }),
+    person({ city: "Paris, France", destinations: ["Rome"], dates: [week] }),
+  ];
+  const partly = [
+    person({ city: "London, UK", destinations: ["Rome"], dates: [week] }),
+    // Only overlaps one day of the candidate week.
+    person({ city: "Paris, France", destinations: ["Rome"], dates: [{ start: "2026-08-07", end: "2026-08-12" }] }),
+  ];
+  const a = E.rankCombinations(fullyFree, undefined, fixedFares({})).find(
+    (c) => c.dateRange.start === "2026-08-01" && c.dateRange.end === "2026-08-07"
+  );
+  const b = E.rankCombinations(partly, undefined, fixedFares({})).find(
+    (c) => c.dateRange.start === "2026-08-01" && c.dateRange.end === "2026-08-07"
+  );
+  assert.ok(a.dateScore > b.dateScore, "one shared day must not count as a full week");
+});
+
 // ---- Tallies ---------------------------------------------------------------
 test("tallyDestinations ranks by weighted points, not raw vote count", () => {
   // "Rome" is one person's top pick (3pts); "Oslo" is two people's 3rd (1+1).
@@ -159,10 +235,12 @@ test("budgetFitFor flags people whose fare exceeds their stated budget", () => {
 test("an affordable destination outranks one that busts stated budgets", () => {
   // Both destinations are equally popular and share the same dates, so the
   // ONLY differentiator is affordability against what people said they'd spend.
+  // Budgets are all-in (travel + lodging), so they're sized to cover a 4-night
+  // stay at the unlisted-city default (~$70-130/night) plus the cheap fare.
   const dates = [{ start: "2026-08-01", end: "2026-08-05" }];
   const people = [
-    person({ name: "A", city: "London, UK", destinations: ["Cheapville", "Pricey"], dates, prefs: { budget: "400" } }),
-    person({ name: "B", city: "Paris, France", destinations: ["Pricey", "Cheapville"], dates, prefs: { budget: "400" } }),
+    person({ name: "A", city: "London, UK", destinations: ["Cheapville", "Pricey"], dates, prefs: { budget: "1200" } }),
+    person({ name: "B", city: "Paris, France", destinations: ["Pricey", "Cheapville"], dates, prefs: { budget: "1200" } }),
   ];
   const fares = fixedFares({
     "London, UK|Cheapville": { min: 150, max: 150, source: "estimated" },
@@ -175,6 +253,53 @@ test("an affordable destination outranks one that busts stated budgets", () => {
   assert.strictEqual(combos[0].overBudgetCount, 0);
   const pricey = combos.find((c) => c.destination === "Pricey");
   assert.strictEqual(pricey.overBudgetCount, 2, "both travellers are over budget");
+});
+
+test("estimateLodging scales with nights and knows pricey vs value cities", () => {
+  const oneNight = E.estimateLodging("London, UK", 1);
+  const threeNights = E.estimateLodging("London, UK", 3);
+  assert.ok(threeNights.min > oneNight.min, "more nights must cost more");
+  assert.strictEqual(threeNights.min, oneNight.min * 3);
+  // A value destination should undercut an expensive one for the same stay.
+  const goa = E.estimateLodging("Goa, India", 3);
+  assert.ok(goa.max < threeNights.max, "Goa should be cheaper than London");
+  assert.strictEqual(E.estimateLodging("London, UK", 0), null);
+});
+
+test("tripCostFor adds lodging on top of travel", () => {
+  const fares = fixedFares({ "London, UK|Goa, India": { min: 400, max: 400, source: "estimated" } });
+  // 2026-08-01..2026-08-05 is 5 inclusive days = 4 nights slept.
+  const trip = E.tripCostFor("London, UK", "Goa, India", { start: "2026-08-01", end: "2026-08-05" }, fares);
+  assert.strictEqual(trip.travel, 400);
+  assert.strictEqual(trip.nights, 4);
+  assert.ok(trip.lodging > 0, "lodging must be counted");
+  assert.strictEqual(trip.total, trip.travel + trip.lodging);
+});
+
+test("a cheap flight to a pricey city can still bust the budget once lodging counts", () => {
+  // The whole point of including lodging: airfare alone said "affordable".
+  const dates = [{ start: "2026-08-01", end: "2026-08-08" }]; // 7 nights
+  const people = [
+    person({ name: "A", city: "Paris, France", destinations: ["London, UK"], dates, prefs: { budget: "500" } }),
+  ];
+  const fares = fixedFares({ "Paris, France|London, UK": { min: 120, max: 120, source: "estimated" } });
+  const combos = E.rankCombinations(people, undefined, fares);
+  const top = combos[0];
+  assert.ok(top.avgTripCost > top.avgFare, "all-in cost must exceed the fare alone");
+  assert.strictEqual(top.overBudgetCount, 1, "£120 flight + 7 nights in London busts a 500 budget");
+});
+
+test("combos carry lodging + all-in figures for the UI", () => {
+  const dates = [{ start: "2026-08-01", end: "2026-08-05" }];
+  const people = [
+    person({ city: "London, UK", destinations: ["Goa, India"], dates }),
+    person({ city: "Paris, France", destinations: ["Goa, India"], dates }),
+  ];
+  const combos = E.rankCombinations(people, undefined, fixedFares({}));
+  const top = combos[0];
+  assert.strictEqual(top.nights, 4);
+  assert.ok(top.lodgingMin > 0 && top.lodgingMax > top.lodgingMin);
+  assert.ok(top.avgTripCost > top.avgFare);
 });
 
 test("combos expose budget fields so the UI can warn before locking", () => {

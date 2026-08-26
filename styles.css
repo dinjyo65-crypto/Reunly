@@ -635,6 +635,20 @@ a:focus-visible {
   color: var(--accent);
 }
 
+/* Travel + lodging breakdown under the winner card's score grid */
+.cost-breakdown {
+  margin-top: 10px; font-size: 0.72rem; line-height: 1.45;
+  color: var(--text-dim);
+}
+
+/* Marks a date window derived from overlapping availability, not proposed */
+.when-tag {
+  margin-left: 8px; padding: 2px 7px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 0.66rem; font-weight: 700; letter-spacing: 0.3px;
+  text-transform: uppercase; vertical-align: middle;
+}
+
 /* Pre-lock seasonality line on the winner card */
 .winner-weather {
   font-size: 0.8rem; color: var(--text-dim); margin-top: 6px;
