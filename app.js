@@ -19,7 +19,7 @@
   const ORDINALS = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th"];
   const ordinal = (i) => ORDINALS[i] || `${i + 1}th`;
 
-  // ---- App state (persisted to localStorage; see saveState/loadState) ----
+  // ---- App state (persisted to localStorage; see saveState/peekSavedState) ----
   const state = {
     user: null, // {name, email, city}
     reunion: { name: "", type: "Friends meetup", code: "—" },
@@ -82,31 +82,36 @@
       return false; // storage unavailable / full — prototype still works in-memory
     }
   }
-  function loadState() {
+  // Parse saved localStorage state WITHOUT applying it to `state` yet — boot
+  // needs to compare this against an incoming invite link (see init()) before
+  // deciding which one should actually win, so an invite link can never
+  // silently wipe out progress someone already made on this device.
+  function peekSavedState() {
     try {
       const s = JSON.parse(localStorage.getItem(LS_STATE) || "null");
-      if (s && Array.isArray(s.participants)) {
-        state.user = s.user || null;
-        state.reunion = s.reunion || state.reunion;
-        state.participants = s.participants.map(D.normalizeParticipant);
-        state.me = s.me || null;
-        state.role = s.role || "organizer";
-        state.phase = s.phase || "decide";
-        state.currencyMode = s.currencyMode || "local";
-        state.demoMode = !!s.demoMode;
-        state.lockedPlan = s.lockedPlan || null;
-        state.ballot = s.ballot || null;
-        state.memories = Array.isArray(s.memories) ? s.memories : [];
-        state.expenses = Array.isArray(s.expenses) ? s.expenses : [];
-        state.itinerarySeed = s.itinerarySeed || 1;
-        state.pro = !!s.pro;
-        state.notifSeen = s.notifSeen || 0;
-        return true;
-      }
+      if (s && Array.isArray(s.participants)) return s;
     } catch (e) {
       /* corrupt — ignore */
     }
-    return false;
+    return null;
+  }
+  // Apply a previously-peeked saved-state object onto `state`.
+  function applySavedState(s) {
+    state.user = s.user || null;
+    state.reunion = s.reunion || state.reunion;
+    state.participants = s.participants.map(D.normalizeParticipant);
+    state.me = s.me || null;
+    state.role = s.role || "organizer";
+    state.phase = s.phase || "decide";
+    state.currencyMode = s.currencyMode || "local";
+    state.demoMode = !!s.demoMode;
+    state.lockedPlan = s.lockedPlan || null;
+    state.ballot = s.ballot || null;
+    state.memories = Array.isArray(s.memories) ? s.memories : [];
+    state.expenses = Array.isArray(s.expenses) ? s.expenses : [];
+    state.itinerarySeed = s.itinerarySeed || 1;
+    state.pro = !!s.pro;
+    state.notifSeen = s.notifSeen || 0;
   }
   function clearState() {
     try {
@@ -180,29 +185,57 @@
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
     return `${location.origin}${location.pathname}#r=${b64}`;
   }
-  function importFromHash() {
+  // Parse an invite-link hash WITHOUT applying it — see peekSavedState() above
+  // for why boot needs to look at both before it leaps.
+  function peekHashPayload() {
     const m = (location.hash || "").match(/^#r=(.+)$/);
-    if (!m) return false;
+    if (!m) return null;
     try {
       const data = JSON.parse(decodeURIComponent(escape(atob(m[1]))));
-      if (data && Array.isArray(data.p)) {
-        state.reunion = {
-          name: data.name || "Shared reunion",
-          type: data.type || "Friends",
-          code: data.code || generateInviteCode(data.type),
-        };
-        state.participants = data.p.map((x) =>
-          D.normalizeParticipant({
-            name: x.n, email: x.e || "", city: x.c, dates: x.d, destinations: x.x,
-            prefs: x.pr, rsvp: x.rsvp, dateConfirmed: x.dc, destConfirmed: x.xc,
-          })
-        );
-        return true;
-      }
+      if (data && Array.isArray(data.p)) return data;
     } catch (e) {
       /* malformed link — ignore */
     }
-    return false;
+    return null;
+  }
+  // Apply a previously-peeked invite payload onto `state` (replaces the whole
+  // roster — only call once the caller has decided that's safe/wanted).
+  function applyHashPayload(data) {
+    state.reunion = {
+      name: data.name || "Shared reunion",
+      type: data.type || "Friends",
+      code: data.code || generateInviteCode(data.type),
+    };
+    state.participants = data.p.map((x) =>
+      D.normalizeParticipant({
+        name: x.n, email: x.e || "", city: x.c, dates: x.d, destinations: x.x,
+        prefs: x.pr, rsvp: x.rsvp, dateConfirmed: x.dc, destConfirmed: x.xc,
+      })
+    );
+  }
+  // Append participants from an invite payload who aren't already in the
+  // current roster, WITHOUT touching anyone who already matches — used when
+  // resuming local progress for an event that's already saved on this device,
+  // so re-opening the same link still picks up newcomers but never clobbers
+  // anyone's existing answers. Matched by name (the payload never carries an
+  // email or id — see buildShareUrl's privacy note) — an imperfect heuristic,
+  // but the best available without a real shared backend.
+  function mergeNewParticipantsFromHash(data) {
+    const known = new Set(state.participants.map((p) => (p.name || "").trim().toLowerCase()));
+    let added = 0;
+    data.p.forEach((x) => {
+      const key = (x.n || "").trim().toLowerCase();
+      if (!key || known.has(key)) return;
+      known.add(key);
+      state.participants.push(
+        D.normalizeParticipant({
+          name: x.n, city: x.c, dates: x.d, destinations: x.x,
+          prefs: x.pr, rsvp: x.rsvp, dateConfirmed: x.dc, destConfirmed: x.xc,
+        })
+      );
+      added += 1;
+    });
+    return added;
   }
   async function shareInvite() {
     const url = buildShareUrl();
@@ -2851,14 +2884,64 @@
     startFlight();
     initTheme();
 
-    // Boot precedence: shared invite link > saved session > fresh registration.
-    if (importFromHash()) {
+    // Boot precedence: peek at BOTH a shared invite link and any saved local
+    // session before applying either, so an invite link can never silently
+    // overwrite progress already made on this device (see peekSavedState()).
+    const hashData = peekHashPayload();
+    const saved = peekSavedState();
+    if (hashData && saved) {
+      const savedCode = saved.reunion && saved.reunion.code;
+      if (savedCode && savedCode === hashData.code) {
+        // Same event, link opened again — resume local progress as-is and
+        // just pick up anyone new who joined since.
+        applySavedState(saved);
+        const added = mergeNewParticipantsFromHash(hashData);
+        location.hash = "";
+        if (state.user) {
+          enterDashboard("resume", state.reunion.code);
+          if (added) {
+            toast(`Welcome back — ${added} new ${added === 1 ? "person" : "people"} joined since you last checked.`);
+          }
+        } else {
+          showScreen("register");
+        }
+      } else {
+        // A DIFFERENT event — never switch silently. Ask first.
+        const currentName = (saved.reunion && saved.reunion.name) || "your current event";
+        const incomingName = hashData.name || "this event";
+        const swap = window.confirm(
+          `You have "${currentName}" in progress on this device.\n\n` +
+            `Opening this link will switch to "${incomingName}" and replace your current progress.\n\nContinue?`
+        );
+        location.hash = "";
+        if (swap) {
+          applyHashPayload(hashData);
+          state.fromInvite = true;
+          $("#choiceGreeting").textContent = `Joining "${state.reunion.name}"`;
+          showScreen("register");
+        } else {
+          applySavedState(saved);
+          if (state.user) {
+            enterDashboard("resume", state.reunion.code);
+          } else {
+            showScreen("register");
+          }
+        }
+      }
+    } else if (hashData) {
+      // First time seeing this device — normal join flow.
+      applyHashPayload(hashData);
       state.fromInvite = true;
       // Pre-fill the share-link reunion name so the user sees what they're joining.
       $("#choiceGreeting").textContent = `Joining "${state.reunion.name}"`;
       showScreen("register");
-    } else if (loadState() && state.user) {
-      enterDashboard("resume", state.reunion.code);
+    } else if (saved) {
+      applySavedState(saved);
+      if (state.user) {
+        enterDashboard("resume", state.reunion.code);
+      } else {
+        showScreen("register");
+      }
     } else {
       showScreen("register");
     }
