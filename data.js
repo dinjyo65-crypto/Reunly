@@ -103,6 +103,9 @@ const CURRENCY = "USD";
  * USD (approximate, static — clearly labelled "approx" in the UI). Add a code
  * here and map a country to it in COUNTRY_CURRENCY to extend coverage.
  */
+// When the rates below were last set by hand. Surfaced in the UI so a stale
+// rate is visible rather than silently skewing every converted number.
+const RATES_AS_OF = "2026-06-27";
 const CURRENCIES = {
   USD: { symbol: "$", rate: 1 },
   INR: { symbol: "₹", rate: 83 },
@@ -352,6 +355,7 @@ window.ReunlyData = {
   SEARCHED_FARES,
   CURRENCY,
   CURRENCIES,
+  RATES_AS_OF,
   CC_CURRENCY,
   currencyForCity,
   cityEmoji,

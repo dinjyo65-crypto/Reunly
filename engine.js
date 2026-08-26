@@ -314,17 +314,59 @@
     return { avgFare, anySearched, anyLive, fares };
   }
 
+  /**
+   * How well a destination fits what people actually said they can spend.
+   *
+   * Each participant's own estimated fare is compared against their own stated
+   * `prefs.budget` (a per-person ceiling in USD). We deliberately compare
+   * per-person rather than against the group average, because an average hides
+   * exactly the person most likely to drop out.
+   *
+   * Returns { fit, overCount, overNames, checked } where `fit` is 0..1
+   * (1 = comfortably inside everyone's budget), or null when nobody supplied a
+   * budget — in which case callers should stay neutral rather than guess.
+   */
+  function budgetFitFor(destination, participants, fareProvider = getFare) {
+    const ratios = [];
+    const overNames = [];
+    for (const p of participants) {
+      const budget = parseFloat(p.prefs && p.prefs.budget);
+      if (!p.city || Number.isNaN(budget) || budget <= 0) continue;
+      const f = fareProvider(p.city, destination);
+      if (!f || f.min == null) continue;
+      const fare = (f.min + f.max) / 2;
+      const ratio = fare / budget; // <1 = affordable, >1 = over budget
+      ratios.push(ratio);
+      if (ratio > 1) overNames.push(p.name || "Someone");
+    }
+    if (!ratios.length) return null;
+    // Score each person: 1.0 when the fare uses <=50% of their budget (leaves
+    // room for lodging/food), sliding to 0 as it reaches/exceeds the ceiling.
+    const perPerson = ratios.map((r) => {
+      if (r <= 0.5) return 1;
+      if (r >= 1) return 0;
+      return 1 - (r - 0.5) / 0.5;
+    });
+    const fit = perPerson.reduce((s, v) => s + v, 0) / perPerson.length;
+    return { fit, overCount: overNames.length, overNames, checked: ratios.length };
+  }
+
   // ---------------------------------------------------------------------------
   // Combined ranking of (date range × destination) combinations
   // ---------------------------------------------------------------------------
 
   /**
    * Rank all candidate combinations of submitted date ranges × destinations.
-   * Cost is normalized across candidates (cheapest avg fare => costScore 1).
+   *
+   * The cost component blends two things: how cheap a destination is *relative
+   * to the other candidates* (normalized fare), and how well it fits the
+   * budgets people actually stated (budgetFitFor). Without the second half,
+   * "cheapest of the options" could still be unaffordable for the group and the
+   * UI would misleadingly call it budget-friendly.
    *
    * @returns array sorted by total desc:
    *   [{ destination, dateRange, dateLabel, dateScore, destScore, costScore,
-   *      avgFare, total }]
+   *      avgFare, budgetFit, overBudgetCount, overBudgetNames, total }]
    */
   function rankCombinations(participants, weights = WEIGHTS, fareProvider = getFare) {
     const dateCandidates = tallyDates(participants).map((d) => d.range);
@@ -345,7 +387,7 @@
     const fareSpread = maxFare - minFare;
 
     /** Cheapest = 1, most expensive = 0; neutral 0.5 when there's nothing to compare. */
-    function costScoreFor(dest) {
+    function relativeCostFor(dest) {
       const fare = fareByDest.get(dest);
       if (fare == null) return 0.5; // unknown cost — stay neutral
       if (fareSpread === 0) return 1; // only one comparable fare (or all equal): best
@@ -355,7 +397,12 @@
     const combos = [];
     for (const dest of destCandidates) {
       const destScore = destScoreFor(dest, participants);
-      const costScore = costScoreFor(dest);
+      const relCost = relativeCostFor(dest);
+      const budget = budgetFitFor(dest, participants, fareProvider);
+      // Blend "cheap vs the alternatives" with "actually affordable for the
+      // people going". When nobody stated a budget we fall back to the
+      // relative measure alone rather than inventing an affordability signal.
+      const costScore = budget ? relCost * 0.5 + budget.fit * 0.5 : relCost;
       const avgFare = fareByDest.get(dest);
       const fareSearched = searchedByDest.get(dest);
       for (const dateRange of dateCandidates) {
@@ -371,6 +418,11 @@
           dateScore,
           destScore,
           costScore,
+          relCostScore: relCost,
+          budgetFit: budget ? budget.fit : null,
+          overBudgetCount: budget ? budget.overCount : 0,
+          overBudgetNames: budget ? budget.overNames : [],
+          budgetChecked: budget ? budget.checked : 0,
           avgFare,
           fareSearched,
           total,
@@ -481,6 +533,7 @@
     daysUntil,
     // scoring
     avgFareTo,
+    budgetFitFor,
     rankCombinations,
     // links
     googleFlightsLink,

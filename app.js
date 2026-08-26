@@ -1119,7 +1119,11 @@
     const parts = [];
     if (c.destScore >= 0.6) parts.push("most-wanted place");
     if (c.dateScore >= 0.6) parts.push("works for most people");
-    if (c.costScore >= 0.6) parts.push("easiest on budgets");
+    // Only claim budget-friendliness when we actually checked stated budgets;
+    // otherwise say what's true — it's the cheapest of the options, which is
+    // not the same as affordable.
+    if (c.budgetFit != null && c.budgetFit >= 0.6) parts.push("fits stated budgets");
+    else if (c.budgetFit == null && c.relCostScore >= 0.6) parts.push("cheapest travel");
     return parts.length ? `Wins on ${parts.join(" · ")}` : "Best overall balance";
   }
 
@@ -1412,6 +1416,19 @@
     );
     body.appendChild(grid);
 
+    // Surface a budget clash BEFORE anyone locks the plan — this is the moment
+    // it's cheap to change course, not after money's been spent.
+    if (c.overBudgetCount > 0) {
+      const names = c.overBudgetNames.slice(0, 3).join(", ");
+      const more = c.overBudgetCount > 3 ? ` +${c.overBudgetCount - 3} more` : "";
+      body.appendChild(
+        el("div", {
+          class: "budget-warn",
+          text: `⚠️ Estimated flights alone exceed the stated budget for ${names}${more}. Worth checking before locking.`,
+        })
+      );
+    }
+
     const lockBtn = el("button", {
       class: locked ? "btn secondary" : "btn",
       style: "width:100%;margin-top:14px",
@@ -1679,6 +1696,17 @@
       list.appendChild(el("div", { class: "empty", text: "No home cities entered yet." }));
       return;
     }
+
+    // Be explicit about what these numbers are — and aren't. A family reading
+    // "$215–$340" could easily assume that's the whole trip.
+    list.appendChild(
+      el("div", {
+        class: "scope-note",
+        text:
+          "✈️ Return travel only — excludes accommodation, food and activities. " +
+          `Non-USD amounts use approximate rates set ${D.RATES_AS_OF}.`,
+      })
+    );
 
     withCity.forEach((p, idx) => {
       const card = el("div", { class: "card stagger cost-row" });

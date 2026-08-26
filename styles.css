@@ -635,6 +635,21 @@ a:focus-visible {
   color: var(--accent);
 }
 
+/* Scope disclosure (e.g. "flights only") above estimate lists */
+.scope-note {
+  margin: 0 0 12px; padding: 9px 12px; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--text-dim); font-size: 0.78rem; line-height: 1.45;
+}
+
+/* Budget clash warning — shown before locking, while it's still cheap to change */
+.budget-warn {
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: var(--warn); font-size: 0.82rem; line-height: 1.45;
+}
+
 /* ---- Confirm step (does the group's current pick work for you?) ---- */
 .confirm-card { padding: 0; overflow: hidden; }
 .confirm-card .rec-photo { margin: 0; height: 150px; border-radius: 0; }
