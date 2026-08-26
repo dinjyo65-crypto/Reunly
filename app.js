@@ -37,6 +37,9 @@
     expenses: [], // [{ id, payerId, desc, amount(USD), ts }]
     itinerarySeed: 1, // deterministic seed for the suggested itinerary
     pro: false, // Reunly Pro unlocked?
+    // id -> name for people removed from the roster, so expenses they paid
+    // still read sensibly in the settle-up instead of showing "Someone".
+    pastNames: {},
     notifSeen: 0, // ts of the last notification the organiser has viewed
   };
   let memoryPreview = false; // organiser previewing the wall before the event
@@ -53,6 +56,16 @@
 
   // ---- Persistence ----
   const LS_STATE = "reunly_state_v1";
+  /**
+   * Stamp the current user's record so a link they send back can be merged
+   * last-write-wins against other copies (see mergeParticipantsFromHash).
+   * Only their OWN row is touched — we have no authority to claim an edit
+   * time for anyone else's answers.
+   */
+  function touchMine() {
+    const mine = state.participants.find((p) => p.id === state.me);
+    if (mine) mine.updatedAt = Date.now();
+  }
   // Returns true on success, false if storage failed (e.g. quota exceeded by a
   // large photo) — callers that add heavy data check the result.
   function saveState() {
@@ -73,6 +86,7 @@
           memories: state.memories,
           expenses: state.expenses,
           itinerarySeed: state.itinerarySeed,
+          pastNames: state.pastNames,
           pro: state.pro,
           notifSeen: state.notifSeen,
         })
@@ -110,6 +124,7 @@
     state.memories = Array.isArray(s.memories) ? s.memories : [];
     state.expenses = Array.isArray(s.expenses) ? s.expenses : [];
     state.itinerarySeed = s.itinerarySeed || 1;
+    state.pastNames = s.pastNames || {};
     state.pro = !!s.pro;
     state.notifSeen = s.notifSeen || 0;
   }
@@ -172,14 +187,22 @@
   // ---- Shareable invite links (state encoded in the URL hash, no backend) ----
   function buildShareUrl() {
     const payload = {
-      v: 1,
+      v: 2,
       code: state.reunion.code,
       name: state.reunion.name,
       type: state.reunion.type,
-      // Privacy: the invite link does NOT carry anyone's email address.
+      // The agreed plan travels with the link, so a joiner sees what was
+      // decided rather than an apparently-undecided event.
+      locked: state.lockedPlan || null,
+      // Privacy: the invite link does NOT carry anyone's email address. The
+      // participant id IS included — it's a random local token, not PII, and
+      // without it the same person re-appears as a duplicate on every merge.
       p: state.participants.map((p) => ({
-        n: p.name, c: p.city, d: p.dates, x: p.destinations, pr: p.prefs, rsvp: p.rsvp,
-        dc: p.dateConfirmed, xc: p.destConfirmed,
+        id: p.id, n: p.name, c: p.city, d: p.dates, x: p.destinations,
+        pr: p.prefs, rsvp: p.rsvp, dc: p.dateConfirmed, xc: p.destConfirmed,
+        // Last-write-wins clock so a returning link can update someone's
+        // answers without a newer local edit being overwritten by a stale one.
+        ts: p.updatedAt || 0,
       })),
     };
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
@@ -200,42 +223,62 @@
   }
   // Apply a previously-peeked invite payload onto `state` (replaces the whole
   // roster — only call once the caller has decided that's safe/wanted).
+  /** Turn one payload entry back into a full participant object. */
+  function participantFromPayload(x) {
+    return D.normalizeParticipant({
+      id: x.id, name: x.n, email: x.e || "", city: x.c, dates: x.d,
+      destinations: x.x, prefs: x.pr, rsvp: x.rsvp,
+      dateConfirmed: x.dc, destConfirmed: x.xc, updatedAt: x.ts || 0,
+    });
+  }
   function applyHashPayload(data) {
     state.reunion = {
       name: data.name || "Shared reunion",
       type: data.type || "Friends",
       code: data.code || generateInviteCode(data.type),
     };
-    state.participants = data.p.map((x) =>
-      D.normalizeParticipant({
-        name: x.n, email: x.e || "", city: x.c, dates: x.d, destinations: x.x,
-        prefs: x.pr, rsvp: x.rsvp, dateConfirmed: x.dc, destConfirmed: x.xc,
-      })
-    );
+    state.participants = data.p.map(participantFromPayload);
+    if (data.locked) state.lockedPlan = data.locked;
   }
-  // Append participants from an invite payload who aren't already in the
-  // current roster, WITHOUT touching anyone who already matches — used when
-  // resuming local progress for an event that's already saved on this device,
-  // so re-opening the same link still picks up newcomers but never clobbers
-  // anyone's existing answers. Matched by name (the payload never carries an
-  // email or id — see buildShareUrl's privacy note) — an imperfect heuristic,
-  // but the best available without a real shared backend.
-  function mergeNewParticipantsFromHash(data) {
-    const known = new Set(state.participants.map((p) => (p.name || "").trim().toLowerCase()));
+  /**
+   * Merge an invite payload into the roster we already have for this event.
+   *
+   * This is what makes the invite link a genuine round-trip: a participant
+   * fills in their dates, sends their link back, and the organiser's copy
+   * actually picks up those answers. Append-only merging silently discarded
+   * them, which is worse than useless — people would think they'd replied.
+   *
+   * Conflicts resolve last-write-wins on each participant's `updatedAt`, so
+   * re-opening an older link can never roll back newer local edits. Matching
+   * prefers the stable id and falls back to name for links made before ids
+   * were included.
+   */
+  function mergeParticipantsFromHash(data) {
     let added = 0;
+    let updated = 0;
+    const byId = new Map(state.participants.map((p) => [p.id, p]));
+    const byName = new Map(
+      state.participants.map((p) => [(p.name || "").trim().toLowerCase(), p])
+    );
     data.p.forEach((x) => {
-      const key = (x.n || "").trim().toLowerCase();
-      if (!key || known.has(key)) return;
-      known.add(key);
-      state.participants.push(
-        D.normalizeParticipant({
-          name: x.n, city: x.c, dates: x.d, destinations: x.x,
-          prefs: x.pr, rsvp: x.rsvp, dateConfirmed: x.dc, destConfirmed: x.xc,
-        })
-      );
-      added += 1;
+      const nameKey = (x.n || "").trim().toLowerCase();
+      const existing = (x.id && byId.get(x.id)) || (nameKey && byName.get(nameKey));
+      const incoming = participantFromPayload(x);
+      if (!existing) {
+        if (!nameKey) return; // nothing to identify them by
+        state.participants.push(incoming);
+        byId.set(incoming.id, incoming);
+        byName.set(nameKey, incoming);
+        added += 1;
+        return;
+      }
+      // Never let a stale copy overwrite fresher answers.
+      if ((incoming.updatedAt || 0) <= (existing.updatedAt || 0)) return;
+      Object.assign(existing, incoming, { id: existing.id });
+      updated += 1;
     });
-    return added;
+    if (data.locked && !state.lockedPlan) state.lockedPlan = data.locked;
+    return { added, updated };
   }
   async function shareInvite() {
     const url = buildShareUrl();
@@ -736,6 +779,15 @@
           class: "btn danger sm",
           text: "Remove",
           onClick: () => {
+            const who = p.name || "this person";
+            const owesMoney = state.expenses.some((x) => x.payerId === p.id);
+            const warn = owesMoney
+              ? `\n\n${who} has paid for expenses — those amounts stay in the settle-up so nobody's money disappears.`
+              : "";
+            // Destructive, and it's someone else's data — always confirm.
+            if (!window.confirm(`Remove ${who} from this event?${warn}`)) return;
+            // Keep their name so any expense they paid still reads sensibly.
+            rememberName(p.id, p.name);
             state.participants = state.participants.filter((x) => x.id !== p.id);
             if (state.editingId === p.id) state.editingId = null;
             renderAll();
@@ -1188,7 +1240,15 @@
 
   // Cache the ranked combos for a single render pass (winner + others share them).
   function rankedCombos() {
-    return E.rankCombinations(state.participants, undefined, fareProvider);
+    // Someone who has said they can't make it shouldn't still be steering the
+    // group's date, destination or budget warnings. Keep everyone else,
+    // including people who haven't replied yet.
+    const relevant = state.participants.filter((p) => p.rsvp !== "out");
+    return E.rankCombinations(
+      relevant.length ? relevant : state.participants,
+      undefined,
+      fareProvider
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1639,9 +1699,13 @@
     if (fare.min !== 0) {
       fareRow.appendChild(el("span", { class: "muted cur", text: code }));
     }
-    // Provenance badge: live (proxy) / searched (curated) / estimated (distance).
+    // Provenance badge: live / sandbox (test data) / searched / estimated.
     if (fare.source === "live") {
       fareRow.appendChild(el("span", { class: "badge good", text: "● live" }));
+    } else if (fare.source === "sandbox") {
+      // Amadeus sandbox returns fictional inventory — flag it as test data
+      // rather than dressing it up as a real price.
+      fareRow.appendChild(el("span", { class: "badge warn", text: "test data" }));
     } else if (fare.source === "searched") {
       fareRow.appendChild(
         el("span", { class: "badge good", text: `searched · ${fare.asOf}` })
@@ -1767,7 +1831,14 @@
     }
     if (!w || w === "pending") return null;
     const mode = w.mode === "forecast" ? "Forecast" : "Typically";
-    const rain = w.rainPct != null ? ` · ${w.rainPct}% rain risk` : "";
+    let rain = "";
+    if (w.rainPct != null) {
+      rain = ` · ${w.rainPct}% rain risk`;
+    } else if (w.wetDays != null && w.totalDays) {
+      // Historical: "5 of 7 days saw rain" is the seasonality signal that
+      // matters when picking dates months ahead.
+      rain = ` · rain on ${w.wetDays} of ${w.totalDays} days last year`;
+    }
     return `🌤️ ${mode} ${w.tMin}–${w.tMax}°C${rain}`;
   }
 
@@ -2123,7 +2194,12 @@
   // Expenses & settle-up (Costs tab)
   // -------------------------------------------------------------------------
   function money(n) {
-    return `$${(Math.round(n * 100) / 100).toLocaleString("en-US")}`;
+    // Always two decimals — toLocaleString alone renders 1234.5 as "1,234.5",
+    // which reads as a typo on a money figure.
+    return `$${(Math.round(n * 100) / 100).toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}`;
   }
   function addExpense(payerId, desc, amount, sharedWith) {
     const amt = parseFloat(amount);
@@ -2186,9 +2262,17 @@
     const share = base.length ? total / base.length : 0; // display-only average
     const balances = new Map();
     const inBase = new Set(baseIds);
-    state.participants.forEach((p) => {
-      const b = (paid[p.id] || 0) - (owed[p.id] || 0);
-      if (Math.abs(b) > 0.005 || inBase.has(p.id)) balances.set(p.id, b);
+    // Include anyone who PAID as well as anyone still on the roster. If a payer
+    // was removed we'd otherwise drop their credit while still charging their
+    // share to everyone else — the debts would silently vanish and the
+    // settle-up list would render empty while money was still owed.
+    const relevant = new Set([
+      ...state.participants.map((p) => p.id),
+      ...Object.keys(paid),
+    ]);
+    relevant.forEach((id) => {
+      const b = (paid[id] || 0) - (owed[id] || 0);
+      if (Math.abs(b) > 0.005 || inBase.has(id)) balances.set(id, b);
     });
     // Greedy settle-up: biggest debtor pays biggest creditor.
     const debtors = [], creditors = [];
@@ -2210,9 +2294,20 @@
     }
     return { total, share, base, balances, transfers };
   }
+  /**
+   * Remember a departed participant's name so expenses they paid still read
+   * sensibly ("Ana → Bob") instead of degrading to "Someone".
+   */
+  function rememberName(id, name) {
+    if (!id || !name) return;
+    state.pastNames = state.pastNames || {};
+    state.pastNames[id] = name;
+  }
   function pName(id) {
     const p = state.participants.find((x) => x.id === id);
-    return p ? p.name || "Unnamed" : "Someone";
+    if (p) return p.name || "Unnamed";
+    const past = state.pastNames && state.pastNames[id];
+    return past ? `${past} (removed)` : "Someone";
   }
   function renderExpenses() {
     const panel = $("#expensePanel");
@@ -2978,6 +3073,9 @@
 
   let recomputeTimer = null;
   function scheduleRecompute() {
+    // Every participant-field edit funnels through here, so this is the single
+    // place that reliably marks "my answers changed" for link merging.
+    touchMine();
     clearTimeout(recomputeTimer);
     recomputeTimer = setTimeout(recomputeDerived, 200);
   }
@@ -3030,13 +3128,15 @@
         // Same event, link opened again — resume local progress as-is and
         // just pick up anyone new who joined since.
         applySavedState(saved);
-        const added = mergeNewParticipantsFromHash(hashData);
+        const { added, updated } = mergeParticipantsFromHash(hashData);
         location.hash = "";
         if (state.user) {
+          saveState();
           enterDashboard("resume", state.reunion.code);
-          if (added) {
-            toast(`Welcome back — ${added} new ${added === 1 ? "person" : "people"} joined since you last checked.`);
-          }
+          const bits = [];
+          if (added) bits.push(`${added} new ${added === 1 ? "person" : "people"}`);
+          if (updated) bits.push(`${updated} updated ${updated === 1 ? "reply" : "replies"}`);
+          if (bits.length) toast(`Welcome back — ${bits.join(" · ")}.`);
         } else {
           showScreen("register");
         }

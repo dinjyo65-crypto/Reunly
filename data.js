@@ -238,6 +238,8 @@ function makeParticipant(overrides = {}) {
     // their own alternative instead. Set once via the Decide-tab confirm step.
     dateConfirmed: null,
     destConfirmed: null,
+    // Last-write-wins clock for merging answers back from an invite link.
+    updatedAt: 0,
     ...overrides,
     // AFTER the spread: an explicit `id: undefined` in overrides must not
     // clobber the generated id. Participants from invite links carry no id,
@@ -271,6 +273,7 @@ function normalizeParticipant(p) {
   // Preserve explicit true/false — collapse missing/undefined to null (not-yet-asked).
   out.dateConfirmed = p && p.dateConfirmed !== undefined ? p.dateConfirmed : null;
   out.destConfirmed = p && p.destConfirmed !== undefined ? p.destConfirmed : null;
+  out.updatedAt = (p && p.updatedAt) || 0;
   return out;
 }
 

@@ -196,6 +196,25 @@ test("scoring stays neutral (no crash, no fake signal) when budgets are absent",
   assert.strictEqual(c.costScore, c.relCostScore, "falls back to the relative measure alone");
 });
 
+test("one priced-out traveller caps the budget fit, even among comfortable ones", () => {
+  // An average would let four comfortable travellers hide the one person who
+  // literally can't afford it — the exact case this check exists to catch.
+  const people = [
+    person({ name: "Rich1", city: "London, UK", prefs: { budget: "5000" } }),
+    person({ name: "Rich2", city: "Paris, France", prefs: { budget: "5000" } }),
+    person({ name: "Rich3", city: "Rome", prefs: { budget: "5000" } }),
+    person({ name: "Rich4", city: "Madrid", prefs: { budget: "5000" } }),
+    person({ name: "Skint", city: "Berlin", prefs: { budget: "100" } }),
+  ];
+  const fit = E.budgetFitFor("Somewhere", people, fixedFares({}, { min: 300, max: 300, source: "estimated" }));
+  assert.strictEqual(fit.overCount, 1);
+  assert.deepStrictEqual(fit.overNames, ["Skint"]);
+  assert.ok(
+    fit.fit < 0.6,
+    "must stay below the 'fits stated budgets' threshold so the UI can't contradict its own warning"
+  );
+});
+
 // ---- Participant normalization --------------------------------------------
 test("normalizeParticipant always assigns an id, even with none supplied", () => {
   // Invite-link payloads carry no ids. Without one, a participant can't be

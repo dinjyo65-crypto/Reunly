@@ -36,6 +36,14 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 USER_AGENT = "Reunly/0.5 (reunion planner prototype)"
 
 PORT = int(os.environ.get("PORT", "4175"))
+
+# Amadeus has two hosts: the sandbox (test.api) returns FICTIONAL inventory,
+# production (api) returns real prices. Default to the sandbox because that's
+# what free self-service keys work against — but track which one we used, so
+# the UI can label sandbox numbers as test data instead of passing them off as
+# real live fares.
+AMADEUS_HOST = os.environ.get("AMADEUS_HOST", "https://test.api.amadeus.com")
+AMADEUS_IS_SANDBOX = "test.api." in AMADEUS_HOST
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 FARES_AS_OF = "2026-06-27"
 
@@ -254,7 +262,7 @@ def _amadeus_token():
         "client_secret": secret,
     }).encode()
     req = urllib.request.Request(
-        "https://test.api.amadeus.com/v1/security/oauth2/token", data=data,
+        AMADEUS_HOST + "/v1/security/oauth2/token", data=data,
         headers={"Content-Type": "application/x-www-form-urlencoded"})
     with urllib.request.urlopen(req, timeout=8) as r:
         body = json.loads(r.read())
@@ -286,7 +294,7 @@ def amadeus_fare(frm, to, date):
             "max": 8,
         })
         req = urllib.request.Request(
-            "https://test.api.amadeus.com/v2/shopping/flight-offers?" + params,
+            AMADEUS_HOST + "/v2/shopping/flight-offers?" + params,
             headers={"Authorization": "Bearer " + token})
         with urllib.request.urlopen(req, timeout=10) as r:
             body = json.loads(r.read())
@@ -319,8 +327,10 @@ def resolve_fare(frm_raw, to_raw, date):
     if os.environ.get("AMADEUS_CLIENT_ID") and frm in CITY_IATA and to in CITY_IATA:
         live = amadeus_fare(frm, to, date)
         if live:
+            # Sandbox inventory is fictional — never badge it as a real fare.
             return {"min": live[0], "max": live[1], "currency": "USD",
-                    "source": "live", "asOf": time.strftime("%Y-%m-%d"), "miles": miles}
+                    "source": "sandbox" if AMADEUS_IS_SANDBOX else "live",
+                    "asOf": time.strftime("%Y-%m-%d"), "miles": miles}
 
     # Curated searched fares (canonical pairs only).
     if frm and to:
@@ -393,11 +403,15 @@ def weather_for(place, start, end):
                     # Same dates one year earlier (historical archive).
                     shift = datetime.timedelta(days=365)
                     qs, qe = s - shift, e - shift
+                    # Ask for rainfall too. Without it, a trip more than 15 days
+                    # out (i.e. most trips) showed temperature only — so the
+                    # monsoon-season case this exists to warn about went
+                    # completely unflagged.
                     url = (
                         "https://archive-api.open-meteo.com/v1/archive?"
                         + urllib.parse.urlencode({
                             "latitude": coords[0], "longitude": coords[1],
-                            "daily": "temperature_2m_max,temperature_2m_min",
+                            "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
                             "start_date": qs.isoformat(), "end_date": qe.isoformat(),
                             "timezone": "auto",
                         })
@@ -413,6 +427,13 @@ def weather_for(place, start, end):
                     result = {"ok": True, "mode": mode, "tMin": tmin, "tMax": tmax}
                     if rain is not None:
                         result["rainPct"] = rain
+                    # Historical branch: express rain as how many days that week
+                    # actually saw meaningful rainfall (>1mm) a year earlier.
+                    sums = [v for v in daily.get("precipitation_sum", []) if v is not None]
+                    if sums:
+                        wet = sum(1 for v in sums if v >= 1.0)
+                        result["wetDays"] = wet
+                        result["totalDays"] = len(sums)
         except Exception:
             result = {"ok": False}
         _weather_cache[key] = result

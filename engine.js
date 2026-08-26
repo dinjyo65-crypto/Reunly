@@ -347,7 +347,12 @@
       if (r >= 1) return 0;
       return 1 - (r - 0.5) / 0.5;
     });
-    const fit = perPerson.reduce((s, v) => s + v, 0) / perPerson.length;
+    let fit = perPerson.reduce((s, v) => s + v, 0) / perPerson.length;
+    // An average re-hides the very person this check exists to protect: four
+    // comfortable travellers can average out one who's priced out entirely.
+    // Cap the score whenever anyone is over, so the UI can never claim a
+    // destination "fits stated budgets" while also warning that it doesn't.
+    if (overNames.length) fit = Math.min(fit, 0.45);
     return { fit, overCount: overNames.length, overNames, checked: ratios.length };
   }
 
