@@ -703,13 +703,25 @@
         // made a $1,533 family of three look like one person's share.
         const perPerson = []; // per head
         const perBooking = []; // what each household actually pays
+        // The APPLIED split of that per-head figure. The card used to explain
+        // its headline with the raw inputs — the fare before the party and
+        // season multipliers, the nightly band before the room factor and the
+        // festive uplift — so the breakdown could total less than half the
+        // number printed directly above it, and it was the breakdown people
+        // budgeted from. These are the figures that actually add up.
+        const perTravel = [];
+        const perLodging = [];
         for (const p of participants) {
           if (!p.city) continue;
           const trip = tripCostFor(p.city, dest, dateRange, fareProvider, p.prefs);
           if (!trip) continue;
+          const head = Math.max(1, trip.party);
           perBooking.push(trip.total);
-          perPerson.push(trip.total / Math.max(1, trip.party));
+          perPerson.push(trip.total / head);
+          perTravel.push(trip.travel / head);
+          perLodging.push(trip.lodging / head);
         }
+        const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
         const avgTripCost = perPerson.length
           ? perPerson.reduce((s, v) => s + v, 0) / perPerson.length
           : avgFare;
@@ -724,6 +736,10 @@
           overBudgetNames: budget ? budget.overNames : [],
           budgetChecked: budget ? budget.checked : 0,
           avgFare, fareSearched, nights,
+          // Per head, with every multiplier already applied, so
+          // travelApplied + lodgingApplied === avgTripCost.
+          travelApplied: mean(perTravel),
+          lodgingApplied: mean(perLodging),
           lodgingMin: lodge ? lodge.min : null,
           lodgingMax: lodge ? lodge.max : null,
           lodgingApproximate: lodge ? Boolean(lodge.approximate) : false,
@@ -939,7 +955,14 @@
   /** Who an expense is shared between by default: confirmed goers, else all. */
   function splitBaseFor(participants) {
     const goers = participants.filter((p) => p.rsvp === "in");
-    return goers.length >= 2 ? goers : participants;
+    if (goers.length >= 2) return goers;
+    // Before two people have confirmed, fall back to everyone who has not
+    // actually declined. Falling back to the WHOLE roster charged people who
+    // had already said no; and because addExpense pins the base into the
+    // expense forever, a 12-person deposit logged one RSVP earlier pinned at
+    // 12 ways and a minute later at 2 — neither of which is ever recomputed.
+    const notOut = participants.filter((p) => p.rsvp !== "out");
+    return notOut.length ? notOut : participants;
   }
 
   /**
@@ -953,7 +976,6 @@
   function computeSettlement(participants, expenses) {
     const base = splitBaseFor(participants);
     const baseIds = base.map((p) => p.id);
-    const alive = new Set(participants.map((p) => p.id));
     // Settlements move money between people; they are not new group spend.
     // Counting them inflated the trip total every time someone paid a debt.
     const spend = expenses.filter((x) => !x.settlement);
@@ -962,11 +984,20 @@
     const owed = {};
     expenses.forEach((x) => {
       paid[x.payerId] = (paid[x.payerId] || 0) + x.amount;
-      // Only split between people who still exist in the roster, so removing
-      // someone can't strand part of an expense unassigned.
-      let sharers = (Array.isArray(x.sharedWith) && x.sharedWith.length ? x.sharedWith : baseIds)
-        .filter((id) => alive.has(id));
-      if (!sharers.length) sharers = [x.payerId]; // degenerate: payer covers it
+      // Whoever an expense was pinned to at the time still owes their share,
+      // whether or not they are on the roster now. Filtering to current members
+      // rewrote settled history: removing a dropout quietly moved their share
+      // onto everyone else, and removing a payer re-pointed a REPAYMENT at the
+      // person who made it — so someone who had already handed over $300 was
+      // then billed $450, more than before they paid. Leaving is not the same
+      // as never having owed anything; forgiving a debt is a decision the group
+      // has to make explicitly, not a side effect of tidying the roster.
+      let sharers =
+        Array.isArray(x.sharedWith) && x.sharedWith.length ? x.sharedWith : baseIds;
+      // A settlement is one person repaying another. It must never collapse
+      // onto its own payer, which would cancel the repayment entirely.
+      if (!sharers.length) sharers = x.settlement ? [] : [x.payerId];
+      if (!sharers.length) return;
       // Largest-remainder allocation in whole cents. A plain division leaves
       // orphan cents ($100 across 3 shows three $33.33s against a $100 total),
       // which makes a settle-up list quietly fail to balance.
@@ -981,11 +1012,17 @@
     const shareExact = base.length ? Math.round(total * 100) % base.length === 0 : true;
     const balances = new Map();
     const inBase = new Set(baseIds);
-    // Include anyone who PAID as well as anyone still on the roster. If a payer
-    // was removed we'd otherwise drop their credit while still charging their
-    // share to everyone else — the debts would silently vanish and the
-    // settle-up list would render empty while money was still owed.
-    const relevant = new Set([...participants.map((p) => p.id), ...Object.keys(paid)]);
+    // Anyone still on the roster, anyone who PAID, and anyone who OWES. Dropping
+    // a removed payer lost their credit while still charging everyone else;
+    // dropping a removed debtor left the creditor holding a balance with no
+    // transfer against it, so the list stopped adding up and the gap was
+    // unexplained. Someone who has left still appears until their debt is
+    // settled or explicitly written off.
+    const relevant = new Set([
+      ...participants.map((p) => p.id),
+      ...Object.keys(paid),
+      ...Object.keys(owed),
+    ]);
     relevant.forEach((id) => {
       const b = (paid[id] || 0) - (owed[id] || 0);
       if (Math.abs(b) > 0.005 || inBase.has(id)) balances.set(id, b);

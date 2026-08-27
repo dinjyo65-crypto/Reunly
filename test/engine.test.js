@@ -783,3 +783,60 @@ test("an incoming email fills in a blank one without overwriting a real one", ()
   merge(roster, [{ id: "p_a", n: "Ana", e: "ana@example.com", c: "Paris, France", ts: 500 }]);
   assert.strictEqual(roster[0].email, "ana@example.com");
 });
+
+// ---- Roster changes must not rewrite settled history -----------------------
+test("removing someone who dropped out doesn't move their debt onto everyone else", () => {
+  const exp = [{ id: "x1", payerId: "A", amount: 900, sharedWith: ["A", "B", "C"] }];
+  const before = E.computeSettlement(goers("A", "B", "C"), exp);
+  const after = E.computeSettlement(goers("A", "B"), exp);
+  assert.strictEqual(before.balances.get("B"), -300);
+  assert.strictEqual(after.balances.get("B"), -300, "B's share must not change because C left");
+  assert.strictEqual(after.balances.get("C"), -300, "and C still owes it");
+  assert.strictEqual(after.balances.get("A"), 600, "A is still owed the full 600");
+  assert.ok(Math.abs(sumTransfers(after.transfers) - 600) < 0.005,
+    "the transfers still add up to what A actually fronted");
+});
+
+test("removing a payer never voids a repayment that already happened", () => {
+  // B handed A 300 in cash. Then A is removed from the roster. B must not be
+  // asked for MORE than they owed before paying.
+  const exp = [
+    { id: "x1", payerId: "A", amount: 900, sharedWith: ["A", "B", "C"] },
+    { id: "s1", payerId: "B", amount: 300, sharedWith: ["A"], settlement: true },
+  ];
+  const withA = E.computeSettlement(goers("A", "B", "C"), exp);
+  assert.ok(!withA.transfers.some((t) => t.from === "B"), "B is square after repaying");
+  const noA = E.computeSettlement(goers("B", "C"), exp);
+  assert.ok(!noA.transfers.some((t) => t.from === "B"),
+    "and stays square when the person they repaid is removed");
+  assert.strictEqual(noA.transfers.length, 1);
+  assert.strictEqual(noA.transfers[0].from, "C");
+});
+
+test("an expense logged before two people confirm doesn't charge someone who declined", () => {
+  const roster = [
+    person({ id: "org", rsvp: "in" }),
+    person({ id: "nope", rsvp: "out" }),
+    person({ id: "quiet1" }),
+    person({ id: "quiet2" }),
+  ];
+  const ids = E.splitBaseFor(roster).map((p) => p.id);
+  assert.ok(!ids.includes("nope"), "someone who said no is never in the default split");
+  assert.deepStrictEqual(ids, ["org", "quiet1", "quiet2"]);
+});
+
+test("the cost breakdown adds up to the headline it explains", () => {
+  // The card showed the RAW fare and the RAW nightly band — before party size,
+  // the single-room factor and the festive uplift — beside a fully-scaled
+  // total. On the shipped seed data that read "$405 travel + $210-$490 stay"
+  // under a "$1,071" headline, understating the stay by roughly half. The
+  // breakdown is the line people budget from, so it has to close.
+  const combos = E.rankCombinations(D.SEED_PARTICIPANTS.map(D.normalizeParticipant));
+  assert.ok(combos.length, "seed data should produce ranked options");
+  for (const c of combos.slice(0, 5)) {
+    if (c.travelApplied == null || c.lodgingApplied == null) continue;
+    const sum = c.travelApplied + c.lodgingApplied;
+    assert.ok(Math.abs(sum - c.avgTripCost) < 0.01,
+      `${c.destination} ${c.dateLabel}: breakdown ${sum.toFixed(2)} vs headline ${c.avgTripCost.toFixed(2)}`);
+  }
+});

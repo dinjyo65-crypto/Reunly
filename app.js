@@ -1886,12 +1886,20 @@
     );
     body.appendChild(grid);
 
-    if (c.nights > 0 && c.lodgingMin != null && c.avgFare != null) {
+    // Break down the SAME number the headline shows. The headline switches to
+    // the reader's own booking when we know their city, so a breakdown of the
+    // group average sat directly under a personal total and read as an
+    // explanation of it. (It also used to print the raw fare and raw nightly
+    // band — before party size, room factor and festive uplift — so it could
+    // total less than half the figure above it.)
+    const brTravel = myTrip ? myTrip.travel : c.travelApplied;
+    const brStay = myTrip ? myTrip.lodging : c.lodgingApplied;
+    if (c.nights > 0 && brTravel != null && brStay != null) {
       body.appendChild(
         el("div", {
           class: "cost-breakdown",
           text:
-            `≈ ${est(c.avgFare)} travel + ${estRange(c.lodgingMin, c.lodgingMax)} stay ` +
+            `≈ ${est(brTravel)} travel + ${est(brStay)} stay ` +
             `(${c.nights} night${c.nights === 1 ? "" : "s"}) · estimates, excludes food & activities` +
             // Don't present a generic fallback rate with the same confidence
             // as one we actually hold for that city.
@@ -2690,8 +2698,12 @@
       .filter((p) => p.city)
       .map((p) => {
         const f = fareProvider(p.city, plan.destination);
-        const fare = f && f.min != null ? estRange(f.min, f.max) : "—";
         const trip = E.tripCostFor(p.city, plan.destination, window_, fareProvider, p.prefs);
+        // Show the travel figure that's actually inside the all-in total —
+        // party size and seasonal uplift included. The raw fare band beside a
+        // scaled total made the pack contradict itself for a family or a
+        // peak-season trip, and the pack is what people budget from.
+        const fare = trip ? est(trip.travel) : f && f.min != null ? estRange(f.min, f.max) : "—";
         let allIn = "—";
         if (trip) {
           packTotal += trip.total;
