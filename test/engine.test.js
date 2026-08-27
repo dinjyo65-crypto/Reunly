@@ -106,6 +106,60 @@ test("dateCandidatesFor ignores slivers below the minimum", () => {
   assert.ok(!labels.includes("2026-08-05..2026-08-05"), "1-day sliver should be skipped");
 });
 
+test("a one-night stopover can't win a long-haul trip", () => {
+  // Regression: coverage-weighted date scoring made SHORT windows trivially
+  // "fully attendable" (everyone covers 100% of a single day) and short stays
+  // are also cheapest — so the engine happily proposed flying 16 hours to Bali
+  // for one night, beating both real week-long windows.
+  const people = [
+    person({ city: "London, UK", destinations: ["Bali, Indonesia"], dates: [{ start: "2026-12-19", end: "2026-12-23" }] }),
+    person({ city: "New York, NY", destinations: ["Bali, Indonesia"], dates: [{ start: "2026-12-22", end: "2026-12-29" }] }),
+  ];
+  const combos = E.rankCombinations(people);
+  const top = combos[0];
+  assert.ok(top.nights >= 3, `top pick was only ${top.nights} night(s): ${top.dateLabel}`);
+  const stopover = combos.find((c) => c.nights === 1);
+  if (stopover) {
+    assert.ok(stopover.total < top.total, "a 1-night long-haul must not outrank a real stay");
+    assert.ok(stopover.viability < 1, "an unviable stay should be marked as such");
+  }
+});
+
+test("viability doesn't punish a short trip that needs no flying", () => {
+  // The same rule must not make a weekend away look unreasonable.
+  const people = [
+    person({ city: "London, UK", destinations: ["Paris, France"], dates: [{ start: "2026-08-01", end: "2026-08-03" }] }),
+    person({ city: "Paris, France", destinations: ["Paris, France"], dates: [{ start: "2026-08-01", end: "2026-08-03" }] }),
+  ];
+  const top = E.rankCombinations(people)[0];
+  assert.strictEqual(top.viability, 1, "a 2-night trip next door is perfectly sensible");
+});
+
+test("cost ranks on the all-in figure, not airfare alone", () => {
+  // Cheap to reach but expensive to sleep in must not read as the bargain.
+  const dates = [{ start: "2026-08-01", end: "2026-08-08" }];
+  const people = [
+    person({ city: "Paris, France", destinations: ["London, UK", "Goa, India"], dates }),
+    person({ city: "London, UK", destinations: ["Goa, India", "London, UK"], dates }),
+  ];
+  // Nearby London has the cheaper flight; far Goa is far cheaper to stay in.
+  const fares = fixedFares({
+    "Paris, France|London, UK": { min: 100, max: 100, source: "estimated" },
+    "London, UK|London, UK": { min: 0, max: 0, source: "estimated" },
+    "Paris, France|Goa, India": { min: 600, max: 600, source: "estimated" },
+    "London, UK|Goa, India": { min: 600, max: 600, source: "estimated" },
+  });
+  const combos = E.rankCombinations(people, undefined, fares);
+  const london = combos.find((c) => c.destination === "London, UK");
+  const goa = combos.find((c) => c.destination === "Goa, India");
+  assert.ok(london.avgFare < goa.avgFare, "London is the cheaper flight");
+  assert.ok(
+    london.avgTripCost > goa.avgTripCost,
+    "but 7 nights in London outweighs the airfare saving"
+  );
+  assert.ok(goa.relCostScore > london.relCostScore, "cost score must follow the all-in figure");
+});
+
 test("a window everyone fully covers beats one only partly covered", () => {
   // Both are real candidates; the mutual window should win because everyone
   // can make all of it, whereas the longer window only suits one person fully.
@@ -366,8 +420,8 @@ test("currency conversion uses the configured rate", () => {
 test("summarizePrefs rolls up budgets and flags without crashing on blanks", () => {
   const people = [
     person({ prefs: { budget: "100", kids: 2, accommodation: true } }),
-    person({ prefs: { budget: "", kids: 0 } }),
-    person({ prefs: { budget: "300" } }),
+    person({ prefs: { budget: "", kids: 0 } }), // never answered -> needs a bed
+    person({ prefs: { budget: "300", accommodation: false } }), // sorted
   ];
   const s = E.summarizePrefs(people);
   assert.strictEqual(s.total, 3);
@@ -375,5 +429,27 @@ test("summarizePrefs rolls up budgets and flags without crashing on blanks", () 
   assert.strictEqual(s.minBudget, 100);
   assert.strictEqual(s.maxBudget, 300);
   assert.strictEqual(s.kids, 2);
-  assert.strictEqual(s.accommodation, 1);
+  // Only an explicit "I'm sorted" opts out; silence must not be read as one.
+  assert.strictEqual(s.accommodation, 2);
+});
+
+test("lodging is only skipped when someone explicitly opts out", () => {
+  const dates = { start: "2026-08-01", end: "2026-08-05" };
+  const fares = fixedFares({ "London, UK|Goa, India": { min: 200, max: 200, source: "estimated" } });
+  const unanswered = E.tripCostFor("London, UK", "Goa, India", dates, fares, { accommodation: null });
+  const sorted = E.tripCostFor("London, UK", "Goa, India", dates, fares, { accommodation: false });
+  assert.ok(unanswered.lodging > 0, "silence must not zero out lodging");
+  assert.strictEqual(sorted.lodging, 0, "an explicit opt-out skips lodging");
+});
+
+test("a parent with kids is costed for the whole party", () => {
+  const dates = { start: "2026-08-01", end: "2026-08-05" };
+  const fares = fixedFares({ "London, UK|Goa, India": { min: 300, max: 300, source: "estimated" } });
+  const solo = E.tripCostFor("London, UK", "Goa, India", dates, fares, { kids: 0 });
+  const family = E.tripCostFor("London, UK", "Goa, India", dates, fares, { kids: 2 });
+  assert.strictEqual(solo.party, 1);
+  assert.strictEqual(family.party, 3);
+  assert.strictEqual(family.travel, solo.travel * 3, "three seats, not one");
+  assert.ok(family.lodging > solo.lodging, "a bigger room costs more");
+  assert.ok(family.total > solo.total * 2, "a family of three is not a rounding error");
 });

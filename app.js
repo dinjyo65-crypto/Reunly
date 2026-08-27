@@ -62,9 +62,15 @@
    * Only their OWN row is touched — we have no authority to claim an edit
    * time for anyone else's answers.
    */
+  // Stamp the record that actually changed. Merging an invite link keeps the
+  // newer copy of each participant, so a mutation that forgets to stamp is
+  // silently thrown away on the next round-trip — hence one helper, used
+  // everywhere a participant is edited.
+  function touchParticipant(p) {
+    if (p) p.updatedAt = Date.now();
+  }
   function touchMine() {
-    const mine = state.participants.find((p) => p.id === state.me);
-    if (mine) mine.updatedAt = Date.now();
+    touchParticipant(state.participants.find((p) => p.id === state.me));
   }
   // Returns true on success, false if storage failed (e.g. quota exceeded by a
   // large photo) — callers that add heavy data check the result.
@@ -706,6 +712,7 @@
           text: label,
           onClick: () => {
             p.rsvp = p.rsvp === val ? "no_response" : val;
+            touchParticipant(p);
             saveState();
             renderAll();
           },
@@ -883,7 +890,7 @@
       el("input", {
         type: "number", min: "0", inputmode: "numeric", value: pr.budget || "",
         placeholder: "e.g. 800",
-        onInput: (e) => { pr.budget = e.target.value; scheduleRecompute(); },
+        onInput: (e) => { pr.budget = e.target.value; scheduleRecompute(p); },
       })
     );
     row.appendChild(bWrap);
@@ -891,7 +898,7 @@
     const fWrap = el("div");
     fWrap.appendChild(el("label", { text: "Food preference" }));
     const fSel = el("select", {
-      onChange: (e) => { pr.food = e.target.value; scheduleRecompute(); },
+      onChange: (e) => { pr.food = e.target.value; scheduleRecompute(p); },
     });
     D.FOOD_OPTIONS.forEach((o) => fSel.appendChild(el("option", { value: o, text: o })));
     fSel.value = pr.food || "No preference";
@@ -906,19 +913,24 @@
     kWrap.appendChild(
       el("input", {
         type: "number", min: "0", inputmode: "numeric", value: pr.kids || 0,
-        onInput: (e) => { pr.kids = Math.max(0, parseInt(e.target.value || "0", 10)); scheduleRecompute(); },
+        onInput: (e) => { pr.kids = Math.max(0, parseInt(e.target.value || "0", 10)); scheduleRecompute(p); },
       })
     );
     row2.appendChild(kWrap);
-    // Accommodation (toggle styled as checkbox row)
+    // Accommodation. Phrased as an opt-OUT so the safe assumption (they need a
+    // bed, and lodging is budgeted for them) is what happens when nobody
+    // touches this — under-stating someone's cost is the harmful direction.
     const aWrap = el("div");
-    aWrap.appendChild(el("label", { text: "Needs accommodation" }));
+    aWrap.appendChild(el("label", { text: "Accommodation" }));
     const toggle = el("label", { class: "check-row" });
     const cb = el("input", { type: "checkbox" });
-    cb.checked = !!pr.accommodation;
-    cb.addEventListener("change", (e) => { pr.accommodation = e.target.checked; scheduleRecompute(); });
+    cb.checked = pr.accommodation === false;
+    cb.addEventListener("change", (e) => {
+      pr.accommodation = e.target.checked ? false : true;
+      scheduleRecompute(p);
+    });
     toggle.appendChild(cb);
-    toggle.appendChild(el("span", { text: "Yes, needs a place to stay" }));
+    toggle.appendChild(el("span", { text: "I'm sorted — don't budget a stay for me" }));
     aWrap.appendChild(toggle);
     row2.appendChild(aWrap);
     group.appendChild(row2);
@@ -930,7 +942,7 @@
       el("input", {
         type: "text", value: pr.accessibility || "",
         placeholder: "e.g. step-free access",
-        onInput: (e) => { pr.accessibility = e.target.value; scheduleRecompute(); },
+        onInput: (e) => { pr.accessibility = e.target.value; scheduleRecompute(p); },
       })
     );
     group.appendChild(accWrap);
@@ -949,7 +961,7 @@
           if (i >= 0) pr.activities.splice(i, 1);
           else pr.activities.push(a);
           e.currentTarget.classList.toggle("on");
-          scheduleRecompute();
+          scheduleRecompute(p);
         },
       });
       chips.appendChild(c);
@@ -967,6 +979,9 @@
       onInput: (e) => {
         p[key] = e.target.value;
         if (key === "name" || key === "email") updateCardHeader(p);
+        // Without this a name/email correction was never persisted until some
+        // unrelated action happened to trigger a save.
+        scheduleRecompute(p);
       },
     });
   }
@@ -982,7 +997,7 @@
       onInput: (e) => {
         p.city = e.target.value;
         updateCardHeader(p);
-        scheduleRecompute();
+        scheduleRecompute(p);
       },
     });
     attachAutocomplete(input, (label, s) => {
@@ -1001,7 +1016,7 @@
       value: p.dates[idx][end] || "",
       onInput: (e) => {
         p.dates[idx][end] = e.target.value;
-        scheduleRecompute();
+        scheduleRecompute(p);
       },
     });
   }
@@ -1013,7 +1028,7 @@
       autocomplete: "off",
       onInput: (e) => {
         p.destinations[idx] = e.target.value;
-        scheduleRecompute();
+        scheduleRecompute(p);
       },
     });
     attachAutocomplete(input, (label) => {
@@ -1350,6 +1365,9 @@
     }
     p.dateConfirmed = draft.dateOk;
     p.destConfirmed = draft.destOk;
+    // These answers ARE this person's response — losing the stamp meant the
+    // organiser's copy silently ignored the whole confirm step on merge.
+    touchParticipant(p);
     saveState();
     notifyOrganiser(p, top, draft);
     toast("Thanks! Just a few more details…");
@@ -3099,10 +3117,13 @@
   }
 
   let recomputeTimer = null;
-  function scheduleRecompute() {
+  function scheduleRecompute(edited) {
     // Every participant-field edit funnels through here, so this is the single
-    // place that reliably marks "my answers changed" for link merging.
-    touchMine();
+    // place that reliably marks "answers changed" for link merging. Pass the
+    // participant being edited — an organiser may be filling in someone else's
+    // card, in which case stamping "me" would mark the wrong record.
+    if (edited) touchParticipant(edited);
+    else touchMine();
     clearTimeout(recomputeTimer);
     recomputeTimer = setTimeout(recomputeDerived, 200);
   }

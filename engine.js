@@ -144,20 +144,64 @@
   }
 
   /**
+   * The fewest nights that make a journey worth taking. A 16-hour flight each
+   * way for a single night isn't a trip, it's an ordeal — but the date scorer
+   * can't see that, because a one-day window is trivially "fully attendable"
+   * by everyone and therefore scores perfectly. Roughly one night per 8 hours
+   * of round-trip flying, so a short hop stays flexible while long-haul
+   * demands a real stay.
+   */
+  function minSensibleNights(miles) {
+    if (miles == null || miles <= 0) return 0;
+    const roundTripHours = flightTimeHours(miles) * 2;
+    return Math.min(7, Math.max(1, Math.round(roundTripHours / 8)));
+  }
+
+  /**
+   * How defensible a window's length is for the journey involved: 1 when the
+   * stay clears the bar for everyone, sliding down as it falls short. The
+   * longest journey in the group sets the bar — a weekend that works for the
+   * person driving an hour is still absurd for the one flying 16.
+   */
+  function tripViabilityFor(destination, participants, dateRange) {
+    const nights = Math.max(0, rangeDays(dateRange) - 1);
+    let required = 0;
+    for (const p of participants) {
+      if (!p.city) continue;
+      const miles = distanceMiles(p.city, destination);
+      required = Math.max(required, minSensibleNights(miles));
+    }
+    if (!required || nights >= required) return { viability: 1, nights, required };
+    // Keep the option visible but clearly beaten, rather than silently
+    // dropping it — the group may still have a reason to pick it.
+    return { viability: Math.max(0.15, nights / required), nights, required };
+  }
+
+  /**
    * Total estimated per-person trip cost: travel + lodging for the nights of
    * the chosen window. Budget checks that ignore lodging systematically
    * under-report what a trip actually costs, which is exactly the number
    * people compare against their stated budget.
    */
-  function tripCostFor(fromCity, destination, dateRange, fareProvider = getFare) {
+  function tripCostFor(fromCity, destination, dateRange, fareProvider = getFare, prefs = null) {
     const f = fareProvider(fromCity, destination);
     if (!f || f.min == null) return null;
-    const travel = (f.min + f.max) / 2;
+    // Someone bringing two children books three seats, not one. Costing every
+    // participant as a lone adult understates exactly the families most likely
+    // to be priced out.
+    const kids = Math.max(0, parseInt((prefs && prefs.kids) || 0, 10) || 0);
+    const party = 1 + kids;
+    const travel = ((f.min + f.max) / 2) * party;
     // Nights = nights slept, so one fewer than the inclusive day count.
     const nights = Math.max(0, rangeDays(dateRange) - 1);
-    const lodge = estimateLodging(destination, nights);
-    const lodging = lodge ? (lodge.min + lodge.max) / 2 : 0;
-    return { travel, lodging, nights, total: travel + lodging, source: f.source };
+    // "I don't need a bed" (staying with family, own place) means no lodging
+    // cost — charging it anyway invents an expense they never face.
+    const needsBed = !prefs || prefs.accommodation !== false;
+    const lodge = needsBed ? estimateLodging(destination, nights) : null;
+    // Children share the room rather than each taking a full rate.
+    const roomFactor = 1 + kids * 0.5;
+    const lodging = lodge ? ((lodge.min + lodge.max) / 2) * roomFactor : 0;
+    return { travel, lodging, nights, party, total: travel + lodging, source: f.source };
   }
 
   /**
@@ -439,7 +483,9 @@
       if (!p.city || Number.isNaN(budget) || budget <= 0) continue;
       // Compare against the whole trip (travel + lodging) when we know the
       // dates — that's the number people actually have to find.
-      const trip = dateRange ? tripCostFor(p.city, destination, dateRange, fareProvider) : null;
+      const trip = dateRange
+        ? tripCostFor(p.city, destination, dateRange, fareProvider, p.prefs)
+        : null;
       let cost;
       if (trip) {
         cost = trip.total;
@@ -508,23 +554,12 @@
       fareByDest.set(dest, info ? info.avgFare : null);
       searchedByDest.set(dest, info ? info.anySearched || info.anyLive : false);
     }
-    const knownFares = [...fareByDest.values()].filter((f) => f != null);
-    const minFare = knownFares.length ? Math.min(...knownFares) : 0;
-    const maxFare = knownFares.length ? Math.max(...knownFares) : 0;
-    const fareSpread = maxFare - minFare;
-
-    /** Cheapest = 1, most expensive = 0; neutral 0.5 when there's nothing to compare. */
-    function relativeCostFor(dest) {
-      const fare = fareByDest.get(dest);
-      if (fare == null) return 0.5; // unknown cost — stay neutral
-      if (fareSpread === 0) return 1; // only one comparable fare (or all equal): best
-      return 1 - (fare - minFare) / fareSpread;
-    }
-
-    const combos = [];
+    // Pass 1 — describe every combination, including what it actually costs.
+    // Cost can't be normalized yet: lodging depends on the window's length, so
+    // the cheapest option is only known once every (place, window) pair exists.
+    const draft = [];
     for (const dest of destCandidates) {
       const destScore = destScoreFor(dest, participants);
-      const relCost = relativeCostFor(dest);
       const avgFare = fareByDest.get(dest);
       const fareSearched = searchedByDest.get(dest);
       for (const dateRange of dateCandidates) {
@@ -532,44 +567,67 @@
         // Budget fit depends on the window as well as the place: a longer stay
         // means more nights of lodging, so it's evaluated per combination.
         const budget = budgetFitFor(dest, participants, fareProvider, dateRange);
-        // Blend "cheap vs the alternatives" with "actually affordable for the
-        // people going". When nobody stated a budget we fall back to the
-        // relative measure alone rather than inventing an affordability signal.
-        const costScore = budget ? relCost * 0.5 + budget.fit * 0.5 : relCost;
-        const nights = Math.max(0, rangeDays(dateRange) - 1);
+        const { viability, nights, required } = tripViabilityFor(dest, participants, dateRange);
         const lodge = estimateLodging(dest, nights);
-        const total =
-          weights.date * dateScore +
-          weights.destination * destScore +
-          weights.cost * costScore;
-        combos.push({
-          destination: dest,
-          dateRange,
-          dateLabel: rangeLabel(dateRange),
+        // What each individual actually faces — an average hides the person
+        // flying furthest, who is usually the one at risk of dropping out.
+        const perPerson = [];
+        for (const p of participants) {
+          if (!p.city) continue;
+          const trip = tripCostFor(p.city, dest, dateRange, fareProvider, p.prefs);
+          if (trip) perPerson.push(trip.total);
+        }
+        const avgTripCost = perPerson.length
+          ? perPerson.reduce((s, v) => s + v, 0) / perPerson.length
+          : avgFare;
+        draft.push({
+          destination: dest, dateRange, dateLabel: rangeLabel(dateRange),
           // True when we derived this window from overlapping availability
           // rather than someone proposing it outright.
           dateSuggested: !submittedKeys.has(rangeKey(dateRange)),
-          dateScore,
-          destScore,
-          costScore,
-          relCostScore: relCost,
+          dateScore, destScore,
           budgetFit: budget ? budget.fit : null,
           overBudgetCount: budget ? budget.overCount : 0,
           overBudgetNames: budget ? budget.overNames : [],
           budgetChecked: budget ? budget.checked : 0,
-          avgFare,
-          fareSearched,
-          nights,
+          avgFare, fareSearched, nights,
           lodgingMin: lodge ? lodge.min : null,
           lodgingMax: lodge ? lodge.max : null,
-          // Per-person all-in estimate: average fare + mid lodging.
-          avgTripCost:
-            avgFare != null && lodge ? avgFare + (lodge.min + lodge.max) / 2 : avgFare,
-          total,
+          avgTripCost,
+          minTripCost: perPerson.length ? Math.min(...perPerson) : null,
+          maxTripCost: perPerson.length ? Math.max(...perPerson) : null,
+          viability, minNights: required,
         });
       }
     }
-    return combos.sort((a, b) => b.total - a.total);
+
+    // Pass 2 — rank cost on the ALL-IN figure. Normalizing on airfare alone
+    // ranked a cheap-to-reach but expensive-to-stay-in city as the bargain,
+    // which is the opposite of what the group pays.
+    const knownCosts = draft.map((c) => c.avgTripCost).filter((v) => v != null);
+    const minCost = knownCosts.length ? Math.min(...knownCosts) : 0;
+    const maxCost = knownCosts.length ? Math.max(...knownCosts) : 0;
+    const costSpread = maxCost - minCost;
+    for (const c of draft) {
+      let relCost;
+      if (c.avgTripCost == null) relCost = 0.5; // unknown — stay neutral
+      else if (costSpread === 0) relCost = 1; // nothing to compare against
+      else relCost = 1 - (c.avgTripCost - minCost) / costSpread;
+      // Blend "cheap vs the alternatives" with "actually affordable for the
+      // people going". When nobody stated a budget we fall back to the
+      // relative measure alone rather than inventing an affordability signal.
+      const costScore = c.budgetFit != null ? relCost * 0.5 + c.budgetFit * 0.5 : relCost;
+      c.relCostScore = relCost;
+      c.costScore = costScore;
+      c.total =
+        (weights.date * c.dateScore +
+          weights.destination * c.destScore +
+          weights.cost * costScore) *
+        // A stay too short for the journey can't be allowed to win on the
+        // strength of being trivially attendable and cheap.
+        c.viability;
+    }
+    return draft.sort((a, b) => b.total - a.total);
   }
 
   /**
@@ -590,7 +648,8 @@
     };
     for (const p of participants) {
       const pr = p.prefs || {};
-      if (pr.accommodation) out.accommodation += 1;
+      // null (unanswered) counts as needing a bed, matching the cost model.
+      if (pr.accommodation !== false) out.accommodation += 1;
       const k = Number(pr.kids) || 0;
       if (k > 0) {
         out.kids += k;

@@ -212,7 +212,11 @@ function defaultPrefs() {
   return {
     budget: "", // max spend per person, in USD (number as string)
     food: "No preference",
-    accommodation: false, // needs a place to stay?
+    // Tri-state: null = never answered (assume they need a bed, the norm for
+    // travel), true = explicitly needs one, false = explicitly does not.
+    // Defaulting to false would zero out lodging for everyone who simply
+    // never touched the control.
+    accommodation: null,
     kids: 0, // number of children attending
     accessibility: "", // free-text access needs
     activities: [], // subset of ACTIVITY_OPTIONS
@@ -268,6 +272,10 @@ function normalizeParticipant(p) {
   out.destinations = rawDest.map((d) => d || "");
   if (!out.destinations.length) out.destinations = [""];
   out.prefs = { ...defaultPrefs(), ...((p && p.prefs) || {}) };
+  // Keep "never answered" distinct from "explicitly declined" so lodging
+  // is only skipped when someone actually said they are sorted.
+  const acc = p && p.prefs ? p.prefs.accommodation : undefined;
+  out.prefs.accommodation = acc === true || acc === false ? acc : null;
   out.prefs.activities = Array.isArray(out.prefs.activities) ? out.prefs.activities : [];
   out.rsvp = (p && p.rsvp) || "no_response";
   // Preserve explicit true/false — collapse missing/undefined to null (not-yet-asked).
