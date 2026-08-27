@@ -303,7 +303,19 @@
   const MAX_ROWS = 12; // ranked dates / destinations per person
   const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
   const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
-  const isoOrEmpty = (v) => (typeof v === "string" && ISO_DATE.test(v) ? v : "");
+  // Five minutes of slack absorbs ordinary clock drift between devices.
+  const clampTs = (v) =>
+    Number.isFinite(v) ? Math.min(Math.max(0, v), Date.now() + 5 * 60 * 1000) : 0;
+  // The shape alone is not enough: "2026-13-45" matches the pattern, and once
+  // it reaches lockedPlan the calendar export throws RangeError — which the
+  // global error handler treats as corruption and responds to by clearing
+  // every cache and reloading. Require the date to survive a round trip.
+  const isoOrEmpty = (v) => {
+    if (typeof v !== "string" || !ISO_DATE.test(v)) return "";
+    const t = Date.parse(v + "T00:00:00Z");
+    if (!Number.isFinite(t)) return "";
+    return new Date(t).toISOString().slice(0, 10) === v ? v : "";
+  };
 
   function sanitizePayload(data) {
     if (!data || typeof data !== "object" || !Array.isArray(data.p)) return null;
@@ -346,7 +358,12 @@
           rsvp: ["in", "out", "no_response"].includes(src.rsvp) ? src.rsvp : "no_response",
           dc: src.dc === true || src.dc === false ? src.dc : null,
           xc: src.xc === true || src.xc === false ? src.xc : null,
-          ts: Number.isFinite(src.ts) ? src.ts : 0,
+          // Clamp the clock. updatedAt is only ever written as Date.now(), so
+          // a row arriving from a future date wins last-write-wins FOREVER and
+          // every genuine reply after it is silently discarded — the merge
+          // reports "0 updated" and the person thinks they replied. A phone
+          // with its clock set wrong is enough; no attacker required.
+          ts: clampTs(src.ts),
         };
       }),
     };
@@ -363,7 +380,7 @@
             a: Number.isFinite(amount) ? amount : NaN,
             w: Array.isArray(src.w) ? src.w.slice(0, MAX_PEOPLE).map((i) => str(i, 40)).filter(Boolean) : [],
             s: src.s === 1,
-            ts: Number.isFinite(src.ts) ? src.ts : 0,
+            ts: clampTs(src.ts),
           };
         })
         // Drop anything unusable rather than letting a NaN poison every balance.
@@ -2315,6 +2332,21 @@
       .toISOString()
       .slice(0, 10)
       .replace(/-/g, "");
+    // The event name and destination both come from the invite hash. Stripping
+    // "," and ";" left newlines intact, so a crafted link could close VEVENT
+    // and append its own event — into a file the victim imports into their real
+    // calendar. Escape per RFC 5545 instead of filtering two characters.
+    const ical = (v) =>
+      String(v == null ? "" : v)
+        .replace(/\\/g, "\\\\")
+        .replace(/[;,]/g, "\\$&")
+        .replace(/\r?\n/g, "\\n");
+    // A malformed date reaches here only if it slipped past isoOrEmpty, but
+    // this is a download the user triggered — fail quietly, don't throw.
+    if (!Number.isFinite(Date.parse(plan.dateStart + "T00:00:00Z"))) {
+      toast("That plan's dates look wrong — re-lock it before exporting");
+      return;
+    }
     const title = `${state.reunion.name || "Get-together"} — ${plan.destination}`;
     const ics = [
       "BEGIN:VCALENDAR",
@@ -2325,8 +2357,8 @@
       `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}Z`,
       `DTSTART;VALUE=DATE:${clean(plan.dateStart)}`,
       `DTEND;VALUE=DATE:${endStr}`,
-      `SUMMARY:${title.replace(/[,;]/g, " ")}`,
-      `LOCATION:${plan.destination.replace(/[,;]/g, " ")}`,
+      `SUMMARY:${ical(title)}`,
+      `LOCATION:${ical(plan.destination)}`,
       "DESCRIPTION:Planned with Reunly",
       "END:VEVENT",
       "END:VCALENDAR",

@@ -905,9 +905,18 @@
       }
       // Never let a stale copy overwrite fresher answers.
       if ((incoming.updatedAt || 0) <= (existing.updatedAt || 0)) return;
-      const aliases = existing.aliasIds;
-      Object.assign(existing, incoming, { id: existing.id });
-      if (aliases && aliases.length) existing.aliasIds = aliases;
+      // A link deliberately carries no email address, so `incoming.email` is
+      // always "". Assigning it blanked the local one — and since a returning
+      // user is identified BY email, they then failed to match their own row
+      // and got a duplicate, splitting their RSVP and expenses across two ids.
+      // Nothing the payload cannot express may be cleared by a merge.
+      const keep = {
+        id: existing.id,
+        email: incoming.email || existing.email || "",
+        aliasIds: existing.aliasIds,
+      };
+      Object.assign(existing, incoming, keep);
+      if (!keep.aliasIds) delete existing.aliasIds;
       updated += 1;
     });
     return { added, updated };

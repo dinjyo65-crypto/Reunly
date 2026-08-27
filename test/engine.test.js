@@ -694,7 +694,7 @@ test("a refund to the wrong person flips who owes whom", () => {
 /** Wire row -> normalized participant, mirroring app.js participantFromPayload. */
 function fromWire(x) {
   return person({
-    id: x.id, name: x.n, city: x.c, dates: x.d, destinations: x.x,
+    id: x.id, name: x.n, email: x.e || "", city: x.c, dates: x.d, destinations: x.x,
     prefs: x.pr, rsvp: x.rsvp, updatedAt: x.ts || 0,
   });
 }
@@ -762,4 +762,24 @@ test("a nameless row is ignored rather than added as a blank person", () => {
   const r = merge(roster, [{ id: "p_7", n: "   ", c: "Goa, India", ts: 5 }]);
   assert.strictEqual(r.added, 0);
   assert.strictEqual(roster.length, 0);
+});
+
+test("a merge never clears a field the invite link cannot carry", () => {
+  // Links deliberately omit email addresses, so `incoming.email` is always "".
+  // Assigning it blanked the local one — and a returning user is identified BY
+  // email, so they stopped matching their own row and got a duplicate,
+  // splitting their RSVP and their expenses across two ids.
+  const roster = [person({
+    id: "p_a", name: "Ana", email: "ana@example.com", city: "London, UK", updatedAt: 100,
+  })];
+  const r = merge(roster, [{ id: "p_a", n: "Ana", c: "Paris, France", ts: 500, rsvp: "in" }]);
+  assert.strictEqual(r.updated, 1, "the update still applies");
+  assert.strictEqual(roster[0].city, "Paris, France");
+  assert.strictEqual(roster[0].email, "ana@example.com", "but the email survives");
+});
+
+test("an incoming email fills in a blank one without overwriting a real one", () => {
+  const roster = [person({ id: "p_a", name: "Ana", email: "", updatedAt: 100 })];
+  merge(roster, [{ id: "p_a", n: "Ana", e: "ana@example.com", c: "Paris, France", ts: 500 }]);
+  assert.strictEqual(roster[0].email, "ana@example.com");
 });
