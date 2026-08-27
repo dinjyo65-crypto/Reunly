@@ -507,7 +507,12 @@
         : null;
       let cost;
       if (trip) {
-        cost = trip.total;
+        // The budget field asks for a PER-PERSON figure, so compare like with
+        // like. Measuring a family's whole-party total against it flagged
+        // parents as priced out even when their per-head cost was LOWER than a
+        // solo traveller's (kids share a room), and one such family capped the
+        // cost score for the entire group.
+        cost = trip.total / Math.max(1, trip.party);
       } else {
         const f = fareProvider(p.city, destination);
         if (!f || f.min == null) continue;
@@ -624,23 +629,38 @@
       }
     }
 
-    // Pass 2 — rank cost on the ALL-IN figure. Normalizing on airfare alone
-    // ranked a cheap-to-reach but expensive-to-stay-in city as the bargain,
-    // which is the opposite of what the group pays.
-    const knownCosts = draft.map((c) => c.avgTripCost).filter((v) => v != null);
-    const minCost = knownCosts.length ? Math.min(...knownCosts) : 0;
-    const maxCost = knownCosts.length ? Math.max(...knownCosts) : 0;
-    const costSpread = maxCost - minCost;
+    // Pass 2 — rank cost on the ALL-IN figure, but compare like with like.
+    //
+    // Normalizing across EVERY combination made cost a proxy for trip length:
+    // lodging scales with nights, so a 2-night sliver scored 1.00 and an
+    // 8-night stay 0.00 for the same place and people, and at 40% weight that
+    // silently decided the trip. Cost's job is "which DESTINATION is easier on
+    // the group", so normalize within each date window. How long to go for is
+    // expressed through people's date ranges, and a stay nobody can afford is
+    // still caught by budgetFit, which works in absolute terms.
+    const byWindow = new Map();
     for (const c of draft) {
-      let relCost;
-      if (c.avgTripCost == null) relCost = 0.5; // unknown — stay neutral
-      else if (costSpread === 0) relCost = 1; // nothing to compare against
-      else relCost = 1 - (c.avgTripCost - minCost) / costSpread;
+      const key = rangeKey(c.dateRange);
+      if (!byWindow.has(key)) byWindow.set(key, []);
+      byWindow.get(key).push(c);
+    }
+    for (const group of byWindow.values()) {
+      const knownCosts = group.map((c) => c.avgTripCost).filter((v) => v != null);
+      const minCost = knownCosts.length ? Math.min(...knownCosts) : 0;
+      const maxCost = knownCosts.length ? Math.max(...knownCosts) : 0;
+      const costSpread = maxCost - minCost;
+      for (const c of group) {
+        if (c.avgTripCost == null) c.relCostScore = 0.5; // unknown — stay neutral
+        else if (costSpread === 0) c.relCostScore = 1; // nothing to compare against
+        else c.relCostScore = 1 - (c.avgTripCost - minCost) / costSpread;
+      }
+    }
+    for (const c of draft) {
+      const relCost = c.relCostScore;
       // Blend "cheap vs the alternatives" with "actually affordable for the
       // people going". When nobody stated a budget we fall back to the
       // relative measure alone rather than inventing an affordability signal.
       const costScore = c.budgetFit != null ? relCost * 0.5 + c.budgetFit * 0.5 : relCost;
-      c.relCostScore = relCost;
       c.costScore = costScore;
       c.total =
         (weights.date * c.dateScore +

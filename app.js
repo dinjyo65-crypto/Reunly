@@ -56,6 +56,20 @@
 
   // ---- Persistence ----
   const LS_STATE = "reunly_state_v1";
+  // Bumped when stored data needs interpreting differently. v2: `accommodation`
+  // became tri-state — a stored `false` from v1 meant "checkbox untouched",
+  // NOT "I'm sorted", and must not be read as an opt-out.
+  const STATE_VERSION = 2;
+  function migrateSaved(saved) {
+    if (!saved || typeof saved !== "object") return saved;
+    if ((saved.v || 1) < 2 && Array.isArray(saved.participants)) {
+      saved.participants.forEach((p) => {
+        if (p && p.prefs && p.prefs.accommodation === false) p.prefs.accommodation = null;
+      });
+    }
+    saved.v = STATE_VERSION;
+    return saved;
+  }
   /**
    * Stamp the current user's record so a link they send back can be merged
    * last-write-wins against other copies (see mergeParticipantsFromHash).
@@ -79,6 +93,7 @@
       localStorage.setItem(
         LS_STATE,
         JSON.stringify({
+          v: STATE_VERSION,
           user: state.user,
           reunion: state.reunion,
           participants: state.participants,
@@ -131,7 +146,7 @@
   function peekSavedState() {
     try {
       const s = JSON.parse(localStorage.getItem(LS_STATE) || "null");
-      if (s && Array.isArray(s.participants)) return s;
+      if (s && Array.isArray(s.participants)) return migrateSaved(s);
     } catch (e) {
       /* corrupt — ignore */
     }
@@ -292,8 +307,13 @@
           pr: {
             budget: str(String(pr.budget == null ? "" : pr.budget), 12),
             food: str(pr.food, 40),
+            // A v1 link's `false` was the untouched default, not an opt-out.
             accommodation:
-              pr.accommodation === true || pr.accommodation === false ? pr.accommodation : null,
+              pr.accommodation === true
+                ? true
+                : pr.accommodation === false && Number(data.v) >= 2
+                ? false
+                : null,
             kids: Math.max(0, Math.min(20, parseInt(pr.kids, 10) || 0)),
             accessibility: str(pr.accessibility, 200),
             activities: Array.isArray(pr.activities)
@@ -963,6 +983,7 @@
             class: "row-del", "aria-label": "Remove this date", text: "✕",
             onClick: () => {
               p.dates.splice(i, 1);
+              touchParticipant(p);
               renderAll();
             },
           })
@@ -997,6 +1018,7 @@
             class: "row-del", "aria-label": "Remove this place", text: "✕",
             onClick: () => {
               p.destinations.splice(i, 1);
+              touchParticipant(p);
               renderAll();
             },
           })
@@ -2543,7 +2565,10 @@
     const base = splitBase();
     const baseIds = base.map((p) => p.id);
     const alive = new Set(state.participants.map((p) => p.id));
-    const total = state.expenses.reduce((s, x) => s + x.amount, 0);
+    // Settlements move money between people; they are not new group spend.
+    // Counting them inflated the trip total every time someone paid a debt.
+    const spend = state.expenses.filter((x) => !x.settlement);
+    const total = spend.reduce((s, x) => s + x.amount, 0);
     const paid = {};
     const owed = {};
     state.expenses.forEach((x) => {
@@ -2564,7 +2589,10 @@
         owed[id] = (owed[id] || 0) + (per + extra) / 100;
       });
     });
-    const share = base.length ? total / base.length : 0; // display-only average
+    // Whole cents, so the headline "each" figure reconciles with the total
+    // instead of leaving an orphan penny.
+    const share = base.length ? Math.round((total / base.length) * 100) / 100 : 0;
+    const shareExact = base.length ? (total * 100) % base.length === 0 : true;
     const balances = new Map();
     const inBase = new Set(baseIds);
     // Include anyone who PAID as well as anyone still on the roster. If a payer
@@ -2597,7 +2625,7 @@
       if (debtors[di].amt < 0.01) di++;
       if (creditors[ci].amt < 0.01) ci++;
     }
-    return { total, share, base, balances, transfers };
+    return { total, share, shareExact, base, balances, transfers, spend };
   }
   /**
    * Remember a departed participant's name so expenses they paid still read
@@ -2621,7 +2649,7 @@
     const card = el("div", { class: "card" });
     card.appendChild(el("div", { class: "toolkit-title", text: "💸 Expenses & settle-up" }));
 
-    const { total, share, base, balances, transfers } = computeSplit();
+    const { total, share, shareExact, base, balances, transfers, spend } = computeSplit();
     card.appendChild(
       el("div", {
         class: "itin-sub",
@@ -2725,10 +2753,12 @@
     card.appendChild(list);
     // "each" is only meaningful when every expense is split the same way;
     // otherwise show the average so it isn't mistaken for an exact figure.
-    const uniform = state.expenses.every((x) => {
-      const s = Array.isArray(x.sharedWith) ? x.sharedWith : [];
-      return !s.length || s.length === base.length;
-    });
+    const uniform =
+      shareExact &&
+      spend.every((x) => {
+        const s = Array.isArray(x.sharedWith) ? x.sharedWith : [];
+        return !s.length || s.length === base.length;
+      });
     card.appendChild(
       el("div", {
         class: "exp-total",

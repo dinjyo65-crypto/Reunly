@@ -517,9 +517,11 @@ class Handler(SimpleHTTPRequestHandler):
 
     # Keep-alive: the client fires ~90 fare/photo requests in parallel, and the
     # stdlib default (HTTP/1.0) tears down the connection after every one.
-    # Safe here because every response path sets Content-Length — without that,
-    # HTTP/1.1 would leave the browser waiting for a body that never ends.
+    # Every response path must set Content-Length and fully drain the request
+    # body, or a keep-alive connection desyncs and the browser hangs.
     protocol_version = "HTTP/1.1"
+    # Don't let idle keep-alive sockets pin a thread each indefinitely.
+    timeout = 30
 
     def end_headers(self):
         # Prototype: never let the browser HTTP-cache files, so edits always
@@ -617,8 +619,15 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_json({"ok": True})
             except Exception:
                 return self._send_json({"ok": False}, code=400)
-        self.send_response(404)
-        self.end_headers()
+        # Drain any body before replying: on a keep-alive connection unread
+        # bytes would be mis-read as the start of the next request.
+        try:
+            pending = int(self.headers.get("Content-Length", "0") or "0")
+            if 0 < pending <= 1 << 20:
+                self.rfile.read(pending)
+        except (ValueError, OSError):
+            pass
+        return self._send_json({"error": "not found"}, code=404)
 
 
 if __name__ == "__main__":
