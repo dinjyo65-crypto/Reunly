@@ -362,6 +362,40 @@ test("an affordable destination outranks one that busts stated budgets", () => {
   assert.strictEqual(pricey.overBudgetCount, 2, "both travellers are over budget");
 });
 
+test("peak seasons cost more than quiet ones", () => {
+  // Fares and lodging were completely date-blind, so a Christmas trip priced
+  // the same as mid-February — and the app's own examples default to exactly
+  // that peak window.
+  const fares = fixedFares({ "London, UK|Goa, India": { min: 400, max: 400, source: "estimated" } });
+  const quiet = E.tripCostFor("London, UK", "Goa, India", { start: "2026-05-04", end: "2026-05-11" }, fares);
+  const xmas = E.tripCostFor("London, UK", "Goa, India", { start: "2026-12-20", end: "2026-12-27" }, fares);
+  assert.ok(xmas.total > quiet.total, "Christmas week must not price like May");
+  assert.strictEqual(quiet.season, null, "an ordinary week carries no peak label");
+  assert.ok(/Christmas/i.test(xmas.season), "the peak is named so the UI can say why");
+});
+
+test("a real captured fare is never scaled by our seasonal guess", () => {
+  // A searched fare already reflects whatever season it was quoted for;
+  // multiplying it would corrupt observed data.
+  const searched = fixedFares({ "London, UK|Goa, India": { min: 500, max: 500, source: "searched" } });
+  const quiet = E.tripCostFor("London, UK", "Goa, India", { start: "2026-05-04", end: "2026-05-11" }, searched);
+  const xmas = E.tripCostFor("London, UK", "Goa, India", { start: "2026-12-20", end: "2026-12-27" }, searched);
+  assert.strictEqual(quiet.travel, 500);
+  assert.strictEqual(xmas.travel, 500, "searched fares stay exactly as captured");
+  assert.ok(xmas.lodging > quiet.lodging, "but our own lodging estimate still moves");
+});
+
+test("a lone adult isn't charged half a room", () => {
+  // The nightly bands are quoted per person SHARING a twin; a solo traveller
+  // pays most of the room, not half of it.
+  const fares = fixedFares({ "London, UK|Goa, India": { min: 300, max: 300, source: "estimated" } });
+  const win = { start: "2026-05-04", end: "2026-05-08" };
+  const solo = E.tripCostFor("London, UK", "Goa, India", win, fares, { kids: 0 });
+  const band = E.estimateLodging("Goa, India", 4);
+  const shared = (band.min + band.max) / 2;
+  assert.ok(solo.lodging > shared, "solo occupancy costs more than a shared rate");
+});
+
 test("estimateLodging scales with nights and knows pricey vs value cities", () => {
   const oneNight = E.estimateLodging("London, UK", 1);
   const threeNights = E.estimateLodging("London, UK", 3);
@@ -376,7 +410,8 @@ test("estimateLodging scales with nights and knows pricey vs value cities", () =
 test("tripCostFor adds lodging on top of travel", () => {
   const fares = fixedFares({ "London, UK|Goa, India": { min: 400, max: 400, source: "estimated" } });
   // 2026-08-01..2026-08-05 is 5 inclusive days = 4 nights slept.
-  const trip = E.tripCostFor("London, UK", "Goa, India", { start: "2026-08-01", end: "2026-08-05" }, fares);
+  // Use an off-peak window so the seasonal multiplier doesn't muddy the point.
+  const trip = E.tripCostFor("London, UK", "Goa, India", { start: "2026-05-04", end: "2026-05-08" }, fares);
   assert.strictEqual(trip.travel, 400);
   assert.strictEqual(trip.nights, 4);
   assert.ok(trip.lodging > 0, "lodging must be counted");

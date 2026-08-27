@@ -1093,15 +1093,46 @@
 
     const row = el("div", { class: "row" });
     // Budget
+    // Budgets are STORED in USD (everything compares in one currency) but are
+    // entered in the person's own. Asking an Indian traveller for USD while
+    // every other figure showed rupees invited "50000" meaning rupees, which
+    // became a $50,000 ceiling — and that failure is silent, because an
+    // impossibly high budget simply never triggers the over-budget warning.
     const bWrap = el("div");
-    bWrap.appendChild(el("label", { text: "Max budget / person (USD)" }));
+    const budgetCode = D.currencyForCity(p.city);
+    const toLocal = (usd) => {
+      const n = parseFloat(usd);
+      if (Number.isNaN(n) || n <= 0) return "";
+      return String(Math.round(E.convertFromUSD(n, budgetCode)));
+    };
+    bWrap.appendChild(
+      el("label", { text: `Max budget / person (${budgetCode})` })
+    );
     bWrap.appendChild(
       el("input", {
-        type: "number", min: "0", inputmode: "numeric", value: pr.budget || "",
-        placeholder: "e.g. 800",
-        onInput: (e) => { pr.budget = e.target.value; scheduleRecompute(p); },
+        type: "number", min: "0", inputmode: "numeric",
+        value: toLocal(pr.budget),
+        placeholder: budgetCode === "USD" ? "e.g. 800" : "in " + budgetCode,
+        onInput: (e) => {
+          const local = parseFloat(e.target.value);
+          // Store back in USD so scoring never has to guess a currency.
+          pr.budget =
+            Number.isNaN(local) || local <= 0
+              ? ""
+              : String(Math.round(local / (D.CURRENCIES[budgetCode] || D.CURRENCIES.USD).rate));
+          scheduleRecompute(p);
+        },
       })
     );
+    if (budgetCode !== "USD") {
+      const usd = parseFloat(pr.budget);
+      bWrap.appendChild(
+        el("div", {
+          class: "field-note",
+          text: Number.isNaN(usd) || usd <= 0 ? "Compared in USD behind the scenes." : `≈ $${Math.round(usd)} USD`,
+        })
+      );
+    }
     row.appendChild(bWrap);
     // Food
     const fWrap = el("div");
@@ -1781,6 +1812,7 @@
             `(${c.nights} night${c.nights === 1 ? "" : "s"}) · estimates, excludes food & activities` +
             // Don't present a generic fallback rate with the same confidence
             // as one we actually hold for that city.
+            (c.season ? ` · ${c.season} — prices run higher` : "") +
             (c.lodgingApproximate ? " · no local rate for this city, using a rough average" : ""),
         })
       );

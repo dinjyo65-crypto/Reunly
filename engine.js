@@ -163,6 +163,38 @@
   }
 
   /**
+   * Coarse seasonal pricing multiplier for a travel window.
+   *
+   * Fares and lodging were completely date-blind, so a Christmas-week trip
+   * priced identically to mid-February — and the app's own examples default to
+   * exactly that peak window, so it under-reported on the common case. These
+   * are deliberately broad bands, not quoted prices; callers must label the
+   * result as an estimate and say when a peak has been applied.
+   *
+   * Applied ONLY to our own estimates. A real captured fare already reflects
+   * whatever season it was quoted for, and scaling it would corrupt real data.
+   */
+  function seasonFactorFor(dateRange) {
+    if (!isValidRange(dateRange)) return { fare: 1, lodging: 1, label: null };
+    const md = dateRange.start.slice(5); // "MM-DD"
+    const month = Number(dateRange.start.slice(5, 7));
+    const day = Number(dateRange.start.slice(8, 10));
+    // Christmas / New Year: the sharpest, most reliable spike worldwide.
+    if ((month === 12 && day >= 18) || (month === 1 && day <= 5)) {
+      return { fare: 1.35, lodging: 1.5, label: "Christmas & New Year peak" };
+    }
+    // Northern-hemisphere summer holidays.
+    if (month === 7 || month === 8) {
+      return { fare: 1.2, lodging: 1.25, label: "summer peak" };
+    }
+    // Easter-ish shoulder spike.
+    if (md >= "03-25" && md <= "04-15") {
+      return { fare: 1.12, lodging: 1.15, label: "Easter holidays" };
+    }
+    return { fare: 1, lodging: 1, label: null };
+  }
+
+  /**
    * The fewest nights that make a journey worth taking. A 16-hour flight each
    * way for a single night isn't a trip, it's an ordeal — but the date scorer
    * can't see that, because a one-day window is trivially "fully attendable"
@@ -225,7 +257,11 @@
     // to be priced out.
     const kids = Math.max(0, parseInt((prefs && prefs.kids) || 0, 10) || 0);
     const party = 1 + kids;
-    const travel = ((f.min + f.max) / 2) * party;
+    const season = seasonFactorFor(dateRange);
+    // Only scale OUR estimate — a searched/live fare already reflects its own
+    // season, and multiplying it would corrupt a real observed price.
+    const fareSeason = f.source === "estimated" ? season.fare : 1;
+    const travel = ((f.min + f.max) / 2) * party * fareSeason;
     // Nights = nights slept, so one fewer than the inclusive day count.
     const nights = Math.max(0, rangeDays(dateRange) - 1);
     // "I don't need a bed" (staying with family, own place) means no lodging
@@ -233,9 +269,16 @@
     const needsBed = !prefs || prefs.accommodation !== false;
     const lodge = needsBed ? estimateLodging(destination, nights) : null;
     // Children share the room rather than each taking a full rate.
-    const roomFactor = 1 + kids * 0.5;
-    const lodging = lodge ? ((lodge.min + lodge.max) / 2) * roomFactor : 0;
-    return { travel, lodging, nights, party, total: travel + lodging, source: f.source };
+    // Children share the room rather than each taking a full rate. A lone
+    // adult, conversely, can't split a twin — the bands assume sharing.
+    const roomFactor = kids > 0 ? 1 + kids * 0.5 : 1.6;
+    const lodging = lodge ? ((lodge.min + lodge.max) / 2) * roomFactor * season.lodging : 0;
+    return {
+      travel, lodging, nights, party,
+      total: travel + lodging,
+      source: f.source,
+      season: season.label,
+    };
   }
 
   /**
@@ -667,6 +710,7 @@
           // is actually asked to find.
           maxBookingCost: perBooking.length ? Math.max(...perBooking) : null,
           viability, minNights: required,
+          season: seasonFactorFor(dateRange).label,
         });
       }
     }
@@ -806,6 +850,7 @@
     flightTimeHours,
     driveTimeHours,
     formatHours,
+    seasonFactorFor,
     // dates
     isValidRange,
     rangesOverlap,
