@@ -630,3 +630,37 @@ test("splitBaseFor falls back to everyone before anyone has RSVP'd", () => {
   const mixed = [person({ id: "a", rsvp: "in" }), person({ id: "b", rsvp: "in" }), person({ id: "c", rsvp: "out" })];
   assert.deepStrictEqual(E.splitBaseFor(mixed).map((p) => p.id), ["a", "b"]);
 });
+
+// ---- Display currency ------------------------------------------------------
+test("the same estimate keeps its value across currencies", () => {
+  // Rounding runs after conversion, so a coarse step used to cost far more
+  // precision in one currency than another: $1,735 showed as $1,750 but as
+  // £1,350 against a £1,371 true value.
+  for (const usd of [95, 215, 1735, 4200, 18000]) {
+    for (const code of ["USD", "GBP", "INR", "EUR", "JPY"]) {
+      const shown = Number(E.formatMoney(usd, code).replace(/[^\d.]/g, ""));
+      const exact = E.convertFromUSD(usd, code);
+      assert.ok(Math.abs(shown - exact) / exact < 0.01,
+        `${usd} USD in ${code}: showed ${shown}, exact ${exact}`);
+    }
+  }
+});
+
+test("a ledger amount survives the round trip through USD storage", () => {
+  for (const code of ["USD", "GBP", "INR", "EUR"]) {
+    const typed = 8000;
+    const stored = E.toUSD(typed, code);
+    assert.strictEqual(E.formatExact(stored, code).replace(/[^\d.]/g, ""), "8,000.00".replace(",", ""));
+  }
+});
+
+test("the ledger shows exact cents, not rounded estimates", () => {
+  assert.strictEqual(E.formatExact(33.333, "USD"), "$33.33");
+  assert.strictEqual(E.formatExact(1234.5, "USD"), "$1,234.50",
+    "trailing zero must survive — 1,234.5 reads as a typo on money");
+});
+
+test("an unknown currency code falls back to USD instead of NaN", () => {
+  assert.strictEqual(E.formatExact(10, "ZZZ"), "$10.00");
+  assert.strictEqual(E.toUSD(10, "ZZZ"), 10);
+});

@@ -613,6 +613,22 @@
   function myCurrency() {
     return (state.user && state.user.currency) || D.currencyForCity(state.user && state.user.city);
   }
+  // The single answer to "which currency is this reader seeing?". The USD
+  // toggle wins; otherwise everything follows their home currency. Every
+  // estimate on screen goes through est()/estRange(), so the winner card, the
+  // ballot and the printable pack can no longer quote the same trip in three
+  // different currencies — or, worse, put a "$" in front of a rupee figure.
+  function displayCode() {
+    return state.currencyMode === "usd" ? "USD" : myCurrency();
+  }
+  /** Format a USD estimate in the reader's display currency. */
+  function est(usd) {
+    return E.formatMoney(usd || 0, displayCode());
+  }
+  /** Format a USD min-max estimate in the reader's display currency. */
+  function estRange(lo, hi) {
+    return E.formatRange(lo || 0, hi || 0, displayCode());
+  }
 
   // ---- Live place autocomplete (proxy /api/geosuggest) ----
   // Attaches a type-ahead dropdown to any text input. onPick(label, suggestion)
@@ -917,7 +933,11 @@
     $("#currencyToggle").addEventListener("click", () => {
       state.currencyMode = state.currencyMode === "usd" ? "local" : "usd";
       updateCurrencyToggle();
-      renderCosts();
+      // Currency is no longer a Costs-tab concern: the winner card, the ballot,
+      // the people summary and the expense ledger all read displayCode() now,
+      // so re-rendering only the fares left the rest of the app quoting the
+      // currency the reader had just switched away from.
+      renderAll();
       saveState();
     });
     $("#addParticipant").addEventListener("click", () => {
@@ -1818,9 +1838,9 @@
         myTrip ? (myTrip.party > 1 ? `Your ${myTrip.party}` : "Your cost")
           : c.nights > 0 ? "Avg per person" : "Avg fare",
         myTrip
-          ? `$${Math.round(myTrip.total)}`
+          ? est(myTrip.total)
           : c.avgTripCost != null
-          ? `$${Math.round(c.avgTripCost)}`
+          ? est(c.avgTripCost)
           : "—",
         null
       )
@@ -1832,7 +1852,7 @@
         el("div", {
           class: "cost-breakdown",
           text:
-            `≈ $${Math.round(c.avgFare)} travel + $${c.lodgingMin}–$${c.lodgingMax} stay ` +
+            `≈ ${est(c.avgFare)} travel + ${estRange(c.lodgingMin, c.lodgingMax)} stay ` +
             `(${c.nights} night${c.nights === 1 ? "" : "s"}) · estimates, excludes food & activities` +
             // Don't present a generic fallback rate with the same confidence
             // as one we actually hold for that city.
@@ -1848,10 +1868,10 @@
         el("div", {
           class: "cost-breakdown",
           text:
-            `Across the group: $${Math.round(c.minTripCost)}–$${Math.round(c.maxTripCost)} per person, ` +
+            `Across the group: ${estRange(c.minTripCost, c.maxTripCost)} per person, ` +
             "depending on where they're travelling from" +
             (c.maxBookingCost != null && Math.round(c.maxBookingCost) > Math.round(c.maxTripCost)
-              ? ` · largest single booking $${Math.round(c.maxBookingCost)}`
+              ? ` · largest single booking ${est(c.maxBookingCost)}`
               : ""),
         })
       );
@@ -1899,7 +1919,7 @@
       w.appendChild(
         el("div", {
           class: "alt-sub",
-          text: `${c.dateLabel} · ~$${Math.round(perPerson || 0)} pp`,
+          text: `${c.dateLabel} · ~${est(perPerson)} pp`,
         })
       );
       head.appendChild(w);
@@ -1977,7 +1997,7 @@
     grid.appendChild(statTile(`${s.total}`, "people"));
     grid.appendChild(
       statTile(
-        s.medianBudget != null ? `$${s.medianBudget}` : "—",
+        s.medianBudget != null ? est(s.medianBudget) : "—",
         s.medianBudget != null ? "median budget" : "budget"
       )
     );
@@ -2472,12 +2492,12 @@
       .filter((p) => p.city)
       .map((p) => {
         const f = fareProvider(p.city, plan.destination);
-        const fare = f && f.min != null ? `$${f.min}–$${f.max}` : "—";
+        const fare = f && f.min != null ? estRange(f.min, f.max) : "—";
         const trip = E.tripCostFor(p.city, plan.destination, window_, fareProvider, p.prefs);
         let allIn = "—";
         if (trip) {
           packTotal += trip.total;
-          allIn = `$${Math.round(trip.total)}`;
+          allIn = est(trip.total);
           if (trip.party > 1) allIn += ` (${trip.party} people)`;
         }
         return (
@@ -2487,7 +2507,7 @@
       })
       .join("");
     const packFooter = packTotal
-      ? `<tr><td colspan="3"><b>Group total</b></td><td><b>$${Math.round(packTotal)}</b></td></tr>`
+      ? `<tr><td colspan="3"><b>Group total</b></td><td><b>${est(packTotal)}</b></td></tr>`
       : "";
     const itHtml = it.days
       .map(
@@ -2632,13 +2652,11 @@
   // -------------------------------------------------------------------------
   // Expenses & settle-up (Costs tab)
   // -------------------------------------------------------------------------
+  // Expenses are stored in USD so the maths (and the invite-link merge) has one
+  // canonical unit, but a group splitting a villa in Goa should be reading
+  // rupees, not converting in their heads.
   function money(n) {
-    // Always two decimals — toLocaleString alone renders 1234.5 as "1,234.5",
-    // which reads as a typo on a money figure.
-    return `$${(Math.round(n * 100) / 100).toLocaleString("en-US", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}`;
+    return E.formatExact(n, displayCode());
   }
   // Record "A paid B back": a transfer that settles part of a balance rather
   // than a shared cost. Modelled as an expense that only the recipient shares,
@@ -2736,7 +2754,9 @@
       el("div", {
         class: "itin-sub",
         text:
-          `Amounts in USD · new expenses default to splitting between the ${base.length} ` +
+          `Amounts in ${displayCode()}` +
+          (displayCode() === "USD" ? "" : ` (converted at ${D.RATES_AS_OF} rates)`) +
+          ` · new expenses default to splitting between the ${base.length} ` +
           `${base.length === state.participants.length ? "people here" : "going"}. ` +
           "Untick anyone an expense shouldn't apply to. " +
           "Expenses travel with the invite link — share it again to sync the " +
@@ -2753,7 +2773,9 @@
       payerSel.appendChild(o);
     });
     const descIn = el("input", { type: "text", placeholder: "What for? e.g. Villa deposit" });
-    const amtIn = el("input", { type: "number", min: "0", step: "0.01", placeholder: "USD", inputmode: "decimal" });
+    const amtIn = el("input", {
+      type: "number", min: "0", step: "0.01", placeholder: displayCode(), inputmode: "decimal",
+    });
     form.appendChild(payerSel);
     form.appendChild(descIn);
 
@@ -2793,7 +2815,11 @@
             toast("Pick at least one person to split between");
             return;
           }
-          addExpense(payerSel.value, descIn.value, amtIn.value, [...chosen]);
+          // Typed in whatever currency the ledger is showing; stored in USD.
+          addExpense(
+            payerSel.value, descIn.value,
+            E.toUSD(parseFloat(amtIn.value), displayCode()), [...chosen]
+          );
         },
       })
     );

@@ -25,18 +25,42 @@
     return usd * c.rate;
   }
 
-  /** Round to a sensible step for the magnitude (keeps big-currency values clean). */
+  // Round an estimate to ~1% granularity: rounded enough to read as an
+  // estimate, fine enough that the step never changes the answer. The old
+  // fixed thresholds were applied AFTER conversion, so the same trip lost far
+  // more precision in one currency than another — $1,735 displayed as $1,750
+  // but as £1,350 (£1,371 exact), a gap the exchange rate couldn't explain.
   function roundMoney(v) {
-    if (v >= 100000) return Math.round(v / 5000) * 5000;
-    if (v >= 10000) return Math.round(v / 500) * 500;
-    if (v >= 1000) return Math.round(v / 50) * 50;
-    return Math.round(v / 5) * 5;
+    const magnitude = Math.abs(v);
+    if (magnitude < 1) return Math.round(v);
+    const step = Math.max(1, Math.pow(10, Math.floor(Math.log10(magnitude)) - 2));
+    return Math.round(v / step) * step;
   }
 
   /** Format a USD amount in a target currency, e.g. "₹17,850" or "$215". */
   function formatMoney(usd, code) {
     const c = CURRENCIES[code] || CURRENCIES.USD;
     return c.symbol + roundMoney(convertFromUSD(usd, code)).toLocaleString("en-US");
+  }
+
+  /** Convert an amount typed in the given currency back into USD storage. */
+  function toUSD(amount, code) {
+    const c = CURRENCIES[code] || CURRENCIES.USD;
+    return amount / c.rate;
+  }
+
+  // Format to the exact cent, for the settle-up ledger. formatMoney's rounding
+  // is right for estimates and wrong here: rounding each balance to the
+  // nearest 5 would stop the transfers adding up to what was actually spent.
+  function formatExact(usd, code) {
+    const c = CURRENCIES[code] || CURRENCIES.USD;
+    return (
+      c.symbol +
+      convertFromUSD(usd, code).toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })
+    );
   }
 
   /** Format a USD min–max band in a target currency, e.g. "₹17,850–₹28,200". */
@@ -921,6 +945,8 @@
     rankPoints,
     // currency
     convertFromUSD,
+    toUSD,
+    formatExact,
     formatMoney,
     formatRange,
     // geo/cost
