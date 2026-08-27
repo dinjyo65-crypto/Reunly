@@ -244,6 +244,13 @@
         // answers without a newer local edit being overwritten by a stale one.
         ts: p.updatedAt || 0,
       })),
+      // The ledger travels too. Expenses are append-only with stable ids, so
+      // merging is a union rather than a conflict — but without them every
+      // device kept a private ledger while the UI called it the group's.
+      x: state.expenses.slice(0, MAX_EXPENSES).map((e) => ({
+        id: e.id, by: e.payerId, d: e.desc, a: e.amount,
+        w: e.sharedWith, s: e.settlement ? 1 : 0, ts: e.ts || 0,
+      })),
     };
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
     return `${location.origin}${location.pathname}#r=${b64}`;
@@ -255,6 +262,7 @@
   // and sane sizes, so clamp the payload at the door rather than letting a bad
   // link throw somewhere far away — or hang the tab with a huge date list.
   const MAX_PEOPLE = 60;
+  const MAX_EXPENSES = 200;
   const MAX_ROWS = 12; // ranked dates / destinations per person
   const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
   const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
@@ -299,6 +307,25 @@
         };
       }),
     };
+    if (Array.isArray(data.x)) {
+      clean.x = data.x
+        .slice(0, MAX_EXPENSES)
+        .map((e) => {
+          const src = e && typeof e === "object" ? e : {};
+          const amount = Number(src.a);
+          return {
+            id: str(src.id, 60),
+            by: str(src.by, 40),
+            d: str(src.d, 120),
+            a: Number.isFinite(amount) ? amount : NaN,
+            w: Array.isArray(src.w) ? src.w.slice(0, MAX_PEOPLE).map((i) => str(i, 40)).filter(Boolean) : [],
+            s: src.s === 1,
+            ts: Number.isFinite(src.ts) ? src.ts : 0,
+          };
+        })
+        // Drop anything unusable rather than letting a NaN poison every balance.
+        .filter((e) => e.id && e.by && Number.isFinite(e.a) && e.a > 0);
+    }
     if (data.locked && typeof data.locked === "object") {
       const l = data.locked;
       const start = isoOrEmpty(l.dateStart);
@@ -381,7 +408,24 @@
       updated += 1;
     });
     if (data.locked && !state.lockedPlan) state.lockedPlan = data.locked;
-    return { added, updated };
+    // Union the ledgers by id. Expenses are append-only, so anything we
+    // haven't seen is simply new — no conflict resolution needed.
+    let expensesAdded = 0;
+    if (Array.isArray(data.x) && data.x.length) {
+      const haveExpense = new Set(state.expenses.map((e) => e.id));
+      data.x.forEach((e) => {
+        if (haveExpense.has(e.id)) return;
+        state.expenses.push({
+          id: e.id, payerId: e.by, desc: e.d, amount: e.a,
+          sharedWith: e.w, settlement: e.s, ts: e.ts,
+        });
+        haveExpense.add(e.id);
+        expensesAdded += 1;
+      });
+      // Keep the list newest-first, matching how it's added locally.
+      state.expenses.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    }
+    return { added, updated, expensesAdded };
   }
   async function shareInvite() {
     const url = buildShareUrl();
@@ -1325,7 +1369,31 @@
         };
     state.phase = "decide";
     renderAll();
-    if (!locked) confetti();
+    if (!locked) {
+      confetti();
+      // The decision people were waiting on shouldn't depend on the organiser
+      // remembering to re-send the link.
+      notifyPlanLocked(state.lockedPlan);
+    }
+  }
+
+  function notifyPlanLocked(plan) {
+    if (!plan) return;
+    try {
+      fetch("/api/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: state.reunion.code,
+          name: meName(),
+          destination: plan.destination,
+          dateLabel: plan.dateLabel,
+          kind: "locked",
+        }),
+      }).catch(() => {});
+    } catch (e) {
+      /* best-effort — locking must work with or without the server */
+    }
   }
 
   // Fire a one-off confetti burst when a clear winner is newly decided.
@@ -2560,7 +2628,9 @@
         text:
           `Amounts in USD · new expenses default to splitting between the ${base.length} ` +
           `${base.length === state.participants.length ? "people here" : "going"}. ` +
-          "Untick anyone an expense shouldn't apply to.",
+          "Untick anyone an expense shouldn't apply to. " +
+          "Expenses travel with the invite link — share it again to sync the " +
+          "ledger with everyone else.",
       })
     );
 
@@ -2921,10 +2991,22 @@
       .slice(0, 30)
       .forEach((n) => {
         const item = el("div", { class: "notif-item" });
-        item.appendChild(el("div", { class: "notif-name", text: `${n.name || "Someone"} responded` }));
+        const locked = n.kind === "locked";
+        item.appendChild(
+          el("div", {
+            class: "notif-name",
+            text: locked
+              ? `🔒 ${n.name || "The organiser"} locked the plan`
+              : `${n.name || "Someone"} responded`,
+          })
+        );
         const bits = [];
-        bits.push(n.destOk ? `✓ ${n.destination}` : `wants a different place`);
-        bits.push(n.dateOk ? `✓ ${n.dateLabel}` : `different dates`);
+        if (locked) {
+          bits.push(`${n.destination} · ${n.dateLabel}`);
+        } else {
+          bits.push(n.destOk ? `✓ ${n.destination}` : `wants a different place`);
+          bits.push(n.dateOk ? `✓ ${n.dateLabel}` : `different dates`);
+        }
         item.appendChild(el("div", { class: "notif-meta", text: bits.join(" · ") }));
         panel.appendChild(item);
       });
@@ -3388,7 +3470,7 @@
         // Same event, link opened again — resume local progress as-is and
         // just pick up anyone new who joined since.
         applySavedState(saved);
-        const { added, updated } = mergeParticipantsFromHash(hashData);
+        const { added, updated, expensesAdded } = mergeParticipantsFromHash(hashData);
         location.hash = "";
         if (state.user) {
           saveState();
@@ -3396,6 +3478,8 @@
           const bits = [];
           if (added) bits.push(`${added} new ${added === 1 ? "person" : "people"}`);
           if (updated) bits.push(`${updated} updated ${updated === 1 ? "reply" : "replies"}`);
+          if (expensesAdded)
+            bits.push(`${expensesAdded} new ${expensesAdded === 1 ? "expense" : "expenses"}`);
           if (bits.length) toast(`Welcome back — ${bits.join(" · ")}.`);
         } else {
           showScreen("register");

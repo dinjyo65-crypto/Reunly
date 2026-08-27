@@ -602,7 +602,11 @@ class Handler(SimpleHTTPRequestHandler):
                 raw = self.rfile.read(length)
                 data = json.loads(raw)
                 code = str(data.get("code", ""))[:32]
+                kind = str(data.get("kind", "reply"))[:16]
                 entry = {
+                    # "reply" = someone answered the confirm step;
+                    # "locked" = the plan was decided.
+                    "kind": kind if kind in ("reply", "locked") else "reply",
                     "name": str(data.get("name", "Someone"))[:80],
                     "destination": str(data.get("destination", ""))[:120],
                     "dateLabel": str(data.get("dateLabel", ""))[:60],
