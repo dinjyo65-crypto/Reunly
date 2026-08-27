@@ -34,7 +34,8 @@
     lockedPlan: null, // { destination, dateStart, dateEnd, dateLabel } once confirmed
     ballot: null, // { open, openedBy, options:[...], votesByParticipant:{ id:{optionId} } }
     memories: [], // [{ id, authorId, authorName, type:"note"|"photo", text, dataUrl?, ts }]
-    expenses: [], // [{ id, payerId, desc, amount(USD), ts }]
+    expenses: [], // [{ id, payerId, desc, amount(USD), ts, settlement? }]
+    deletedExpenses: [], // ids of removed expenses, so a merge can't resurrect them
     itinerarySeed: 1, // deterministic seed for the suggested itinerary
     pro: false, // Reunly Pro unlocked?
     // id -> name for people removed from the roster, so expenses they paid
@@ -106,6 +107,7 @@
           ballot: state.ballot,
           memories: state.memories,
           expenses: state.expenses,
+          deletedExpenses: state.deletedExpenses,
           itinerarySeed: state.itinerarySeed,
           pastNames: state.pastNames,
           pro: state.pro,
@@ -166,6 +168,7 @@
     state.ballot = s.ballot || null;
     state.memories = Array.isArray(s.memories) ? s.memories : [];
     state.expenses = Array.isArray(s.expenses) ? s.expenses : [];
+    state.deletedExpenses = Array.isArray(s.deletedExpenses) ? s.deletedExpenses : [];
     state.itinerarySeed = s.itinerarySeed || 1;
     state.pastNames = s.pastNames || {};
     state.pro = !!s.pro;
@@ -266,6 +269,9 @@
         id: e.id, by: e.payerId, d: e.desc, a: e.amount,
         w: e.sharedWith, s: e.settlement ? 1 : 0, ts: e.ts || 0,
       })),
+      // Deletions travel with the ledger; otherwise a union-merge from an
+      // older link brings removed expenses back.
+      xd: (state.deletedExpenses || []).slice(-MAX_EXPENSES),
     };
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
     return `${location.origin}${location.pathname}#r=${b64}`;
@@ -346,6 +352,9 @@
         // Drop anything unusable rather than letting a NaN poison every balance.
         .filter((e) => e.id && e.by && Number.isFinite(e.a) && e.a > 0);
     }
+    if (Array.isArray(data.xd)) {
+      clean.xd = data.xd.slice(0, MAX_EXPENSES).map((i) => str(i, 60)).filter(Boolean);
+    }
     if (data.locked && typeof data.locked === "object") {
       const l = data.locked;
       const start = isoOrEmpty(l.dateStart);
@@ -389,6 +398,15 @@
     };
     state.participants = data.p.map(participantFromPayload);
     if (data.locked) state.lockedPlan = data.locked;
+    // A first-time joiner previously arrived with an EMPTY ledger while the
+    // UI called settle-up the group's shared record.
+    state.expenses = Array.isArray(data.x)
+      ? data.x.map((e) => ({
+          id: e.id, payerId: e.by, desc: e.d, amount: e.a,
+          sharedWith: e.w, settlement: e.s, ts: e.ts,
+        }))
+      : [];
+    state.deletedExpenses = Array.isArray(data.xd) ? data.xd.slice() : [];
   }
   /**
    * Merge an invite payload into the roster we already have for this event.
@@ -431,10 +449,21 @@
     // Union the ledgers by id. Expenses are append-only, so anything we
     // haven't seen is simply new — no conflict resolution needed.
     let expensesAdded = 0;
+    // Deletions from either side win over the union, so removing an expense
+    // sticks instead of reappearing from whichever link is opened next.
+    if (Array.isArray(data.xd) && data.xd.length) {
+      state.deletedExpenses = Array.from(
+        new Set([...(state.deletedExpenses || []), ...data.xd])
+      );
+    }
+    const tombstoned = new Set(state.deletedExpenses || []);
+    if (tombstoned.size) {
+      state.expenses = state.expenses.filter((e) => !tombstoned.has(e.id));
+    }
     if (Array.isArray(data.x) && data.x.length) {
       const haveExpense = new Set(state.expenses.map((e) => e.id));
       data.x.forEach((e) => {
-        if (haveExpense.has(e.id)) return;
+        if (haveExpense.has(e.id) || tombstoned.has(e.id)) return;
         state.expenses.push({
           id: e.id, payerId: e.by, desc: e.d, amount: e.a,
           sharedWith: e.w, settlement: e.s, ts: e.ts,
@@ -1712,7 +1741,10 @@
     })();
     grid.appendChild(
       scoreCell(
-        myTrip ? "Your cost" : c.nights > 0 ? "Avg per person" : "Avg fare",
+        // For a family, "your cost" is the whole booking — that's the number
+        // they have to find, so show it and say who it covers.
+        myTrip ? (myTrip.party > 1 ? `Your ${myTrip.party}` : "Your cost")
+          : c.nights > 0 ? "Avg per person" : "Avg fare",
         myTrip
           ? `$${Math.round(myTrip.total)}`
           : c.avgTripCost != null
@@ -1742,7 +1774,12 @@
       body.appendChild(
         el("div", {
           class: "cost-breakdown",
-          text: `Across the group: $${Math.round(c.minTripCost)}–$${Math.round(c.maxTripCost)} per person, depending on where they're travelling from`,
+          text:
+            `Across the group: $${Math.round(c.minTripCost)}–$${Math.round(c.maxTripCost)} per person, ` +
+            "depending on where they're travelling from" +
+            (c.maxBookingCost != null && Math.round(c.maxBookingCost) > Math.round(c.maxTripCost)
+              ? ` · largest single booking $${Math.round(c.maxBookingCost)}`
+              : ""),
         })
       );
     }
@@ -2546,6 +2583,11 @@
   }
   function deleteExpense(id) {
     state.expenses = state.expenses.filter((x) => x.id !== id);
+    // Tombstone it. The merge is a union by id, so without a record of the
+    // deletion any older invite link would silently bring the expense back —
+    // and the money with it.
+    state.deletedExpenses = state.deletedExpenses || [];
+    if (!state.deletedExpenses.includes(id)) state.deletedExpenses.push(id);
     saveState();
     renderExpenses();
   }

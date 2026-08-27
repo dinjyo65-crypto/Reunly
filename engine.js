@@ -170,10 +170,20 @@
    * of round-trip flying, so a short hop stays flexible while long-haul
    * demands a real stay.
    */
+  const DAY_TRIP_MILES = 300; // same threshold estimateFare uses for drive vs fly
   function minSensibleNights(miles) {
     if (miles == null || miles <= 0) return 0;
-    const roundTripHours = flightTimeHours(miles) * 2;
-    return Math.min(7, Math.max(1, Math.round(roundTripHours / 8)));
+    // Anything within driving range can legitimately be a day trip — a local
+    // wedding, a birthday lunch, a match. Demanding an overnight there vetoed
+    // exactly the single-day events the app is meant to support.
+    if (miles <= DAY_TRIP_MILES) return 0;
+    // Beyond that, base the bar on the journey people actually face: a long
+    // drive is a long day even though flight time would call it trivial.
+    const byAir = flightTimeHours(miles);
+    const byRoad = driveTimeHours(miles);
+    // Below ~600mi most groups drive; past that flying wins.
+    const oneWayHours = miles <= 600 ? Math.min(byRoad, byAir) : byAir;
+    return Math.min(7, Math.max(1, Math.round((oneWayHours * 2) / 8)));
   }
 
   /**
@@ -182,7 +192,7 @@
    * longest journey in the group sets the bar — a weekend that works for the
    * person driving an hour is still absurd for the one flying 16.
    */
-  function tripViabilityFor(destination, participants, dateRange) {
+  function tripViabilityFor(destination, participants, dateRange, wasSubmitted = false) {
     const nights = Math.max(0, rangeDays(dateRange) - 1);
     let required = 0;
     for (const p of participants) {
@@ -191,9 +201,14 @@
       required = Math.max(required, minSensibleNights(miles));
     }
     if (!required || nights >= required) return { viability: 1, nights, required };
-    // Keep the option visible but clearly beaten, rather than silently
-    // dropping it — the group may still have a reason to pick it.
-    return { viability: Math.max(0.15, nights / required), nights, required };
+    const shortfall = nights / required;
+    // Somebody explicitly asked for this window. Even if it looks short for
+    // the journey, that's a stated preference (a destination wedding really
+    // can be one night) — discount it gently instead of ruling it out.
+    if (wasSubmitted) return { viability: Math.max(0.85, shortfall), nights, required };
+    // A window WE derived from overlapping availability gets the full check:
+    // kept visible, but clearly beaten.
+    return { viability: Math.max(0.15, shortfall), nights, required };
   }
 
   /**
@@ -594,15 +609,23 @@
         // Budget fit depends on the window as well as the place: a longer stay
         // means more nights of lodging, so it's evaluated per combination.
         const budget = budgetFitFor(dest, participants, fareProvider, dateRange);
-        const { viability, nights, required } = tripViabilityFor(dest, participants, dateRange);
+        const { viability, nights, required } = tripViabilityFor(
+          dest, participants, dateRange, submittedKeys.has(rangeKey(dateRange))
+        );
         const lodge = estimateLodging(dest, nights);
         // What each individual actually faces — an average hides the person
         // flying furthest, who is usually the one at risk of dropping out.
-        const perPerson = [];
+        // Keep PER-HEAD figures here: a family's booking total isn't
+        // comparable to a solo traveller's, and labelling it "per person"
+        // made a $1,533 family of three look like one person's share.
+        const perPerson = []; // per head
+        const perBooking = []; // what each household actually pays
         for (const p of participants) {
           if (!p.city) continue;
           const trip = tripCostFor(p.city, dest, dateRange, fareProvider, p.prefs);
-          if (trip) perPerson.push(trip.total);
+          if (!trip) continue;
+          perBooking.push(trip.total);
+          perPerson.push(trip.total / Math.max(1, trip.party));
         }
         const avgTripCost = perPerson.length
           ? perPerson.reduce((s, v) => s + v, 0) / perPerson.length
@@ -624,6 +647,9 @@
           avgTripCost,
           minTripCost: perPerson.length ? Math.min(...perPerson) : null,
           maxTripCost: perPerson.length ? Math.max(...perPerson) : null,
+          // Largest single booking in the group — what the biggest household
+          // is actually asked to find.
+          maxBookingCost: perBooking.length ? Math.max(...perBooking) : null,
           viability, minNights: required,
         });
       }

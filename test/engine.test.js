@@ -125,6 +125,33 @@ test("a one-night stopover can't win a long-haul trip", () => {
   }
 });
 
+test("a one-day local event is not treated as an unviable trip", () => {
+  // A wedding, birthday or match is legitimately a single day. The viability
+  // rule (added for long-haul stopovers) must not veto them.
+  const day = [{ start: "2027-02-13", end: "2027-02-13" }];
+  const people = [
+    person({ city: "Mumbai, India", destinations: ["Pune, India"], dates: day }),
+    person({ city: "Pune, India", destinations: ["Pune, India"], dates: day }),
+  ];
+  const top = E.rankCombinations(people)[0];
+  assert.strictEqual(top.viability, 1, "a local day event needs no overnight");
+  assert.strictEqual(top.nights, 0);
+});
+
+test("a window someone actually proposed is discounted, never vetoed", () => {
+  // We invent overlap windows, so a derived sliver deserves the full check —
+  // but a range a person deliberately entered is a stated preference.
+  const people = [
+    person({ city: "London, UK", destinations: ["Bali, Indonesia"], dates: [{ start: "2026-12-19", end: "2026-12-23" }] }),
+    person({ city: "New York, NY", destinations: ["Bali, Indonesia"], dates: [{ start: "2026-12-22", end: "2026-12-29" }] }),
+  ];
+  const combos = E.rankCombinations(people);
+  const submitted = combos.find((c) => c.dateRange.start === "2026-12-19" && c.dateRange.end === "2026-12-23");
+  const derived = combos.find((c) => c.nights === 1);
+  assert.ok(submitted.viability >= 0.85, "a proposed window keeps most of its score");
+  assert.ok(derived.viability <= 0.25, "a derived sliver is still clearly beaten");
+});
+
 test("viability doesn't punish a short trip that needs no flying", () => {
   // The same rule must not make a weekend away look unreasonable.
   const people = [
