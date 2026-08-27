@@ -32,6 +32,10 @@
     fromInvite: false, // arrived via a shared invite link
     demoMode: false, // sample group loaded?
     lockedPlan: null, // { destination, dateStart, dateEnd, dateLabel } once confirmed
+    // When the lock last changed, in ms. Locking and UNLOCKING both stamp it,
+    // so an invite link can carry "the plan moved" and "the plan was called
+    // off" as distinct, orderable facts rather than only "there is a plan".
+    lockTs: 0,
     ballot: null, // { open, openedBy, options:[...], votesByParticipant:{ id:{optionId} } }
     memories: [], // [{ id, authorId, authorName, type:"note"|"photo", text, dataUrl?, ts }]
     expenses: [], // [{ id, payerId, desc, amount(USD), ts, settlement? }]
@@ -104,6 +108,7 @@
           currencyMode: state.currencyMode,
           demoMode: state.demoMode,
           lockedPlan: state.lockedPlan,
+          lockTs: state.lockTs,
           ballot: state.ballot,
           memories: state.memories,
           expenses: state.expenses,
@@ -170,6 +175,7 @@
     state.currencyMode = s.currencyMode || "local";
     state.demoMode = !!s.demoMode;
     state.lockedPlan = s.lockedPlan || null;
+    state.lockTs = s.lockTs || 0;
     state.ballot = s.ballot || null;
     state.memories = Array.isArray(s.memories) ? s.memories : [];
     state.expenses = Array.isArray(s.expenses) ? s.expenses : [];
@@ -259,6 +265,9 @@
       // The agreed plan travels with the link, so a joiner sees what was
       // decided rather than an apparently-undecided event.
       locked: state.lockedPlan || null,
+      // Sent even when `locked` is null: that combination is how a link says
+      // "the plan was unlocked", which the old payload simply could not express.
+      lts: state.lockTs || 0,
       // Privacy: the invite link does NOT carry anyone's email address. The
       // participant id IS included — it's a random local token, not PII, and
       // without it the same person re-appears as a duplicate on every merge.
@@ -358,11 +367,17 @@
           };
         })
         // Drop anything unusable rather than letting a NaN poison every balance.
-        .filter((e) => e.id && e.by && Number.isFinite(e.a) && e.a > 0);
+        // Negative amounts are legitimate — a refund line — so only zero and
+        // non-numbers are rejected. Requiring > 0 here silently deleted every
+        // refund the moment the ledger travelled through an invite link.
+        .filter((e) => e.id && e.by && Number.isFinite(e.a) && e.a !== 0);
     }
     if (Array.isArray(data.xd)) {
       clean.xd = data.xd.slice(0, MAX_EXPENSES).map((i) => str(i, 60)).filter(Boolean);
     }
+    // Carried even when there is no lock: `locked: null` with a newer stamp is
+    // how a link says the organiser called the plan off.
+    clean.lts = Number.isFinite(data.lts) ? data.lts : 0;
     if (data.locked && typeof data.locked === "object") {
       const l = data.locked;
       const start = isoOrEmpty(l.dateStart);
@@ -409,6 +424,7 @@
     };
     state.participants = data.p.map(participantFromPayload);
     if (data.locked) state.lockedPlan = data.locked;
+    state.lockTs = data.lts || 0;
     // A first-time joiner previously arrived with an EMPTY ledger while the
     // UI called settle-up the group's shared record.
     state.expenses = Array.isArray(data.x)
@@ -440,7 +456,28 @@
       data.p,
       participantFromPayload
     );
-    if (data.locked && !state.lockedPlan) state.lockedPlan = data.locked;
+    // The plan itself was merged only when this device had no lock at all, so
+    // a organiser who moved the dates could never tell anyone: every guest who
+    // had already opened the first link stayed pinned to the dead plan, with
+    // their countdown, .ics and Trip Pack all quoting it. Newest write wins,
+    // exactly as participant answers already do.
+    let lockChanged = null;
+    const incomingLockTs = data.lts || 0;
+    if (incomingLockTs > (state.lockTs || 0)) {
+      const before = state.lockedPlan;
+      state.lockedPlan = data.locked || null;
+      state.lockTs = incomingLockTs;
+      const same =
+        before &&
+        state.lockedPlan &&
+        before.destination === state.lockedPlan.destination &&
+        before.dateStart === state.lockedPlan.dateStart &&
+        before.dateEnd === state.lockedPlan.dateEnd;
+      if (!same) lockChanged = state.lockedPlan;
+    } else if (!state.lockedPlan && data.locked && !incomingLockTs) {
+      // A link made before locks were stamped. Better than dropping the plan.
+      state.lockedPlan = data.locked;
+    }
     // Union the ledgers by id. Expenses are append-only, so anything we
     // haven't seen is simply new — no conflict resolution needed.
     let expensesAdded = 0;
@@ -469,7 +506,7 @@
       // Keep the list newest-first, matching how it's added locally.
       state.expenses.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     }
-    return { added, updated, expensesAdded };
+    return { added, updated, expensesAdded, lockChanged };
   }
   async function shareInvite() {
     const url = buildShareUrl();
@@ -1494,6 +1531,7 @@
           dateEnd: c.dateRange.end,
           dateLabel: c.dateLabel,
         };
+    state.lockTs = Date.now();
     state.phase = "decide";
     renderAll();
     if (!locked) {
@@ -2269,9 +2307,14 @@
     const plan = state.lockedPlan;
     if (!plan) return;
     const clean = (iso) => (iso || "").replace(/-/g, "");
-    const endD = new Date(plan.dateEnd + "T00:00:00");
-    endD.setDate(endD.getDate() + 1); // DTEND is exclusive
-    const endStr = endD.toISOString().slice(0, 10).replace(/-/g, "");
+    // Parse as UTC. "2026-12-26T00:00:00" with no suffix is LOCAL midnight,
+    // and toISOString() then converts back to UTC — so at any positive offset
+    // (all of Europe, India, Asia, Australia) the incremented day landed back
+    // on the 26th, and because DTEND is exclusive the trip ended on the 25th.
+    const endStr = new Date(Date.parse(plan.dateEnd + "T00:00:00Z") + 86400000)
+      .toISOString()
+      .slice(0, 10)
+      .replace(/-/g, "");
     const title = `${state.reunion.name || "Get-together"} — ${plan.destination}`;
     const ics = [
       "BEGIN:VCALENDAR",
@@ -3785,7 +3828,8 @@
         // Same event, link opened again — resume local progress as-is and
         // just pick up anyone new who joined since.
         applySavedState(saved);
-        const { added, updated, expensesAdded } = mergeParticipantsFromHash(hashData);
+        const { added, updated, expensesAdded, lockChanged } =
+          mergeParticipantsFromHash(hashData);
         location.hash = "";
         if (state.user) {
           saveState();
@@ -3796,6 +3840,18 @@
           if (expensesAdded)
             bits.push(`${expensesAdded} new ${expensesAdded === 1 ? "expense" : "expenses"}`);
           if (bits.length) toast(`Welcome back — ${bits.join(" · ")}.`);
+          // A moved or cancelled trip must never arrive quietly — this is the
+          // one change where saying nothing gets people to the wrong airport
+          // in the wrong week. Announce it after the merge summary.
+          if (lockChanged !== null) {
+            setTimeout(() => {
+              toast(
+                lockChanged
+                  ? `📌 The plan changed — now ${lockChanged.destination}, ${lockChanged.dateLabel}`
+                  : "📌 The organiser unlocked the plan — nothing is fixed yet"
+              );
+            }, bits.length ? 2600 : 0);
+          }
         } else {
           showScreen("register");
         }
