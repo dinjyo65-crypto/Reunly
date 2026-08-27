@@ -2695,10 +2695,7 @@
     renderExpenses();
   }
   /** Who a new expense defaults to being split between: the confirmed goers. */
-  function splitBase() {
-    const goers = state.participants.filter((p) => p.rsvp === "in");
-    return goers.length >= 2 ? goers : state.participants;
-  }
+  const splitBase = () => E.splitBaseFor(state.participants);
   /**
    * Balance = what you paid minus your share of each expense you're part of.
    *
@@ -2706,72 +2703,12 @@
    * shares can differ per expense and latecomers aren't retroactively charged.
    * Legacy expenses saved before this existed fall back to the current base.
    */
+  // Thin wrapper: the settle-up maths lives in engine.js so it can be tested
+  // directly — it's the only code in the app that decides real money.
   function computeSplit() {
-    const base = splitBase();
-    const baseIds = base.map((p) => p.id);
-    const alive = new Set(state.participants.map((p) => p.id));
-    // Settlements move money between people; they are not new group spend.
-    // Counting them inflated the trip total every time someone paid a debt.
-    const spend = state.expenses.filter((x) => !x.settlement);
-    const total = spend.reduce((s, x) => s + x.amount, 0);
-    const paid = {};
-    const owed = {};
-    state.expenses.forEach((x) => {
-      paid[x.payerId] = (paid[x.payerId] || 0) + x.amount;
-      // Only split between people who still exist in the roster, so removing
-      // someone can't strand part of an expense unassigned.
-      let sharers = (Array.isArray(x.sharedWith) && x.sharedWith.length ? x.sharedWith : baseIds)
-        .filter((id) => alive.has(id));
-      if (!sharers.length) sharers = [x.payerId]; // degenerate: payer covers it
-      // Largest-remainder allocation in whole cents. A plain division leaves
-      // orphan cents ($100 across 3 shows three $33.33s against a $100 total),
-      // which makes a settle-up list quietly fail to balance.
-      const cents = Math.round(x.amount * 100);
-      const per = Math.floor(cents / sharers.length);
-      let remainder = cents - per * sharers.length;
-      sharers.forEach((id, i) => {
-        const extra = i < remainder ? 1 : 0;
-        owed[id] = (owed[id] || 0) + (per + extra) / 100;
-      });
-    });
-    // Whole cents, so the headline "each" figure reconciles with the total
-    // instead of leaving an orphan penny.
-    const share = base.length ? Math.round((total / base.length) * 100) / 100 : 0;
-    const shareExact = base.length ? (total * 100) % base.length === 0 : true;
-    const balances = new Map();
-    const inBase = new Set(baseIds);
-    // Include anyone who PAID as well as anyone still on the roster. If a payer
-    // was removed we'd otherwise drop their credit while still charging their
-    // share to everyone else — the debts would silently vanish and the
-    // settle-up list would render empty while money was still owed.
-    const relevant = new Set([
-      ...state.participants.map((p) => p.id),
-      ...Object.keys(paid),
-    ]);
-    relevant.forEach((id) => {
-      const b = (paid[id] || 0) - (owed[id] || 0);
-      if (Math.abs(b) > 0.005 || inBase.has(id)) balances.set(id, b);
-    });
-    // Greedy settle-up: biggest debtor pays biggest creditor.
-    const debtors = [], creditors = [];
-    balances.forEach((b, id) => {
-      if (b < -0.01) debtors.push({ id, amt: -b });
-      else if (b > 0.01) creditors.push({ id, amt: b });
-    });
-    debtors.sort((a, b) => b.amt - a.amt);
-    creditors.sort((a, b) => b.amt - a.amt);
-    const transfers = [];
-    let di = 0, ci = 0;
-    while (di < debtors.length && ci < creditors.length) {
-      const pay = Math.min(debtors[di].amt, creditors[ci].amt);
-      transfers.push({ from: debtors[di].id, to: creditors[ci].id, amount: pay });
-      debtors[di].amt -= pay;
-      creditors[ci].amt -= pay;
-      if (debtors[di].amt < 0.01) di++;
-      if (creditors[ci].amt < 0.01) ci++;
-    }
-    return { total, share, shareExact, base, balances, transfers, spend };
+    return E.computeSettlement(state.participants, state.expenses);
   }
+
   /**
    * Remember a departed participant's name so expenses they paid still read
    * sensibly ("Ana → Bob") instead of degrading to "Someone".

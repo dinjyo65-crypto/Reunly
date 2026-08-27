@@ -816,6 +816,87 @@
     return Math.round((target - today) / 86400000);
   }
 
+  // ---------------------------------------------------------------------------
+  // Expense splitting / settle-up
+  // ---------------------------------------------------------------------------
+
+  /** Who an expense is shared between by default: confirmed goers, else all. */
+  function splitBaseFor(participants) {
+    const goers = participants.filter((p) => p.rsvp === "in");
+    return goers.length >= 2 ? goers : participants;
+  }
+
+  /**
+   * Work out who owes whom. Pure so it can be tested — this is the only code in
+   * the app that decides real money between real people.
+   *
+   * @param participants roster (used for the default split and to detect
+   *                     people who have been removed)
+   * @param expenses     [{ id, payerId, amount, sharedWith?, settlement? }]
+   */
+  function computeSettlement(participants, expenses) {
+    const base = splitBaseFor(participants);
+    const baseIds = base.map((p) => p.id);
+    const alive = new Set(participants.map((p) => p.id));
+    // Settlements move money between people; they are not new group spend.
+    // Counting them inflated the trip total every time someone paid a debt.
+    const spend = expenses.filter((x) => !x.settlement);
+    const total = spend.reduce((s, x) => s + x.amount, 0);
+    const paid = {};
+    const owed = {};
+    expenses.forEach((x) => {
+      paid[x.payerId] = (paid[x.payerId] || 0) + x.amount;
+      // Only split between people who still exist in the roster, so removing
+      // someone can't strand part of an expense unassigned.
+      let sharers = (Array.isArray(x.sharedWith) && x.sharedWith.length ? x.sharedWith : baseIds)
+        .filter((id) => alive.has(id));
+      if (!sharers.length) sharers = [x.payerId]; // degenerate: payer covers it
+      // Largest-remainder allocation in whole cents. A plain division leaves
+      // orphan cents ($100 across 3 shows three $33.33s against a $100 total),
+      // which makes a settle-up list quietly fail to balance.
+      const cents = Math.round(x.amount * 100);
+      const per = Math.floor(cents / sharers.length);
+      const remainder = cents - per * sharers.length;
+      sharers.forEach((id, i) => {
+        owed[id] = (owed[id] || 0) + (per + (i < remainder ? 1 : 0)) / 100;
+      });
+    });
+    const share = base.length ? Math.round((total / base.length) * 100) / 100 : 0;
+    const shareExact = base.length ? Math.round(total * 100) % base.length === 0 : true;
+    const balances = new Map();
+    const inBase = new Set(baseIds);
+    // Include anyone who PAID as well as anyone still on the roster. If a payer
+    // was removed we'd otherwise drop their credit while still charging their
+    // share to everyone else — the debts would silently vanish and the
+    // settle-up list would render empty while money was still owed.
+    const relevant = new Set([...participants.map((p) => p.id), ...Object.keys(paid)]);
+    relevant.forEach((id) => {
+      const b = (paid[id] || 0) - (owed[id] || 0);
+      if (Math.abs(b) > 0.005 || inBase.has(id)) balances.set(id, b);
+    });
+    // Greedy settle-up: biggest debtor pays biggest creditor.
+    const debtors = [];
+    const creditors = [];
+    balances.forEach((b, id) => {
+      if (b < -0.01) debtors.push({ id, amt: -b });
+      else if (b > 0.01) creditors.push({ id, amt: b });
+    });
+    debtors.sort((a, b) => b.amt - a.amt);
+    creditors.sort((a, b) => b.amt - a.amt);
+    const transfers = [];
+    let di = 0;
+    let ci = 0;
+    while (di < debtors.length && ci < creditors.length) {
+      const pay = Math.min(debtors[di].amt, creditors[ci].amt);
+      transfers.push({ from: debtors[di].id, to: creditors[ci].id, amount: pay });
+      debtors[di].amt -= pay;
+      creditors[ci].amt -= pay;
+      if (debtors[di].amt < 0.01) di += 1;
+      if (creditors[ci].amt < 0.01) ci += 1;
+    }
+    return { total, share, shareExact, base, balances, transfers, spend };
+  }
+
   // External deep-link builders (verification, not integration).
   // encodeURIComponent guards against query-string injection.
   function googleFlightsLink(from, to) {
@@ -864,6 +945,8 @@
     tallyDates,
     summarizePrefs,
     daysUntil,
+    splitBaseFor,
+    computeSettlement,
     // scoring
     avgFareTo,
     budgetFitFor,

@@ -555,3 +555,78 @@ test("a parent with kids is costed for the whole party", () => {
   assert.ok(family.lodging > solo.lodging, "a bigger room costs more");
   assert.ok(family.total > solo.total * 2, "a family of three is not a rounding error");
 });
+
+// ---- Settle-up (real money, so pin the edge cases) --------------------------
+/** Roster helper: everyone confirmed "in". */
+function goers(...names) {
+  return names.map((n) => person({ id: n, name: n, rsvp: "in" }));
+}
+const sumTransfers = (t) => t.reduce((s, x) => s + x.amount, 0);
+
+test("an even split leaves nobody owing anything", () => {
+  const people = goers("a", "b");
+  const r = E.computeSettlement(people, [
+    { id: "x1", payerId: "a", amount: 100, sharedWith: ["a", "b"] },
+    { id: "x2", payerId: "b", amount: 100, sharedWith: ["a", "b"] },
+  ]);
+  assert.strictEqual(r.total, 200);
+  assert.strictEqual(r.transfers.length, 0, "square already — no transfers");
+});
+
+test("an indivisible amount still balances to the cent", () => {
+  // $100 across 3 was the reported symptom: three $33.33 shares against a
+  // $100 total, so the ledger silently failed to reconcile.
+  const people = goers("a", "b", "c");
+  const r = E.computeSettlement(people, [
+    { id: "x1", payerId: "a", amount: 100, sharedWith: ["a", "b", "c"] },
+  ]);
+  const credit = r.balances.get("a");
+  assert.ok(Math.abs(sumTransfers(r.transfers) - credit) < 0.005,
+    "transfers must exactly repay the payer");
+  const owedTotal = ["a", "b", "c"].reduce((s, id) => s - Math.min(0, r.balances.get(id)), 0);
+  assert.ok(Math.abs(owedTotal - credit) < 0.005, "no orphan cents");
+  assert.strictEqual(r.shareExact, false, "and the UI is told it doesn't divide evenly");
+});
+
+test("a repayment settles the debt without becoming group spend", () => {
+  const people = goers("a", "b");
+  const base = [{ id: "x1", payerId: "a", amount: 100, sharedWith: ["a", "b"] }];
+  const before = E.computeSettlement(people, base);
+  assert.strictEqual(before.transfers.length, 1);
+  assert.strictEqual(Math.round(before.transfers[0].amount), 50);
+  // b pays a back — recorded as a settlement, not a new cost.
+  const after = E.computeSettlement(people, [
+    ...base,
+    { id: "s1", payerId: "b", amount: 50, sharedWith: ["a"], settlement: true },
+  ]);
+  assert.strictEqual(after.total, 100, "repaying a debt must not inflate the trip total");
+  assert.strictEqual(after.transfers.length, 0, "and the debt is cleared");
+});
+
+test("an expense only charges the people it was scoped to", () => {
+  const people = goers("a", "b", "c");
+  const r = E.computeSettlement(people, [
+    { id: "x1", payerId: "a", amount: 60, sharedWith: ["a", "b"] }, // c wasn't there
+  ]);
+  assert.strictEqual(r.balances.get("c"), 0, "c owes nothing for a dinner they skipped");
+  assert.strictEqual(Math.round(r.transfers[0].amount), 30);
+  assert.strictEqual(r.transfers[0].from, "b");
+});
+
+test("removing someone doesn't make their debt vanish", () => {
+  // The payer left the roster; the money they fronted is still owed.
+  const remaining = goers("b", "c");
+  const r = E.computeSettlement(remaining, [
+    { id: "x1", payerId: "gone", amount: 90, sharedWith: ["b", "c"] },
+  ]);
+  assert.ok(r.transfers.length > 0, "debts must not silently disappear");
+  assert.ok(Math.abs(sumTransfers(r.transfers) - 90) < 0.005, "the full amount is still owed");
+  assert.ok(r.transfers.every((t) => t.to === "gone"), "and it's owed to whoever paid");
+});
+
+test("splitBaseFor falls back to everyone before anyone has RSVP'd", () => {
+  const undecided = [person({ id: "a" }), person({ id: "b" })];
+  assert.strictEqual(E.splitBaseFor(undecided).length, 2, "don't split between nobody");
+  const mixed = [person({ id: "a", rsvp: "in" }), person({ id: "b", rsvp: "in" }), person({ id: "c", rsvp: "out" })];
+  assert.deepStrictEqual(E.splitBaseFor(mixed).map((p) => p.id), ["a", "b"]);
+});
