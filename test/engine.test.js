@@ -664,3 +664,28 @@ test("an unknown currency code falls back to USD instead of NaN", () => {
   assert.strictEqual(E.formatExact(10, "ZZZ"), "$10.00");
   assert.strictEqual(E.toUSD(10, "ZZZ"), 10);
 });
+
+test("a refund reduces what the group owes the payer", () => {
+  const people = goers("a", "b");
+  // a fronts a £200 deposit, then £50 of it comes back.
+  const r = E.computeSettlement(people, [
+    { id: "x1", payerId: "a", amount: 200, sharedWith: ["a", "b"] },
+    { id: "x2", payerId: "a", amount: -50, sharedWith: ["a", "b"] },
+  ]);
+  assert.strictEqual(r.total, 150, "the group spent 150 net");
+  assert.strictEqual(r.transfers.length, 1);
+  assert.strictEqual(Math.round(r.transfers[0].amount), 75, "b owes half of the net, not half of the gross");
+  assert.strictEqual(r.transfers[0].from, "b");
+});
+
+test("a refund to the wrong person flips who owes whom", () => {
+  // b was refunded for something a paid for — so b now owes a more, not less.
+  const people = goers("a", "b");
+  const r = E.computeSettlement(people, [
+    { id: "x1", payerId: "a", amount: 100, sharedWith: ["a", "b"] },
+    { id: "x2", payerId: "b", amount: -20, sharedWith: ["a", "b"] },
+  ]);
+  assert.strictEqual(r.total, 80);
+  assert.strictEqual(r.transfers[0].from, "b");
+  assert.strictEqual(Math.round(r.transfers[0].amount), 60, "b's 40 share plus the 20 they pocketed");
+});

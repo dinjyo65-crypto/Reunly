@@ -2680,7 +2680,11 @@
 
   function addExpense(payerId, desc, amount, sharedWith) {
     const amt = parseFloat(amount);
-    if (!payerId || !desc.trim() || Number.isNaN(amt) || amt <= 0) {
+    // Negatives are allowed on purpose: a deposit refund, a cancelled booking
+    // or a mistyped amount all need correcting, and the only way to do that
+    // without a negative line was to delete the original and lose the record
+    // of what was actually paid. Zero is still rejected — it changes nothing.
+    if (!payerId || !desc.trim() || Number.isNaN(amt) || amt === 0) {
       toast("Enter a payer, description and amount");
       return;
     }
@@ -2774,7 +2778,8 @@
     });
     const descIn = el("input", { type: "text", placeholder: "What for? e.g. Villa deposit" });
     const amtIn = el("input", {
-      type: "number", min: "0", step: "0.01", placeholder: displayCode(), inputmode: "decimal",
+      // No min: a refund is entered as a negative line.
+      type: "number", step: "0.01", placeholder: displayCode(), inputmode: "decimal",
     });
     form.appendChild(payerSel);
     form.appendChild(descIn);
@@ -2850,7 +2855,12 @@
       }
       w.appendChild(el("div", { class: "exp-meta", text: `paid by ${pName(x.payerId)}${scope}` }));
       r.appendChild(w);
-      r.appendChild(el("span", { class: "exp-amt", text: money(x.amount) }));
+      r.appendChild(
+        el("span", {
+          class: `exp-amt${x.amount < 0 ? " refund" : ""}`,
+          text: x.amount < 0 ? `refund ${money(Math.abs(x.amount))}` : money(x.amount),
+        })
+      );
       if (state.role === "organizer" || x.payerId === state.me) {
         r.appendChild(
           el("button", { class: "icon-btn sm", "aria-label": "Delete expense", text: "✕", onClick: () => deleteExpense(x.id) })

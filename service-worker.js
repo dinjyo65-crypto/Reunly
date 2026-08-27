@@ -9,7 +9,7 @@
  * Bump CACHE_VERSION whenever shell files change.
  */
 
-const CACHE_VERSION = "reunly-v29";
+const CACHE_VERSION = "reunly-v30";
 const SHELL = [
   "index.html",
   "styles.css",
@@ -22,8 +22,22 @@ const SHELL = [
 ];
 
 self.addEventListener("install", (event) => {
+  // Per-file, not addAll: addAll is atomic, so one 404 on any shell file threw
+  // away the whole precache and left the app with no offline support at all —
+  // silently, because nothing surfaces an install failure to the user.
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting())
+    caches
+      .open(CACHE_VERSION)
+      .then((cache) =>
+        Promise.all(
+          SHELL.map((file) =>
+            cache.add(file).catch((err) => {
+              console.warn(`[sw] could not precache ${file}`, err);
+            })
+          )
+        )
+      )
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -43,14 +57,39 @@ self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/")) return; // fares stay live
 
+  const isNavigation =
+    event.request.mode === "navigate" || event.request.destination === "document";
+
   // Network-first: fetch fresh, update cache, fall back to cache when offline.
   event.respondWith(
     fetch(event.request)
       .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE_VERSION).then((cache) => cache.put(event.request, copy));
+        // Only cache real successes. A transient 502 from the host used to be
+        // written into the cache and then served as the offline fallback
+        // indefinitely — the app would keep showing an error page long after
+        // the server recovered.
+        if (res.ok && res.type === "basic") {
+          const copy = res.clone();
+          caches.open(CACHE_VERSION).then((cache) => cache.put(event.request, copy));
+        }
         return res;
       })
-      .catch(() => caches.match(event.request))
+      .catch(async () => {
+        const hit = await caches.match(event.request);
+        if (hit) return hit;
+        // A miss used to resolve to undefined, which respondWith turns into an
+        // opaque network error — a blank tab with no explanation. Offline
+        // navigations get the cached shell instead; the app runs from
+        // localStorage, so it is genuinely usable.
+        if (isNavigation) {
+          const shell = await caches.match("index.html");
+          if (shell) return shell;
+        }
+        return new Response("Offline and not cached.", {
+          status: 503,
+          statusText: "Offline",
+          headers: { "Content-Type": "text/plain" },
+        });
+      })
   );
 });

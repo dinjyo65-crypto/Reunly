@@ -880,6 +880,8 @@ a:focus-visible {
 .exp-desc { font-size: 0.88rem; font-weight: 650; }
 .exp-meta { font-size: 0.7rem; color: var(--text-dim); }
 .exp-amt { font-size: 0.95rem; font-weight: 750; flex: 0 0 auto; }
+/* A refund is money coming back, so it must not read like another cost. */
+.exp-amt.refund { color: var(--good); font-weight: 650; }
 .exp-total {
   margin-top: 12px; font-size: 0.9rem; font-weight: 750; text-align: right;
   color: var(--accent);
