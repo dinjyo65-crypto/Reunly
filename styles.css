@@ -505,6 +505,14 @@ a:focus-visible {
 [data-theme="light"] .bar { background: rgba(20, 26, 46, 0.1); }
 [data-theme="light"] .chip,
 [data-theme="light"] .badge.gray { color: var(--text); }
+/* Amber-on-near-white fails WCAG badly, and these carry the warnings that
+   matter most (over budget, estimated figures). Darken for light mode. */
+[data-theme="light"] {
+  --warn: #92620b;
+  --good: #0f7a52;
+  --danger: #b3243c;
+}
+[data-theme="light"] .budget-warn { background: rgba(146, 98, 11, 0.1); border-color: rgba(146, 98, 11, 0.4); }
 [data-theme="light"] .rec-photo-pin { background: rgba(255,255,255,0.7); color: #161c2e; border-color: rgba(0,0,0,0.1); }
 
 /* ---- Countdown ---- */
@@ -969,4 +977,12 @@ a:focus-visible {
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* Storage-full warning: only appears when writes are actually failing */
+.storage-warning {
+  margin: 10px 0 0; padding: 11px 14px; border-radius: var(--radius-sm);
+  background: var(--danger-soft, rgba(251, 113, 133, 0.14));
+  border: 1px solid var(--danger);
+  color: var(--text); font-size: 0.8rem; line-height: 1.45;
 }

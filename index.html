@@ -126,6 +126,9 @@
 
       <!-- Demo-mode banner -->
       <div class="demo-banner" id="demoBanner" hidden></div>
+      <!-- Shown only when localStorage refuses writes, so a silent loss of
+           every later change becomes visible. -->
+      <div class="storage-warning" id="storageWarning" role="status" hidden></div>
 
       <!-- Countdown (pinned once a plan is locked) -->
       <div class="countdown" id="countdown" hidden></div>

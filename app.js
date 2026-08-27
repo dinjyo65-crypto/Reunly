@@ -97,9 +97,31 @@
           notifSeen: state.notifSeen,
         })
       );
+      storageFailed = false;
       return true;
     } catch (e) {
-      return false; // storage unavailable / full — prototype still works in-memory
+      // Silence here meant every later edit, RSVP and expense vanished on
+      // reload with no hint anything was wrong. Tell the user once.
+      if (!storageFailed) {
+        storageFailed = true;
+        try {
+          toast("Out of space — changes aren't being saved on this device");
+        } catch (_) {
+          /* toast may not exist yet during boot */
+        }
+      }
+      renderStorageWarning();
+      return false;
+    }
+  }
+  let storageFailed = false;
+  function renderStorageWarning() {
+    const bar = document.getElementById("storageWarning");
+    if (!bar) return;
+    bar.hidden = !storageFailed;
+    if (storageFailed && !bar.textContent) {
+      bar.textContent =
+        "⚠️ This device is out of storage, so new changes aren't being saved. Remove some memory-wall photos to free space.";
     }
   }
   // Parse saved localStorage state WITHOUT applying it to `state` yet — boot
@@ -169,7 +191,19 @@
   // app.js and fares.js after an update), clear caches + the SW and reload ONCE
   // per session so the user recovers without touching DevTools.
   let recovering = false;
-  async function selfHeal() {
+  // Only a version mismatch between cached files justifies wiping the cache.
+  // Reloading on ANY error hid real bugs behind a mystery refresh and threw
+  // away offline capability as a side effect.
+  const STALE_ASSET = /(ReunlyEngine|ReunlyData|ReunlyFares)[^]{0,40}(is not defined|undefined)/i;
+  function looksLikeStaleAssets(evt) {
+    const msg =
+      (evt && evt.message) ||
+      (evt && evt.reason && (evt.reason.message || String(evt.reason))) ||
+      "";
+    return STALE_ASSET.test(String(msg));
+  }
+  async function selfHeal(evt) {
+    if (evt && !looksLikeStaleAssets(evt)) return; // a real bug — let it surface
     if (recovering) return;
     let already = false;
     try {
@@ -216,12 +250,75 @@
   }
   // Parse an invite-link hash WITHOUT applying it — see peekSavedState() above
   // for why boot needs to look at both before it leaps.
+  // An invite link is untrusted input: it can be edited, truncated, or crafted.
+  // Everything downstream (date maths, .ics export, rendering) assumes strings
+  // and sane sizes, so clamp the payload at the door rather than letting a bad
+  // link throw somewhere far away — or hang the tab with a huge date list.
+  const MAX_PEOPLE = 60;
+  const MAX_ROWS = 12; // ranked dates / destinations per person
+  const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+  const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
+  const isoOrEmpty = (v) => (typeof v === "string" && ISO_DATE.test(v) ? v : "");
+
+  function sanitizePayload(data) {
+    if (!data || typeof data !== "object" || !Array.isArray(data.p)) return null;
+    const clean = {
+      code: str(data.code, 40),
+      name: str(data.name, 120),
+      type: str(data.type, 60),
+      p: data.p.slice(0, MAX_PEOPLE).map((x) => {
+        const src = x && typeof x === "object" ? x : {};
+        const dates = Array.isArray(src.d) ? src.d.slice(0, MAX_ROWS) : [];
+        const dests = Array.isArray(src.x) ? src.x.slice(0, MAX_ROWS) : [];
+        const pr = src.pr && typeof src.pr === "object" ? src.pr : {};
+        return {
+          id: str(src.id, 40),
+          n: str(src.n, 80),
+          e: str(src.e, 120),
+          c: str(src.c, 120),
+          d: dates.map((d) => ({
+            start: isoOrEmpty(d && d.start),
+            end: isoOrEmpty(d && d.end),
+          })),
+          x: dests.map((d) => str(d, 120)),
+          pr: {
+            budget: str(String(pr.budget == null ? "" : pr.budget), 12),
+            food: str(pr.food, 40),
+            accommodation:
+              pr.accommodation === true || pr.accommodation === false ? pr.accommodation : null,
+            kids: Math.max(0, Math.min(20, parseInt(pr.kids, 10) || 0)),
+            accessibility: str(pr.accessibility, 200),
+            activities: Array.isArray(pr.activities)
+              ? pr.activities.slice(0, 20).map((a) => str(a, 40)).filter(Boolean)
+              : [],
+          },
+          rsvp: ["in", "out", "no_response"].includes(src.rsvp) ? src.rsvp : "no_response",
+          dc: src.dc === true || src.dc === false ? src.dc : null,
+          xc: src.xc === true || src.xc === false ? src.xc : null,
+          ts: Number.isFinite(src.ts) ? src.ts : 0,
+        };
+      }),
+    };
+    if (data.locked && typeof data.locked === "object") {
+      const l = data.locked;
+      const start = isoOrEmpty(l.dateStart);
+      const end = isoOrEmpty(l.dateEnd);
+      const dest = str(l.destination, 120);
+      // Only accept a lock that's actually usable; a half-formed one would
+      // surface as a broken countdown or a crash in the calendar export.
+      if (start && end && dest) {
+        clean.locked = { destination: dest, dateStart: start, dateEnd: end, dateLabel: str(l.dateLabel, 60) };
+      }
+    }
+    return clean;
+  }
+
   function peekHashPayload() {
     const m = (location.hash || "").match(/^#r=(.+)$/);
     if (!m) return null;
     try {
       const data = JSON.parse(decodeURIComponent(escape(atob(m[1]))));
-      if (data && Array.isArray(data.p)) return data;
+      return sanitizePayload(data);
     } catch (e) {
       /* malformed link — ignore */
     }
@@ -1162,9 +1259,14 @@
   function addRecPhoto(card, dest) {
     const cached = window.ReunlyFares.getCachedPhoto(dest);
     const banner = el("div", { class: "rec-photo" });
-    if (cached) {
+    // This is the only spot that builds CSS from a fetched string. A value
+    // containing a quote or paren would break out of url() and inject
+    // declarations, so accept plain https URLs only.
+    const safePhoto =
+      typeof cached === "string" && /^https:\/\/[^"')\s]+$/.test(cached) ? cached : null;
+    if (safePhoto) {
       banner.style.backgroundImage =
-        `linear-gradient(180deg, rgba(8,11,22,0.15), rgba(8,11,22,0.85)), url("${cached}")`;
+        `linear-gradient(180deg, rgba(8,11,22,0.15), rgba(8,11,22,0.85)), url("${safePhoto}")`;
       banner.classList.add("has-photo");
     } else if (cached === undefined && photoReqDest !== dest) {
       // Not yet fetched — request once, then re-render recommendations.
@@ -1195,10 +1297,13 @@
   }
 
   function lockState(c) {
-    return (
+    // Compare real dates, not the display label: rangeLabel drops the year, so
+    // matching on it made Dec 19-26 2026 and 2027 the same plan.
+    return Boolean(
       state.lockedPlan &&
-      state.lockedPlan.destination === c.destination &&
-      state.lockedPlan.dateLabel === c.dateLabel
+        state.lockedPlan.destination === c.destination &&
+        state.lockedPlan.dateStart === c.dateRange.start &&
+        state.lockedPlan.dateEnd === c.dateRange.end
     );
   }
   function toggleLock(c) {
@@ -1254,16 +1359,26 @@
   }
 
   // Cache the ranked combos for a single render pass (winner + others share them).
+  // Ranking is the most expensive thing the app does, and a single render
+  // asks for it from the winner card, the runners-up, the ballot, the costs
+  // tab and the trip plan. Memoise per render pass; invalidateCombos() is
+  // called whenever state changes so this can never serve a stale answer.
+  let combosCache = null;
+  function invalidateCombos() {
+    combosCache = null;
+  }
   function rankedCombos() {
+    if (combosCache) return combosCache;
     // Someone who has said they can't make it shouldn't still be steering the
     // group's date, destination or budget warnings. Keep everyone else,
     // including people who haven't replied yet.
     const relevant = state.participants.filter((p) => p.rsvp !== "out");
-    return E.rankCombinations(
+    combosCache = E.rankCombinations(
       relevant.length ? relevant : state.participants,
       undefined,
       fareProvider
     );
+    return combosCache;
   }
 
   // -------------------------------------------------------------------------
@@ -1513,7 +1628,12 @@
       body.appendChild(
         el("div", {
           class: "cost-breakdown",
-          text: `≈ $${Math.round(c.avgFare)} travel + $${c.lodgingMin}–$${c.lodgingMax} stay (${c.nights} night${c.nights === 1 ? "" : "s"}) · estimates, excludes food & activities`,
+          text:
+            `≈ $${Math.round(c.avgFare)} travel + $${c.lodgingMin}–$${c.lodgingMax} stay ` +
+            `(${c.nights} night${c.nights === 1 ? "" : "s"}) · estimates, excludes food & activities` +
+            // Don't present a generic fallback rate with the same confidence
+            // as one we actually hold for that city.
+            (c.lodgingApproximate ? " · no local rate for this city, using a rough average" : ""),
         })
       );
     }
@@ -2493,7 +2613,8 @@
   // Voting ("Decide" — the group converges; engine score is the seed/tiebreak)
   // -------------------------------------------------------------------------
   function optionId(c) {
-    return `${c.destination}|${c.dateLabel}`;
+    // Year-bearing, so ballots can't merge two different years' options.
+    return `${c.destination}|${c.dateRange.start}_${c.dateRange.end}`;
   }
   function openBallot() {
     const combos = rankedCombos().slice(0, 4);
@@ -3083,7 +3204,10 @@
     if (fareFetchPending) return;
     fareFetchPending = true;
     window.ReunlyFares.ensureFares(neededRoutes(), () => {
-      // New fares arrived — re-render derived sections (not inputs).
+      // New fares arrived — re-render derived sections (not inputs). Must drop
+      // the memoised ranking first, or the whole point of fetching real fares
+      // is lost to a stale cached answer.
+      invalidateCombos();
       renderMeta();
       renderWinner();
       renderRecommendations();
@@ -3096,6 +3220,7 @@
   // Recompute only the derived sections (recs + costs) — leaves participant
   // inputs untouched so focus/caret isn't lost while typing.
   function recomputeDerived() {
+    invalidateCombos(); // state may have changed since the last pass
     renderMeta();
     renderCountdown();
     renderPlan();
@@ -3131,6 +3256,7 @@
   // Full render (used on structural changes: add/remove/edit toggle).
   function renderAll() {
     clearTimeout(recomputeTimer); // a structural render supersedes any pending debounce
+    invalidateCombos(); // state may have changed since the last pass
     renderMeta();
     renderCountdown();
     renderPlan();

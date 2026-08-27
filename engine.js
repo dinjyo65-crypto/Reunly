@@ -121,17 +121,28 @@
    */
   const DEFAULT_NIGHTLY = [70, 130];
   const NIGHTLY_RATES = {
+    // Pricier hubs
     "london, uk": [110, 210], "paris, france": [105, 200],
     "new york, ny": [130, 250], "san francisco, ca": [130, 240],
-    singapore: [95, 180], "dubai, uae": [90, 190],
-    "hong kong": [95, 180], "sydney, australia": [100, 190],
-    "tokyo, japan": [85, 165], "zurich, switzerland": [140, 260],
+    "los angeles, ca": [115, 215], "washington, dc": [110, 200],
+    "boston, ma": [115, 215], "seattle, wa": [105, 195],
+    "singapore": [95, 180], "dubai, uae": [90, 190],
+    "abu dhabi, uae": [80, 170], "hong kong": [95, 180],
+    "sydney, australia": [100, 190], "tokyo, japan": [85, 165],
+    "zurich, switzerland": [140, 260],
+    // Mid
     "rome, italy": [80, 150], "barcelona, spain": [80, 150],
     "lisbon, portugal": [70, 135], "berlin, germany": [75, 140],
     "toronto, on": [95, 175], "chicago, il": [100, 185],
+    "atlanta, ga": [85, 155], "dallas, tx": [85, 155],
+    "manchester, uk": [75, 140],
+    // Value
     "bangkok, thailand": [35, 80], "bali, indonesia": [30, 75],
     "goa, india": [30, 70], "delhi, india": [30, 70],
-    "mumbai, india": [40, 90], "kuala lumpur, malaysia": [35, 80],
+    "mumbai, india": [40, 90], "bangalore, india": [32, 75],
+    "chennai, india": [28, 65], "hyderabad, india": [28, 65],
+    "kolkata, india": [25, 60], "pune, india": [28, 65],
+    "kuala lumpur, malaysia": [35, 80],
     "istanbul, turkey": [45, 95], "mexico city, mexico": [45, 95],
   };
 
@@ -139,8 +150,16 @@
   function estimateLodging(destination, nights) {
     if (!destination || !nights || nights <= 0) return null;
     const key = (destination || "").trim().toLowerCase();
-    const band = NIGHTLY_RATES[key] || DEFAULT_NIGHTLY;
-    return { min: Math.round(band[0] * nights), max: Math.round(band[1] * nights), source: "estimated" };
+    const band = NIGHTLY_RATES[key];
+    // A generic fallback can be badly wrong in either direction (it was ~2.5x
+    // reality for Indian cities), so say when we're guessing rather than
+    // presenting it with the same confidence as a known rate.
+    return {
+      min: Math.round((band || DEFAULT_NIGHTLY)[0] * nights),
+      max: Math.round((band || DEFAULT_NIGHTLY)[1] * nights),
+      source: "estimated",
+      approximate: !band,
+    };
   }
 
   /**
@@ -593,6 +612,7 @@
           avgFare, fareSearched, nights,
           lodgingMin: lodge ? lodge.min : null,
           lodgingMax: lodge ? lodge.max : null,
+          lodgingApproximate: lodge ? Boolean(lodge.approximate) : false,
           avgTripCost,
           minTripCost: perPerson.length ? Math.min(...perPerson) : null,
           maxTripCost: perPerson.length ? Math.max(...perPerson) : null,
