@@ -356,6 +356,20 @@ test("combos carry lodging + all-in figures for the UI", () => {
   assert.ok(top.avgTripCost > top.avgFare);
 });
 
+test("budget fit leaves headroom for the costs it doesn't count", () => {
+  // The all-in figure excludes food, local transport and activities. Spending
+  // ~75% of a budget on travel + beds must NOT read as comfortable.
+  const dates = { start: "2026-08-01", end: "2026-08-08" }; // 7 nights
+  const fares = fixedFares({ "London, UK|Goa, India": { min: 400, max: 400, source: "estimated" } });
+  const trip = E.tripCostFor("London, UK", "Goa, India", dates, fares, {});
+  // Pick a budget where the trip eats ~75% of it.
+  const budget = String(Math.round(trip.total / 0.75));
+  const people = [person({ name: "A", city: "London, UK", destinations: ["Goa, India"], dates: [dates], prefs: { budget } })];
+  const fit = E.budgetFitFor("Goa, India", people, fares, dates);
+  assert.ok(fit.fit < 1, `75% of budget on travel+stay should not score full marks (got ${fit.fit})`);
+  assert.strictEqual(fit.overCount, 0, "but it isn't over budget either");
+});
+
 test("combos expose budget fields so the UI can warn before locking", () => {
   const dates = [{ start: "2026-08-01", end: "2026-08-05" }];
   const people = [person({ name: "A", city: "London, UK", destinations: ["Rome"], dates, prefs: { budget: "100" } })];

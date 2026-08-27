@@ -515,6 +515,12 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass  # quiet
 
+    # Keep-alive: the client fires ~90 fare/photo requests in parallel, and the
+    # stdlib default (HTTP/1.0) tears down the connection after every one.
+    # Safe here because every response path sets Content-Length — without that,
+    # HTTP/1.1 would leave the browser waiting for a body that never ends.
+    protocol_version = "HTTP/1.1"
+
     def end_headers(self):
         # Prototype: never let the browser HTTP-cache files, so edits always
         # load fresh (the service worker handles real offline caching).

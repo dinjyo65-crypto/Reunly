@@ -519,10 +519,13 @@
     }
     if (!ratios.length) return null;
     // Score each person: full marks while the trip stays comfortably inside
-    // their budget, sliding to 0 as it reaches/exceeds the ceiling. When the
-    // figure already includes lodging we can allow more of the budget to be
-    // used before penalising; a travel-only figure needs headroom left over.
-    const comfort = dateRange ? 0.8 : 0.5;
+    // their budget, sliding to 0 as it reaches/exceeds the ceiling.
+    //
+    // Even the all-in figure EXCLUDES food, local transport and activities, so
+    // "80% of budget spent on travel + beds" is not comfortable — it leaves a
+    // week's spending money in the low tens. Keep real headroom, and more of it
+    // when the figure is travel-only.
+    const comfort = dateRange ? 0.6 : 0.45;
     const perPerson = ratios.map((r) => {
       if (r <= comfort) return 1;
       if (r >= 1) return 0;

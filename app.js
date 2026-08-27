@@ -1613,12 +1613,21 @@
     grid.appendChild(scoreCell("Date", pct(c.dateScore), c.dateScore));
     grid.appendChild(scoreCell("Place", pct(c.destScore), c.destScore));
     grid.appendChild(scoreCell("Cost", pct(c.costScore), c.costScore));
-    // Show the all-in per-person figure (travel + lodging) rather than airfare
-    // alone — the fare on its own reads as "what the trip costs" and isn't.
+    // Show what the VIEWER actually faces, not a group average nobody pays —
+    // the spread between the nearest and furthest traveller is often 2-5x.
+    const myTrip = (() => {
+      const me = state.participants.find(isMe);
+      if (!me || !me.city) return null;
+      return E.tripCostFor(me.city, c.destination, c.dateRange, fareProvider, me.prefs);
+    })();
     grid.appendChild(
       scoreCell(
-        c.avgTripCost != null && c.nights > 0 ? "Per person" : "Avg fare",
-        c.avgTripCost != null ? `$${Math.round(c.avgTripCost)}` : "—",
+        myTrip ? "Your cost" : c.nights > 0 ? "Avg per person" : "Avg fare",
+        myTrip
+          ? `$${Math.round(myTrip.total)}`
+          : c.avgTripCost != null
+          ? `$${Math.round(c.avgTripCost)}`
+          : "—",
         null
       )
     );
@@ -1634,6 +1643,16 @@
             // Don't present a generic fallback rate with the same confidence
             // as one we actually hold for that city.
             (c.lodgingApproximate ? " · no local rate for this city, using a rough average" : ""),
+        })
+      );
+    }
+    // The range matters more than the mean: it's the furthest traveller who
+    // decides whether the trip actually happens.
+    if (c.minTripCost != null && c.maxTripCost != null && Math.round(c.maxTripCost) > Math.round(c.minTripCost)) {
+      body.appendChild(
+        el("div", {
+          class: "cost-breakdown",
+          text: `Across the group: $${Math.round(c.minTripCost)}–$${Math.round(c.maxTripCost)} per person, depending on where they're travelling from`,
         })
       );
     }
@@ -1887,6 +1906,29 @@
         el("div", { class: "cost-meta", text: `≈ ${E.formatRange(fare.min, fare.max, home)} for you (${home})` })
       );
     }
+    // Their own all-in figure. The winner card headlines travel + stay, so a
+    // Costs tab showing airfare alone contradicted it for the same trip.
+    const plan = state.lockedPlan || (rankedCombos()[0] || null);
+    const window_ = plan
+      ? { start: plan.dateStart || (plan.dateRange && plan.dateRange.start),
+          end: plan.dateEnd || (plan.dateRange && plan.dateRange.end) }
+      : null;
+    if (window_ && window_.start && window_.end && fare.min !== 0) {
+      const trip = E.tripCostFor(p.city, toCity, window_, fareProvider, p.prefs);
+      if (trip && trip.nights > 0) {
+        const partyNote = trip.party > 1 ? ` · ${trip.party} travelling` : "";
+        const stayNote =
+          trip.lodging > 0
+            ? `incl. ${trip.nights} night${trip.nights === 1 ? "" : "s"}`
+            : "no stay needed";
+        side.appendChild(
+          el("div", {
+            class: "cost-allin",
+            text: `${E.formatMoney(trip.total, code)} all-in — ${stayNote}${partyNote}`,
+          })
+        );
+      }
+    }
     // Distance + time. Drive time only shown when plausibly drivable (<= 800 mi),
     // so overseas routes don't display a nonsensical multi-day "drive".
     if (info.miles != null) {
@@ -1935,7 +1977,9 @@
       el("div", {
         class: "scope-note",
         text:
-          "✈️ Return travel only — excludes accommodation, food and activities. " +
+          "Estimates only. The all-in figure covers return travel plus an " +
+          "estimated stay for the chosen dates — it excludes food, activities " +
+          "and local transport. " +
           `Non-USD amounts use approximate rates set ${D.RATES_AS_OF}.`,
       })
     );
@@ -2366,6 +2410,26 @@
       maximumFractionDigits: 2,
     })}`;
   }
+  // Record "A paid B back": a transfer that settles part of a balance rather
+  // than a shared cost. Modelled as an expense that only the recipient shares,
+  // so the existing balance maths handles it without a special case.
+  function addSettlement(fromId, toId, amount) {
+    const amt = parseFloat(amount);
+    if (!fromId || !toId || fromId === toId || Number.isNaN(amt) || amt <= 0) return;
+    state.expenses.unshift({
+      id: `x_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      payerId: fromId,
+      desc: `Repaid ${pName(toId)}`,
+      amount: amt,
+      sharedWith: [toId],
+      settlement: true,
+      ts: Date.now(),
+    });
+    saveState();
+    renderExpenses();
+    toast("Repayment recorded");
+  }
+
   function addExpense(payerId, desc, amount, sharedWith) {
     const amt = parseFloat(amount);
     if (!payerId || !desc.trim() || Number.isNaN(amt) || amt <= 0) {
@@ -2421,8 +2485,16 @@
       let sharers = (Array.isArray(x.sharedWith) && x.sharedWith.length ? x.sharedWith : baseIds)
         .filter((id) => alive.has(id));
       if (!sharers.length) sharers = [x.payerId]; // degenerate: payer covers it
-      const each = x.amount / sharers.length;
-      sharers.forEach((id) => (owed[id] = (owed[id] || 0) + each));
+      // Largest-remainder allocation in whole cents. A plain division leaves
+      // orphan cents ($100 across 3 shows three $33.33s against a $100 total),
+      // which makes a settle-up list quietly fail to balance.
+      const cents = Math.round(x.amount * 100);
+      const per = Math.floor(cents / sharers.length);
+      let remainder = cents - per * sharers.length;
+      sharers.forEach((id, i) => {
+        const extra = i < remainder ? 1 : 0;
+        owed[id] = (owed[id] || 0) + (per + extra) / 100;
+      });
     });
     const share = base.length ? total / base.length : 0; // display-only average
     const balances = new Map();
@@ -2598,12 +2670,26 @@
     if (transfers.length) {
       card.appendChild(el("div", { class: "gl", text: "To settle up", style: "margin-top:12px" }));
       transfers.forEach((t) => {
-        card.appendChild(
-          el("div", {
-            class: "exp-transfer",
-            text: `${pName(t.from)} → ${pName(t.to)}  ${money(t.amount)}`,
-          })
+        const row = el("div", { class: "exp-transfer" });
+        row.appendChild(
+          el("span", { text: `${pName(t.from)} → ${pName(t.to)}  ${money(t.amount)}` })
         );
+        // Without a way to record the repayment, this list could never be
+        // cleared and stayed permanently accusatory after the money moved.
+        if (state.role === "organizer" || t.from === state.me || t.to === state.me) {
+          row.appendChild(
+            el("button", {
+              class: "btn ghost sm settle-btn",
+              text: "Mark paid",
+              onClick: () => {
+                if (window.confirm(`Record that ${pName(t.from)} paid ${pName(t.to)} ${money(t.amount)}?`)) {
+                  addSettlement(t.from, t.to, t.amount);
+                }
+              },
+            })
+          );
+        }
+        card.appendChild(row);
       });
     }
     panel.appendChild(card);

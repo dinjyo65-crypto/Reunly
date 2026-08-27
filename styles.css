@@ -986,3 +986,9 @@ a:focus-visible {
   border: 1px solid var(--danger);
   color: var(--text); font-size: 0.8rem; line-height: 1.45;
 }
+
+/* Settle-up row: amount on the left, "mark paid" action on the right */
+.exp-transfer { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.settle-btn { flex: 0 0 auto; }
+/* Each person's all-in figure on the Costs tab */
+.cost-allin { margin-top: 6px; font-size: 0.85rem; font-weight: 650; color: var(--text); }
