@@ -114,7 +114,12 @@
           notifSeen: state.notifSeen,
         })
       );
-      storageFailed = false;
+      if (storageFailed) {
+        // A later write succeeded (e.g. after deleting a photo) — stop
+        // claiming the device is full.
+        storageFailed = false;
+        renderStorageWarning();
+      }
       return true;
     } catch (e) {
       // Silence here meant every later edit, RSVP and expense vanished on
@@ -686,8 +691,20 @@
       }
     });
     input.addEventListener("blur", () => setTimeout(close, 150));
-    window.addEventListener("scroll", place, true);
-    window.addEventListener("resize", place);
+    // Only track position while the menu is actually open, and always detach.
+    // Attaching on every render leaked a listener per input, each holding a
+    // detached node and firing on every scroll frame.
+    const track = () => place();
+    const startTracking = () => {
+      window.addEventListener("scroll", track, true);
+      window.addEventListener("resize", track);
+    };
+    const stopTracking = () => {
+      window.removeEventListener("scroll", track, true);
+      window.removeEventListener("resize", track);
+    };
+    input.addEventListener("focus", startTracking);
+    input.addEventListener("blur", () => setTimeout(stopTracking, 200));
   }
 
   let toastTimer = null;
@@ -2035,7 +2052,7 @@
     }
     // Their own all-in figure. The winner card headlines travel + stay, so a
     // Costs tab showing airfare alone contradicted it for the same trip.
-    const plan = state.lockedPlan || (rankedCombos()[0] || null);
+    const plan = opts.plan || state.lockedPlan || (rankedCombos()[0] || null);
     const window_ = plan
       ? { start: plan.dateStart || (plan.dateRange && plan.dateRange.start),
           end: plan.dateEnd || (plan.dateRange && plan.dateRange.end) }
@@ -2080,10 +2097,19 @@
     const list = $("#costList");
     list.textContent = "";
     const combos = rankedCombos();
-    const groupBest = combos.length ? combos[0].destination : null;
+    // Destination and dates must come from the SAME plan. Taking the place
+    // from the top ranking while the window came from a locked plan priced
+    // flights to one city using another city's dates, under a heading naming
+    // the first.
+    const agreed = state.lockedPlan || (combos.length ? combos[0] : null);
+    const groupBest = agreed
+      ? agreed.destination
+      : combos.length
+      ? combos[0].destination
+      : null;
     // Name the destination ONCE in the heading instead of on every card.
     $("#costsHeading").textContent = groupBest
-      ? `Getting to ${D.cityEmoji(groupBest)} ${groupBest}`
+      ? `Getting to ${D.cityEmoji(groupBest)} ${groupBest}${state.lockedPlan ? "" : " (top pick so far)"}`
       : "Travel costs";
 
     if (!groupBest) {
@@ -2124,7 +2150,7 @@
       head.appendChild(who);
       card.appendChild(head);
       // Single fare side to the agreed/best destination — no redundant labels.
-      card.appendChild(costCardSide(p, groupBest, null, { showDest: false }));
+      card.appendChild(costCardSide(p, groupBest, null, { showDest: false, plan: agreed }));
       list.appendChild(card);
     });
   }
@@ -2381,14 +2407,32 @@
     const days = E.daysUntil(plan.dateStart);
     const it = buildItinerary(plan);
     const goers = state.participants.filter((p) => p.rsvp === "in");
+    // This is the document people actually budget from, so it must show the
+    // same all-in figure as the app — printing airfare alone here contradicted
+    // both the winner card and the Costs tab.
+    const window_ = { start: plan.dateStart, end: plan.dateEnd };
+    let packTotal = 0;
     const rows = goers
       .filter((p) => p.city)
       .map((p) => {
         const f = fareProvider(p.city, plan.destination);
         const fare = f && f.min != null ? `$${f.min}–$${f.max}` : "—";
-        return `<tr><td>${escapeHtml(p.name || "Guest")}</td><td>${escapeHtml(p.city)}</td><td>${fare}</td></tr>`;
+        const trip = E.tripCostFor(p.city, plan.destination, window_, fareProvider, p.prefs);
+        let allIn = "—";
+        if (trip) {
+          packTotal += trip.total;
+          allIn = `$${Math.round(trip.total)}`;
+          if (trip.party > 1) allIn += ` (${trip.party} people)`;
+        }
+        return (
+          `<tr><td>${escapeHtml(p.name || "Guest")}</td><td>${escapeHtml(p.city)}</td>` +
+          `<td>${fare}</td><td><b>${allIn}</b></td></tr>`
+        );
       })
       .join("");
+    const packFooter = packTotal
+      ? `<tr><td colspan="3"><b>Group total</b></td><td><b>$${Math.round(packTotal)}</b></td></tr>`
+      : "";
     const itHtml = it.days
       .map(
         (d) =>
@@ -2410,9 +2454,12 @@
       `<h1>${escapeHtml(state.reunion.name || "Our get-together")}</h1>` +
       `<div class="big">📍 ${escapeHtml(plan.destination)}</div>` +
       `<div>${escapeHtml(plan.dateLabel)}${days > 0 ? ` · ${days} days to go` : ""}</div></div>` +
-      `<h2>Who's going (${goers.length})</h2><table><tr><th>Name</th><th>From</th><th>Est. fare</th></tr>${rows}</table>` +
+      `<h2>Who's going (${goers.length})</h2><table><tr><th>Name</th><th>From</th>` +
+      `<th>Travel</th><th>Travel + stay</th></tr>${rows}${packFooter}</table>` +
       `<h2>Suggested itinerary</h2>${itHtml}` +
-      `<div class="foot">Generated by Reunly · fares are estimates, confirm before booking.</div>` +
+      `<div class="foot">Generated by Reunly · estimates only. "Travel + stay" covers return ` +
+      `travel plus an estimated stay for these dates; it excludes food, activities and local ` +
+      `transport. Confirm real prices before booking.</div>` +
       `</body></html>`;
     const blob = new Blob([html], { type: "text/html" });
     const a = document.createElement("a");
@@ -2909,6 +2956,12 @@
     renderVote();
   }
   function lockBallotOption(o) {
+    // Locking from the ballot is the same act as locking from the winner card,
+    // so it needs the same permission check and the same announcement.
+    if (state.role !== "organizer") {
+      toast("Only the organiser can lock the plan");
+      return;
+    }
     if (!window.confirm(`Lock ${o.destination} on ${o.dateLabel} for everyone?`)) return;
     state.lockedPlan = {
       destination: o.destination,
@@ -2919,6 +2972,7 @@
     state.phase = "decide";
     renderAll();
     confetti();
+    notifyPlanLocked(state.lockedPlan);
   }
 
   function renderVote() {
@@ -3182,14 +3236,26 @@
       const on = t.getAttribute("data-phase") === phase;
       t.classList.toggle("active", on);
       t.setAttribute("aria-selected", on ? "true" : "false");
+      t.setAttribute("tabindex", on ? "0" : "-1");
     });
     saveState();
   }
   function wirePhases() {
-    document.querySelectorAll(".phase-tab").forEach((t) => {
+    const tabs = [...document.querySelectorAll(".phase-tab")];
+    tabs.forEach((t, i) => {
       t.addEventListener("click", () => {
         showPhase(t.getAttribute("data-phase"));
         window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+      // A tablist should be arrow-navigable, with only the active tab in the
+      // tab order — otherwise keyboard users tab through every panel header.
+      t.addEventListener("keydown", (e) => {
+        const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+        if (!dir) return;
+        e.preventDefault();
+        const next = tabs[(i + dir + tabs.length) % tabs.length];
+        showPhase(next.getAttribute("data-phase"));
+        next.focus();
       });
     });
   }
