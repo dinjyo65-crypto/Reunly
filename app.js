@@ -2330,79 +2330,218 @@
   }
   // Activity interest -> concrete itinerary ideas. Each idea carries which
   // day-slots it suits (0 morning, 1 afternoon, 2 evening) so "sunset walk"
-  // never lands in the morning.
+  // never lands in the morning, plus tags the generator filters on:
+  //   adult    — not something to put in front of a group travelling with kids
+  //   active   — needs real mobility, so it's dropped when someone has told us
+  //              they can't manage that
+  //   outdoor  — the first thing to swap out when the forecast is bad
+  //   food     — gets the group's dietary note attached
   const IDEA_BANK = {
     "Beach": [
-      ["🏖️", "Beach time at a top-rated spot", "best beaches near", [0, 1]],
-      ["🌅", "Sunset walk on the shore", "beaches near", [2]],
+      ["🏖️", "Beach time at a top-rated spot", "best beaches near", [0, 1], ["outdoor"]],
+      ["🌅", "Sunset walk on the shore", "beaches near", [2], ["outdoor"]],
+      ["🏐", "Beach games and a picnic", "beaches near", [1], ["outdoor"]],
     ],
     "Nightlife": [
-      ["🍸", "Drinks & live music", "best bars near", [2]],
-      ["🪩", "Night out at a popular club", "nightclubs near", [2]],
+      ["🍸", "Drinks & live music", "best bars near", [2], ["adult"]],
+      ["🪩", "Night out at a popular club", "nightclubs near", [2], ["adult", "active"]],
+      ["🎤", "Karaoke or a games bar", "karaoke bars in", [2], ["adult"]],
     ],
     "Sightseeing": [
-      ["📸", "See the must-visit landmarks", "top attractions in", [0, 1]],
-      ["🚶", "Guided walking tour", "walking tours in", [0, 1]],
+      ["📸", "See the must-visit landmarks", "top attractions in", [0, 1], ["outdoor"]],
+      ["🚶", "Guided walking tour", "walking tours in", [0, 1], ["outdoor", "active"]],
+      ["🚌", "Hop-on bus or boat tour", "sightseeing tours in", [0, 1], []],
+      ["🌇", "Viewpoint at golden hour", "best viewpoints in", [2], ["outdoor"]],
     ],
     "Food & dining": [
-      ["🍽️", "Group dinner at a local favourite", "best restaurants in", [2]],
-      ["🥘", "Street-food tasting", "street food in", [1, 2]],
+      ["🍽️", "Group dinner at a local favourite", "best restaurants in", [2], ["food"]],
+      ["🥘", "Street-food tasting", "street food in", [1, 2], ["food", "outdoor"]],
+      ["🥐", "Long breakfast somewhere good", "best breakfast in", [0], ["food"]],
+      ["👨‍🍳", "Cooking class together", "cooking classes in", [1], ["food"]],
     ],
     "Nature / hiking": [
-      ["🥾", "Hike with a view", "hiking trails near", [0]],
-      ["🌿", "Explore a nature spot", "nature parks near", [0, 1]],
+      ["🥾", "Hike with a view", "hiking trails near", [0], ["outdoor", "active"]],
+      ["🌿", "Explore a nature spot", "nature parks near", [0, 1], ["outdoor"]],
+      ["🦜", "Wildlife or botanical garden", "botanical gardens near", [0, 1], ["outdoor"]],
     ],
     "Relaxation": [
-      ["💆", "Spa or wellness session", "spas in", [1]],
-      ["☕", "Slow start at a great café", "best cafes in", [0]],
+      ["💆", "Spa or wellness session", "spas in", [1], []],
+      ["☕", "Slow start at a great café", "best cafes in", [0], ["food"]],
+      ["📖", "Unstructured afternoon — no plans", null, [1], []],
     ],
     "Adventure": [
-      ["🚤", "Watersports or adventure activity", "adventure activities in", [0, 1]],
-      ["🛶", "Try something adrenaline-fuelled", "things to do in", [1]],
+      ["🚤", "Watersports or adventure activity", "adventure activities in", [0, 1], ["outdoor", "active"]],
+      ["🛶", "Try something adrenaline-fuelled", "things to do in", [1], ["outdoor", "active"]],
+      ["🚴", "Cycle or scooter tour", "bike tours in", [0, 1], ["outdoor", "active"]],
     ],
     "Culture": [
-      ["🏛️", "Museum or heritage visit", "museums in", [0, 1]],
-      ["🎭", "Local culture & markets", "cultural attractions in", [1]],
+      ["🏛️", "Museum or heritage visit", "museums in", [0, 1], []],
+      ["🎭", "Local culture & markets", "cultural attractions in", [1], []],
+      ["🎟️", "Show, gig or local performance", "live music venues in", [2], []],
     ],
     "Shopping": [
-      ["🛍️", "Markets & shopping streets", "shopping in", [1]],
+      ["🛍️", "Markets & shopping streets", "shopping in", [1], ["outdoor"]],
+      ["🎁", "Pick up gifts to take home", "souvenir shops in", [1], []],
     ],
   };
   const SLOTS = ["Morning", "Afternoon", "Evening"];
+  const FALLBACK_IDEAS = [
+    ["📸", "See the must-visit landmarks", "top attractions in", [0, 1], ["outdoor"]],
+    ["🏛️", "Museum or heritage visit", "museums in", [0, 1], []],
+    ["🍽️", "Group dinner at a local favourite", "best restaurants in", [2], ["food"]],
+  ];
+
+  /**
+   * Longest one-way journey anyone in the group faces to reach the destination.
+   * Day one of a trip is not a blank slate: if half the group lands at 3pm
+   * after eleven hours in the air, an itinerary that opens with a sunrise hike
+   * is worse than no itinerary at all.
+   */
+  function longestJourneyHours(destination) {
+    let worst = 0;
+    for (const p of state.participants) {
+      if (p.rsvp === "out" || !p.city) continue;
+      const miles = E.distanceMiles(p.city, destination);
+      if (miles == null) continue;
+      const hours = miles <= 300 ? E.driveTimeHours(miles) : E.flightTimeHours(miles);
+      if (hours > worst) worst = hours;
+    }
+    return worst;
+  }
+
   function buildItinerary(plan) {
     const s = E.summarizePrefs(state.participants);
+    const notes = [];
     let interests = s.activitiesRanked.map(([label]) => label);
     if (!interests.length) interests = ["Sightseeing", "Food & dining", "Relaxation"];
     const rand = mulberry32(state.itinerarySeed * 7919 + interests.length);
     const start = new Date(plan.dateStart + "T00:00:00");
     const end = new Date(plan.dateEnd + "T00:00:00");
     const totalDays = Math.max(1, Math.round((end - start) / 86400000) + 1);
-    const days = Math.min(totalDays, 5);
+    // On a long trip we don't list every day, but the day people travel home
+    // is not an optional detail — show the opening run AND the real last day,
+    // with the gap called out between them.
+    const CAP = 7;
+    const dayIndices =
+      totalDays <= CAP
+        ? Array.from({ length: totalDays }, (_, i) => i)
+        : Array.from({ length: CAP - 1 }, (_, i) => i).concat(totalDays - 1);
+
+    // --- What the group has actually told us, applied as filters. -----------
+    const withKids = s.withKids > 0;
+    const accessNeeds = s.accessibility.length > 0;
+    // Trip-level weather, if the proxy has answered. It is an average over the
+    // window rather than per-day, so it can only justify a lean towards indoor
+    // plans, not a claim about any particular afternoon.
+    const w = weatherCache.get(`${plan.destination}|${plan.dateStart}`);
+    const weather = w && w !== "pending" ? w : null;
+    const wetPct = weather
+      ? weather.rainPct != null
+        ? weather.rainPct
+        : weather.wetDays != null && weather.totalDays
+        ? Math.round((weather.wetDays / weather.totalDays) * 100)
+        : null
+      : null;
+    const washout = wetPct != null && wetPct >= 50;
+    const freezing = !!weather && weather.tMax != null && weather.tMax < 8;
+    const scorching = !!weather && weather.tMax != null && weather.tMax > 34;
+    const preferIndoor = washout || freezing || scorching;
+
     const pool = [];
     interests.forEach((label) => (IDEA_BANK[label] || []).forEach((idea) => pool.push(idea)));
-    const fallback = [
-      ["📸", "See the must-visit landmarks", "top attractions in", [0, 1]],
-      ["🍽️", "Group dinner at a local favourite", "best restaurants in", [2]],
-    ];
+    const tagsOf = (idea) => idea[4] || [];
+    const allowed = pool.filter((idea) => {
+      const tags = tagsOf(idea);
+      if (withKids && tags.includes("adult")) return false;
+      if (accessNeeds && tags.includes("active")) return false;
+      return true;
+    });
+    // Never filter the pool down to nothing: a group of club-goers with a
+    // toddler should still get an itinerary, just not that one.
+    const usable = allowed.length ? allowed : FALLBACK_IDEAS;
+
+    if (withKids) {
+      notes.push(
+        `Nothing adults-only, since ${s.kids} ${s.kids === 1 ? "child is" : "children are"} coming.`
+      );
+    }
+    if (accessNeeds) {
+      const who = s.accessibility.map((a) => a.name).join(", ");
+      notes.push(`Strenuous activities left out — check the plan works for ${who}.`);
+    }
+    if (s.foodRanked.length) {
+      notes.push(
+        `Book somewhere that handles ${s.foodRanked.map(([f, n]) => `${f} (${n})`).join(", ")}.`
+      );
+    }
+    if (preferIndoor) {
+      notes.push(
+        washout
+          ? `Leaning indoors — roughly ${wetPct}% chance of rain across these dates.`
+          : freezing
+          ? "Leaning indoors — it is cold enough that outdoor plans need a backup."
+          : "Leaning indoors — midday heat makes outdoor plans hard work."
+      );
+    }
+
+    // --- Fixed bookends. ----------------------------------------------------
+    const journey = longestJourneyHours(plan.destination);
+    // A short hop leaves the day usable; a long-haul flight eats it.
+    const bookendSlots = totalDays === 1 ? 0 : journey >= 6 ? 2 : journey >= 2 ? 1 : 0;
+    const arriveIdea = ["🛬", "Arrive, check in and settle", null, [], []];
+    const settleIdea = ["🧭", "Easy first look around the neighbourhood", "things to do in", [], []];
+    const packIdea = ["🧳", "Pack up and check out", null, [], []];
+    const departIdea = ["🛫", "Head home — leave buffer for traffic", null, [], []];
+
+    // Prefer ideas nobody has seen yet. The old version only avoided repeats
+    // WITHIN a day, so on a week-long trip Wednesday was often a copy of
+    // Monday: the most obvious tell that nothing had really been planned.
+    const usedEver = new Set();
+    function pick(slotIdx, usedToday) {
+      const fits = (list) => list.filter((i) => (i[3] || []).includes(slotIdx));
+      let candidates = fits(usable).filter((i) => !usedToday.has(i[1]) && !usedEver.has(i[1]));
+      if (preferIndoor) {
+        const indoor = candidates.filter((i) => !tagsOf(i).includes("outdoor"));
+        if (indoor.length) candidates = indoor;
+      }
+      if (!candidates.length) {
+        // Every idea that suits this slot has now been used once. Start a
+        // fresh cycle rather than picking at random from the whole pool —
+        // random re-picks put "botanical garden" on four mornings running.
+        fits(usable).forEach((i) => usedEver.delete(i[1]));
+        candidates = fits(usable).filter((i) => !usedToday.has(i[1]));
+      }
+      if (!candidates.length) candidates = fits(usable);
+      if (!candidates.length) candidates = fits(FALLBACK_IDEAS);
+      if (!candidates.length) candidates = [FALLBACK_IDEAS[0]];
+      const chosen = candidates[Math.floor(rand() * candidates.length)];
+      usedToday.add(chosen[1]);
+      usedEver.add(chosen[1]);
+      return chosen;
+    }
+
     const out = [];
-    for (let d = 0; d < days; d++) {
+    dayIndices.forEach((d, position) => {
       const date = new Date(start);
       date.setDate(date.getDate() + d);
       const label = date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+      const isFirst = d === 0;
+      const isLast = d === totalDays - 1 && totalDays > 1;
+      // True when days were skipped immediately before this one.
+      const gapBefore = position > 0 && d !== dayIndices[position - 1] + 1;
       const usedToday = new Set();
       const slots = SLOTS.map((_, slotIdx) => {
-        let candidates = pool.filter(
-          (idea) => idea[3].includes(slotIdx) && !usedToday.has(idea[1])
-        );
-        if (!candidates.length) candidates = pool.filter((idea) => idea[3].includes(slotIdx));
-        if (!candidates.length) candidates = fallback.filter((idea) => idea[3].includes(slotIdx));
-        const pick = candidates[Math.floor(rand() * candidates.length)];
-        usedToday.add(pick[1]);
-        return pick;
+        if (isFirst && slotIdx < bookendSlots) {
+          return slotIdx === 0 ? arriveIdea : settleIdea;
+        }
+        if (isLast && slotIdx >= SLOTS.length - bookendSlots) {
+          return slotIdx === SLOTS.length - 1 ? departIdea : packIdea;
+        }
+        return pick(slotIdx, usedToday);
       });
-      out.push({ label, slots });
-    }
-    return { days: out, extraDays: totalDays - days };
+      out.push({ label, slots, isFirst, isLast, gapBefore });
+    });
+    return { days: out, extraDays: totalDays - dayIndices.length, notes };
   }
 
   function toolLink(emoji, label, href) {
@@ -2514,7 +2653,12 @@
         (d) =>
           `<h4>${escapeHtml(d.label)}</h4><ul>` +
           d.slots.map((s, i) => `<li><b>${["Morning", "Afternoon", "Evening"][i]}:</b> ${escapeHtml(s[1])}</li>`).join("") +
-          `</ul>`
+          `</ul>` +
+          // The pack is what people actually carry, so the reasons the plan
+          // looks the way it does have to travel with it.
+          (d.isFirst && it.notes.length
+            ? `<p><i>${it.notes.map(escapeHtml).join(" ")}</i></p>`
+            : "")
       )
       .join("");
     const html =
@@ -2624,16 +2768,33 @@
         text: "Built from the group's activity interests — every idea links to a live map search.",
       })
     );
+    // Say out loud which of the group's answers changed the plan. A filtered
+    // itinerary that doesn't explain itself just looks like a thin one.
+    it.notes.forEach((n) => card.appendChild(el("div", { class: "itin-note", text: `• ${n}` })));
     it.days.forEach((day) => {
+      // The skipped middle of a long trip belongs between the days it sits
+      // between, not tacked on after the departure day.
+      if (day.gapBefore && it.extraDays > 0) {
+        card.appendChild(
+          el("div", {
+            class: "itin-gap",
+            text: `+ ${it.extraDays} free day${it.extraDays === 1 ? "" : "s"} in between to play with`,
+          })
+        );
+      }
       const d = el("div", { class: "itin-day" });
       d.appendChild(el("div", { class: "itin-date", text: day.label }));
       day.slots.forEach(([emoji, text, query], i) => {
-        const row = el("a", {
-          class: "itin-row",
-          href: E.mapsSearchLink(`${query} ${dest}`),
-          target: "_blank",
-          rel: "noopener noreferrer",
-        });
+        // Arrival and departure rows have nothing to search for — rendering
+        // them as links sent people to a map of "null Goa, India".
+        const row = query
+          ? el("a", {
+              class: "itin-row",
+              href: E.mapsSearchLink(`${query} ${dest}`),
+              target: "_blank",
+              rel: "noopener noreferrer",
+            })
+          : el("div", { class: "itin-row itin-fixed" });
         row.appendChild(el("span", { class: "itin-slot", text: SLOTS[i] }));
         row.appendChild(el("span", { class: "itin-emoji", text: emoji }));
         row.appendChild(el("span", { class: "itin-text", text: text }));
@@ -2641,7 +2802,8 @@
       });
       card.appendChild(d);
     });
-    if (it.extraDays > 0) {
+    // Only if no day carried the gap marker (i.e. the trip ended without one).
+    if (it.extraDays > 0 && !it.days.some((d) => d.gapBefore)) {
       card.appendChild(
         el("div", { class: "itin-sub", text: `…plus ${it.extraDays} more free day${it.extraDays === 1 ? "" : "s"} to play with.` })
       );
