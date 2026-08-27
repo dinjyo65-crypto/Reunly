@@ -96,6 +96,32 @@ test("dateCandidatesFor proposes the mutual window nobody typed", () => {
   assert.ok(labels.includes("2026-12-19..2026-12-26"), "originals must still be candidates");
 });
 
+test("candidate generation stays bounded on a hostile-sized group", () => {
+  // Pairing is O(n^2) in submitted ranges. Unbounded, 60 people x 12 distinct
+  // ranges produced ~28,000 candidates and blocked the main thread for ~105
+  // SECONDS — reachable from a crafted invite link, so this is a DoS guard,
+  // not a nicety. sanitizePayload permits exactly these dimensions.
+  const people = [];
+  let k = 0;
+  for (let i = 0; i < 60; i++) {
+    const dates = [];
+    for (let j = 0; j < 12; j++) {
+      const start = new Date(Date.UTC(2026, 0, 1 + k));
+      const end = new Date(Date.UTC(2026, 0, 41 + k));
+      k += 1;
+      dates.push({ start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) });
+    }
+    people.push(person({ city: "London, UK", destinations: ["Goa, India", "Bali, Indonesia"], dates }));
+  }
+  const candidates = E.dateCandidatesFor(people);
+  assert.ok(candidates.length <= 60, `expected <=60 candidates, got ${candidates.length}`);
+  const started = Date.now();
+  const combos = E.rankCombinations(people);
+  const elapsed = Date.now() - started;
+  assert.ok(combos.length > 0, "still produces a ranking");
+  assert.ok(elapsed < 3000, `ranking took ${elapsed}ms — the O(n^2) blow-up is back`);
+});
+
 test("dateCandidatesFor ignores slivers below the minimum", () => {
   // A single shared day isn't a trip; don't pollute the candidate list.
   const people = [

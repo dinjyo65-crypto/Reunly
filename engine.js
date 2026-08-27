@@ -410,14 +410,26 @@
    * @param minDays  ignore slivers shorter than this (default 2 — a single
    *                 shared day is rarely a trip)
    */
+  // Pairing is O(n^2) in submitted ranges, and every extra candidate multiplies
+  // the scoring work behind it. Unbounded, a 60-person group with 12 ranges
+  // each produced 28,000 candidates and took ~105 SECONDS on the main thread —
+  // reachable from a crafted invite link, which is a denial of service, not
+  // just slowness. tallyDates returns most-wanted first, so capping keeps the
+  // windows people actually asked for and drops the long tail.
+  const MAX_PAIRED_RANGES = 30; // how many submitted ranges get paired up
+  const MAX_DATE_CANDIDATES = 60; // total windows handed to scoring
+
   function dateCandidatesFor(participants, minDays = 2) {
     const submitted = tallyDates(participants).map((d) => d.range);
     const seen = new Set(submitted.map(rangeKey));
-    const out = submitted.slice();
-    // Pairwise intersections of the submitted ranges.
-    for (let i = 0; i < submitted.length; i++) {
-      for (let j = i + 1; j < submitted.length; j++) {
-        const shared = rangeIntersection(submitted[i], submitted[j]);
+    const out = submitted.slice(0, MAX_DATE_CANDIDATES);
+    // Pairwise intersections of the most-wanted submitted ranges.
+    const pairable = submitted.slice(0, MAX_PAIRED_RANGES);
+    for (let i = 0; i < pairable.length; i++) {
+      if (out.length >= MAX_DATE_CANDIDATES) break;
+      for (let j = i + 1; j < pairable.length; j++) {
+        if (out.length >= MAX_DATE_CANDIDATES) break;
+        const shared = rangeIntersection(pairable[i], pairable[j]);
         if (!shared) continue;
         if (rangeDays(shared) < minDays) continue;
         const key = rangeKey(shared);
@@ -581,7 +593,11 @@
     // Includes windows where people's availability overlaps, not just the
     // ranges they typed — see dateCandidatesFor().
     const dateCandidates = dateCandidatesFor(participants);
-    const destCandidates = tallyDestinations(participants).map((d) => d.destination);
+    // Same reasoning as the date cap: most-wanted first, bounded work.
+    const MAX_DEST_CANDIDATES = 15;
+    const destCandidates = tallyDestinations(participants)
+      .slice(0, MAX_DEST_CANDIDATES)
+      .map((d) => d.destination);
     if (!dateCandidates.length || !destCandidates.length) return [];
     // Which candidates did somebody actually type, vs which did we derive from
     // overlapping availability? The UI should say so rather than presenting a
