@@ -252,6 +252,8 @@
     const payload = {
       v: 2,
       code: state.reunion.code,
+      // Only people holding the link can read or post notifications.
+      nt: notifyToken(),
       name: state.reunion.name,
       type: state.reunion.type,
       // The agreed plan travels with the link, so a joiner sees what was
@@ -298,6 +300,7 @@
     if (!data || typeof data !== "object" || !Array.isArray(data.p)) return null;
     const clean = {
       code: str(data.code, 40),
+      nt: str(data.nt, 64),
       name: str(data.name, 120),
       type: str(data.type, 60),
       p: data.p.slice(0, MAX_PEOPLE).map((x) => {
@@ -400,6 +403,9 @@
       name: data.name || "Shared reunion",
       type: data.type || "Friends",
       code: data.code || generateInviteCode(data.type),
+      // Inherited from the link — without it a joiner can't see or post
+      // notifications for this group.
+      notifyToken: data.nt || "",
     };
     state.participants = data.p.map(participantFromPayload);
     if (data.locked) state.lockedPlan = data.locked;
@@ -731,6 +737,24 @@
     const prefix = (type || "REU").slice(0, 3).toUpperCase();
     const n = Math.floor(1000 + Math.random() * 9000);
     return `${prefix}-${n}`;
+  }
+
+  /**
+   * A short invite code is ~9,000 guesses across a handful of prefixes, which
+   * is fine for "type this to join" but hopeless as an access control: it also
+   * keyed the notification feed, so anyone could enumerate codes and read a
+   * group's names, destinations and dates — or inject fake "plan locked"
+   * alerts. Notifications now use a separate high-entropy token that only ever
+   * travels inside the invite link.
+   */
+  function generateNotifyToken() {
+    const bytes = new Uint8Array(16); // 128 bits
+    window.crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  function notifyToken() {
+    if (!state.reunion.notifyToken) state.reunion.notifyToken = generateNotifyToken();
+    return state.reunion.notifyToken;
   }
 
   // -------------------------------------------------------------------------
@@ -1483,7 +1507,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          code: state.reunion.code,
+          code: notifyToken(),
           name: meName(),
           destination: plan.destination,
           dateLabel: plan.dateLabel,
@@ -1623,7 +1647,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          code: state.reunion.code,
+          code: notifyToken(),
           name: p.name || "Someone",
           destination: top.destination,
           dateLabel: top.dateLabel,
@@ -3170,8 +3194,10 @@
       });
   }
   async function pollNotifications() {
-    const code = state.reunion.code;
-    if (state.role !== "organizer" || !code || code === "—") return;
+    const code = state.reunion.notifyToken;
+    // No token means this group predates the change (or the link carried none);
+    // polling the old guessable code would defeat the point.
+    if (state.role !== "organizer" || !code) return;
     try {
       const res = await fetch(`/api/notify?code=${encodeURIComponent(code)}&since=0`);
       const data = await res.json();

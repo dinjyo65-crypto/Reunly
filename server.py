@@ -121,23 +121,27 @@ def geocode(name):
     key = (name or "").strip().lower()
     if not key:
         return None
+    # Check the cache under the lock, then RELEASE it before the network call.
+    # Holding a global lock across an 8-second request serialised every other
+    # user's lookups behind one slow response.
     with _geo_lock:
         if key in _geo_cache:
             return _geo_cache[key]
+    coord = None
+    try:
+        q = urllib.parse.urlencode({"q": name, "format": "json", "limit": 1})
+        req = urllib.request.Request(
+            "https://nominatim.openstreetmap.org/search?" + q,
+            headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            arr = json.loads(r.read())
+        if arr:
+            coord = (float(arr[0]["lat"]), float(arr[0]["lon"]))
+    except Exception:
         coord = None
-        try:
-            q = urllib.parse.urlencode({"q": name, "format": "json", "limit": 1})
-            req = urllib.request.Request(
-                "https://nominatim.openstreetmap.org/search?" + q,
-                headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                arr = json.loads(r.read())
-            if arr:
-                coord = (float(arr[0]["lat"]), float(arr[0]["lon"]))
-        except Exception:
-            coord = None
+    with _geo_lock:
         _geo_cache[key] = coord
-        return coord
+    return coord
 
 
 # --- Type-ahead place suggestions (Nominatim search) --------------------------
@@ -162,36 +166,39 @@ def suggest_places(q):
     key = q.strip().lower()
     if len(key) < 2:
         return []
+    # Same reasoning as geocode(): type-ahead fires per keystroke, so holding a
+    # global lock across the request made N typists queue up 8 seconds apart.
     with _suggest_lock:
         if key in _suggest_cache:
             return _suggest_cache[key]
-        results = []
-        try:
-            params = urllib.parse.urlencode({
-                "q": q, "format": "json", "limit": 6, "addressdetails": 1,
-                "featuretype": "city", "accept-language": "en",
+    results = []
+    try:
+        params = urllib.parse.urlencode({
+            "q": q, "format": "json", "limit": 6, "addressdetails": 1,
+            "featuretype": "city", "accept-language": "en",
+        })
+        req = urllib.request.Request(
+            "https://nominatim.openstreetmap.org/search?" + params,
+            headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            arr = json.loads(r.read())
+        seen = set()
+        for item in arr:
+            label = _short_label(item)
+            if not label or label.lower() in seen:
+                continue
+            seen.add(label.lower())
+            results.append({
+                "label": label,
+                "lat": float(item["lat"]),
+                "lon": float(item["lon"]),
+                "cc": (item.get("address", {}).get("country_code") or "").lower(),
             })
-            req = urllib.request.Request(
-                "https://nominatim.openstreetmap.org/search?" + params,
-                headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                arr = json.loads(r.read())
-            seen = set()
-            for item in arr:
-                label = _short_label(item)
-                if not label or label.lower() in seen:
-                    continue
-                seen.add(label.lower())
-                results.append({
-                    "label": label,
-                    "lat": float(item["lat"]),
-                    "lon": float(item["lon"]),
-                    "cc": (item.get("address", {}).get("country_code") or "").lower(),
-                })
-        except Exception:
-            results = []
+    except Exception:
+        results = []
+    with _suggest_lock:
         _suggest_cache[key] = results
-        return results
+    return results
 
 
 def reverse_geocode(lat, lng):
@@ -586,6 +593,10 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/notify":
             q = urllib.parse.parse_qs(parsed.query)
             code = q.get("code", [""])[0]
+            # Same floor on reads: the feed carries participants' names and the
+            # chosen destination, so it must not be enumerable.
+            if len(code) < 16:
+                return self._send_json({"results": []})
             try:
                 since = float(q.get("since", ["0"])[0])
             except ValueError:
@@ -603,7 +614,12 @@ class Handler(SimpleHTTPRequestHandler):
                     raise ValueError("bad content length")
                 raw = self.rfile.read(length)
                 data = json.loads(raw)
-                code = str(data.get("code", ""))[:32]
+                # The client sends a 128-bit token, not the short join code.
+                # Reject anything too weak to be one, so a guessed/short code
+                # can't be used to plant notifications in someone's feed.
+                code = str(data.get("code", ""))[:64]
+                if len(code) < 16:
+                    raise ValueError("weak notification key")
                 kind = str(data.get("kind", "reply"))[:16]
                 entry = {
                     # "reply" = someone answered the confirm step;
