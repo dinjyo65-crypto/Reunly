@@ -689,3 +689,77 @@ test("a refund to the wrong person flips who owes whom", () => {
   assert.strictEqual(r.transfers[0].from, "b");
   assert.strictEqual(Math.round(r.transfers[0].amount), 60, "b's 40 share plus the 20 they pocketed");
 });
+
+// ---- Invite-link merge (the other place that has silently lost data) -------
+/** Wire row -> normalized participant, mirroring app.js participantFromPayload. */
+function fromWire(x) {
+  return person({
+    id: x.id, name: x.n, city: x.c, dates: x.d, destinations: x.x,
+    prefs: x.pr, rsvp: x.rsvp, updatedAt: x.ts || 0,
+  });
+}
+const merge = (current, rows) => E.mergeParticipants(current, rows, fromWire);
+const shape = (list) => list.map((p) => `${p.id}:${p.name}:${p.city}`);
+
+test("two guests who share a first name stay two people", () => {
+  // Matching on name alone deleted whichever Sam merged first, taking their
+  // city with them — and city is what drives their fare.
+  const roster = [person({
+    id: "p_1", name: "Sam", city: "London, UK", rsvp: "in", updatedAt: 100,
+    dates: [{ start: "2026-12-19", end: "2026-12-26" }],
+  })];
+  const r = merge(roster, [{ id: "p_2", n: "Sam", c: "Delhi, India", ts: 200, rsvp: "in" }]);
+  assert.strictEqual(r.added, 1);
+  assert.strictEqual(roster.length, 2);
+  assert.deepStrictEqual(shape(roster), ["p_1:Sam:London, UK", "p_2:Sam:Delhi, India"]);
+});
+
+test("someone can still claim a placeholder that was typed for them", () => {
+  // The organiser typed "Sam" with nothing filled in; Sam joins on their own
+  // device, which gives them a fresh id. They must not become a second row.
+  const roster = [person({ id: "p_1", name: "Sam", city: "", updatedAt: 0 })];
+  const r = merge(roster, [{
+    id: "p_9", n: "Sam", c: "Delhi, India", ts: 200, rsvp: "in",
+    d: [{ start: "2027-01-16", end: "2027-01-23" }],
+  }]);
+  assert.strictEqual(roster.length, 1, "claimed the placeholder rather than duplicating");
+  assert.strictEqual(r.updated, 1);
+  assert.strictEqual(roster[0].id, "p_1", "keeps the local id — expenses already point at it");
+  assert.strictEqual(roster[0].city, "Delhi, India");
+  assert.ok(roster[0].aliasIds.includes("p_9"), "and remembers the id they use elsewhere");
+});
+
+test("a claimed placeholder is matched by id from then on", () => {
+  // Without the alias, the row is no longer 'unclaimed', so the next link
+  // from the same person would fail the name check and duplicate them.
+  const roster = [person({ id: "p_1", name: "Sam", city: "", updatedAt: 0 })];
+  merge(roster, [{ id: "p_9", n: "Sam", c: "Delhi, India", ts: 200, rsvp: "in",
+                   d: [{ start: "2027-01-16", end: "2027-01-23" }] }]);
+  merge(roster, [{ id: "p_9", n: "Sam", c: "Mumbai, India", ts: 300, rsvp: "in",
+                   d: [{ start: "2027-01-16", end: "2027-01-23" }] }]);
+  assert.strictEqual(roster.length, 1, "same person, still one row");
+  assert.strictEqual(roster[0].city, "Mumbai, India", "and their update landed");
+  assert.ok(roster[0].aliasIds.includes("p_9"), "the alias survives the update");
+});
+
+test("a legacy link with no ids still matches by name", () => {
+  const roster = [person({ id: "p_1", name: "Sam", city: "London, UK", rsvp: "in", updatedAt: 100 })];
+  const r = merge(roster, [{ n: "Sam", c: "Paris, France", ts: 500 }]);
+  assert.strictEqual(roster.length, 1, "old links carry no id — the name is all there is");
+  assert.strictEqual(r.updated, 1);
+  assert.strictEqual(roster[0].city, "Paris, France");
+});
+
+test("a stale copy never overwrites fresher answers", () => {
+  const roster = [person({ id: "p_1", name: "Sam", city: "London, UK", updatedAt: 900 })];
+  const r = merge(roster, [{ id: "p_1", n: "Sam", c: "Stale City", ts: 100 }]);
+  assert.strictEqual(r.updated, 0);
+  assert.strictEqual(roster[0].city, "London, UK");
+});
+
+test("a nameless row is ignored rather than added as a blank person", () => {
+  const roster = [];
+  const r = merge(roster, [{ id: "p_7", n: "   ", c: "Goa, India", ts: 5 }]);
+  assert.strictEqual(r.added, 0);
+  assert.strictEqual(roster.length, 0);
+});

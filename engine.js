@@ -830,6 +830,89 @@
     return out;
   }
 
+  // ---------------------------------------------------------------------------
+  // Invite-link merge
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Has this row ever been filled in, or is it a placeholder somebody typed on
+   * another device? Decides whether a name is safe to match on.
+   */
+  function isUnclaimedParticipant(p) {
+    const hasDates = (p.dates || []).some((d) => d && d.start);
+    const hasDest = (p.destinations || []).some((d) => d);
+    return !hasDates && !hasDest && (!p.rsvp || p.rsvp === "no_response");
+  }
+
+  /**
+   * Merge participants arriving on an invite link into the local roster.
+   *
+   * Identity is the whole problem here. Links carry a participant id but
+   * deliberately never carry an email, so across devices there are only two
+   * signals: the id, and the name. Matching on name alone silently destroyed
+   * data — two guests called "Sam" collapsed into one row, and whichever Sam
+   * merged second overwrote the first's city, which is what drives their fare.
+   *
+   * So: match by id (including ids a row has been known by on other devices),
+   * and fall back to the name only to let someone claim a row that was typed
+   * FOR them and never filled in. A claimed row keeps its local id — expenses
+   * and RSVPs already point at it — and remembers the incoming id as an alias,
+   * so every later merge matches by id rather than by name again.
+   *
+   * Mutates `current` in place (the caller holds the live roster) and returns
+   * a tally. `fromPayload` converts one wire row into a normalized participant.
+   */
+  function mergeParticipants(current, rows, fromPayload) {
+    let added = 0;
+    let updated = 0;
+    const byId = new Map();
+    current.forEach((p) => {
+      byId.set(p.id, p);
+      (p.aliasIds || []).forEach((a) => byId.set(a, p));
+    });
+    const byName = new Map();
+    current.forEach((p) => {
+      const key = (p.name || "").trim().toLowerCase();
+      if (key && !byName.has(key)) byName.set(key, p);
+    });
+
+    (rows || []).forEach((x) => {
+      const nameKey = (x.n || "").trim().toLowerCase();
+      const incoming = fromPayload(x);
+      let existing = x.id ? byId.get(x.id) : null;
+      let claiming = false;
+      if (!existing && nameKey) {
+        const sameName = byName.get(nameKey);
+        // No id at all means a legacy link, where the name is all there is.
+        if (sameName && (!x.id || isUnclaimedParticipant(sameName))) {
+          existing = sameName;
+          claiming = !!x.id && x.id !== sameName.id;
+        }
+      }
+      if (!existing) {
+        if (!nameKey) return; // nothing to identify them by
+        current.push(incoming);
+        byId.set(incoming.id, incoming);
+        if (!byName.has(nameKey)) byName.set(nameKey, incoming);
+        added += 1;
+        return;
+      }
+      if (claiming) {
+        existing.aliasIds = Array.from(
+          new Set([...(existing.aliasIds || []), x.id])
+        ).filter(Boolean);
+        byId.set(x.id, existing);
+      }
+      // Never let a stale copy overwrite fresher answers.
+      if ((incoming.updatedAt || 0) <= (existing.updatedAt || 0)) return;
+      const aliases = existing.aliasIds;
+      Object.assign(existing, incoming, { id: existing.id });
+      if (aliases && aliases.length) existing.aliasIds = aliases;
+      updated += 1;
+    });
+    return { added, updated };
+  }
+
   /** Whole days from today until an ISO date (negative if past). */
   function daysUntil(iso) {
     if (!iso) return null;
@@ -944,6 +1027,8 @@
     WEIGHTS,
     rankPoints,
     // currency
+    isUnclaimedParticipant,
+    mergeParticipants,
     convertFromUSD,
     toUSD,
     formatExact,

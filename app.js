@@ -433,29 +433,13 @@
    * were included.
    */
   function mergeParticipantsFromHash(data) {
-    let added = 0;
-    let updated = 0;
-    const byId = new Map(state.participants.map((p) => [p.id, p]));
-    const byName = new Map(
-      state.participants.map((p) => [(p.name || "").trim().toLowerCase(), p])
+    // The identity rules live in the engine so they can be tested directly —
+    // this merge is the other place in the app that has silently lost data.
+    const { added, updated } = E.mergeParticipants(
+      state.participants,
+      data.p,
+      participantFromPayload
     );
-    data.p.forEach((x) => {
-      const nameKey = (x.n || "").trim().toLowerCase();
-      const existing = (x.id && byId.get(x.id)) || (nameKey && byName.get(nameKey));
-      const incoming = participantFromPayload(x);
-      if (!existing) {
-        if (!nameKey) return; // nothing to identify them by
-        state.participants.push(incoming);
-        byId.set(incoming.id, incoming);
-        byName.set(nameKey, incoming);
-        added += 1;
-        return;
-      }
-      // Never let a stale copy overwrite fresher answers.
-      if ((incoming.updatedAt || 0) <= (existing.updatedAt || 0)) return;
-      Object.assign(existing, incoming, { id: existing.id });
-      updated += 1;
-    });
     if (data.locked && !state.lockedPlan) state.lockedPlan = data.locked;
     // Union the ledgers by id. Expenses are append-only, so anything we
     // haven't seen is simply new — no conflict resolution needed.
