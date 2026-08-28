@@ -299,7 +299,7 @@ def _amadeus_token():
     return _token_cache["token"]
 
 
-def amadeus_fare(frm, to, date):
+def amadeus_fare(frm, to, date, nights=5):
     """Return (min, max) round-trip USD from live offers, or None on any issue."""
     o_iata = CITY_IATA.get(frm)
     d_iata = CITY_IATA.get(to)
@@ -309,9 +309,22 @@ def amadeus_fare(frm, to, date):
         token = _amadeus_token()
         if not token:
             return None
-        dep = date or "2026-08-14"
-        # Round trip: return ~5 days after departure.
-        ret = _plus_days(dep, 5)
+        # No date means we cannot price anything honestly. The old fallback
+        # pinned every lookup to one hard-coded August departure regardless of
+        # when the group was actually travelling -- and that date has since
+        # passed, so the live path silently returned nothing forever while the
+        # app went on badging estimates as though the lookup still worked.
+        if not date:
+            return None
+        try:
+            datetime.date.fromisoformat(date)
+        except ValueError:
+            return None
+        # Don't quote a departure in the past; airlines have no such inventory.
+        if datetime.date.fromisoformat(date) < datetime.date.today():
+            return None
+        dep = date
+        ret = _plus_days(dep, max(1, min(int(nights or 5), 60)))
         params = urllib.parse.urlencode({
             "originLocationCode": o_iata,
             "destinationLocationCode": d_iata,
@@ -341,7 +354,7 @@ def _plus_days(iso, days):
     return dt.isoformat()
 
 
-def resolve_fare(frm_raw, to_raw, date):
+def resolve_fare(frm_raw, to_raw, date, nights=5):
     o = coords_for(frm_raw)
     d = coords_for(to_raw)
     if not o or not d:
@@ -353,7 +366,7 @@ def resolve_fare(frm_raw, to_raw, date):
 
     # Live (only for canonical cities with known IATA codes).
     if os.environ.get("AMADEUS_CLIENT_ID") and frm in CITY_IATA and to in CITY_IATA:
-        live = amadeus_fare(frm, to, date)
+        live = amadeus_fare(frm, to, date, nights)
         if live:
             # Sandbox inventory is fictional — never badge it as a real fare.
             return {"min": live[0], "max": live[1], "currency": "USD",
@@ -580,7 +593,11 @@ class Handler(SimpleHTTPRequestHandler):
             frm = q.get("from", [""])[0]
             to = q.get("to", [""])[0]
             date = q.get("date", [""])[0]
-            return self._send_json(resolve_fare(frm, to, date))
+            try:
+                nights = int(q.get("nights", ["5"])[0])
+            except ValueError:
+                nights = 5
+            return self._send_json(resolve_fare(frm, to, date, nights))
         if parsed.path == "/api/photo":
             q = urllib.parse.parse_qs(parsed.query)
             place = q.get("place", [""])[0]

@@ -56,8 +56,14 @@
 
   // Fare provider injected into the engine: prefer a fetched (live/searched)
   // fare from the proxy cache, fall back to the synchronous engine estimate.
+  // The engine calls this with two arguments, so the window comes from here
+  // rather than being threaded through every call site.
+  const fareDate = () => {
+    const w = pricingWindow();
+    return w ? w.start : null;
+  };
   const fareProvider = (from, to) =>
-    window.ReunlyFares.getCached(from, to) || E.getFare(from, to);
+    window.ReunlyFares.getCached(from, to, fareDate()) || E.getFare(from, to);
 
   // ---- Persistence ----
   const LS_STATE = "reunly_state_v1";
@@ -2172,7 +2178,7 @@
     const info = fareRangeFor(p.city, toCity);
     if (!info) {
       // Distinguish "still fetching from the proxy" from "proxy gave up".
-      const resolved = window.ReunlyFares.isResolved(p.city, toCity);
+      const resolved = window.ReunlyFares.isResolved(p.city, toCity, fareDate());
       if (resolved) {
         side.appendChild(
           el("div", { class: "cost-meta", text: "No estimate for this city." })
@@ -3821,12 +3827,31 @@
 
   // Every (home city → candidate destination) route the views might price.
   // Fetched from the proxy so live/searched fares can upgrade the estimates.
+  /**
+   * The window we should be pricing. Live fares were requested with no date at
+   * all, so the proxy fell back to a hard-coded departure — a date that has
+   * since passed — and quoted August prices for a Christmas trip while badging
+   * them "live". Deliberately fare-independent (locked plan, else the group's
+   * most-wanted submitted window) so asking for fares can't depend on a
+   * ranking that depends on fares.
+   */
+  function pricingWindow() {
+    if (state.lockedPlan && state.lockedPlan.dateStart) {
+      return { start: state.lockedPlan.dateStart, end: state.lockedPlan.dateEnd };
+    }
+    const wanted = E.tallyDates(state.participants);
+    return wanted.length && wanted[0].range.start ? wanted[0].range : null;
+  }
+
   function neededRoutes() {
     const dests = E.tallyDestinations(state.participants).map((d) => d.destination);
+    const win = pricingWindow();
+    const date = win ? win.start : null;
+    const nights = win ? Math.max(1, E.rangeDays(win) - 1) : null;
     const routes = [];
     for (const p of state.participants) {
       if (!p.city) continue;
-      for (const dest of dests) routes.push([p.city, dest]);
+      for (const dest of dests) routes.push([p.city, dest, date, nights]);
     }
     return routes;
   }

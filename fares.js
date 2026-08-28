@@ -25,7 +25,10 @@
     /* ignore corrupt cache */
   }
 
-  const key = (from, to) => `${from}|${to}`;
+  // The date is part of the identity of a fare. Keying on the route alone
+  // meant a Christmas quote and an off-season quote for the same city shared
+  // one slot, so whichever landed first was reused for every window.
+  const key = (from, to, date) => `${from}|${to}|${date || ""}`;
 
   function persist() {
     try {
@@ -46,21 +49,25 @@
    * NOTE: a resolved-but-unknown city is cached as { source:"unknown" } (no
    * min), so callers can distinguish "pending" (null) from "no estimate".
    */
-  function getCached(from, to) {
-    return cache.get(key(from, to)) || null;
+  function getCached(from, to, date) {
+    return cache.get(key(from, to, date)) || null;
   }
   /** Has this route been fetched at all (even if it resolved to unknown)? */
-  function isResolved(from, to) {
-    return cache.has(key(from, to));
+  function isResolved(from, to, date) {
+    return cache.has(key(from, to, date));
   }
 
   /** Fetch one fare from the proxy; resolves to the fare object or null. */
-  async function fetchFare(from, to, date) {
-    const k = key(from, to);
+  async function fetchFare(from, to, date, nights) {
+    const k = key(from, to, date);
     const existing = cache.get(k);
     if (fresh(existing)) return existing;
     try {
-      const qs = new URLSearchParams({ from, to, ...(date ? { date } : {}) });
+      const qs = new URLSearchParams({
+        from, to,
+        ...(date ? { date } : {}),
+        ...(nights ? { nights: String(nights) } : {}),
+      });
       const res = await fetch(`/api/fare?${qs.toString()}`, {
         headers: { Accept: "application/json" },
       });
@@ -70,6 +77,10 @@
         // Cache everything, including resolved-but-unknown, so the UI can stop
         // showing a "pending" state. Only fares with a min are usable values.
         data.fetchedAt = Date.now();
+        // Which departure this price was actually quoted for. Without it the
+        // engine can't tell a Christmas quote from an off-season one and would
+        // trust either to already embody its own seasonal pricing.
+        data.quotedFor = date || null;
         cache.set(k, data);
         persist();
         return data.min != null ? data : null;
@@ -87,15 +98,17 @@
   async function ensureFares(routes, onUpdate) {
     const seen = new Set();
     const todo = [];
-    for (const [from, to] of routes) {
+    for (const [from, to, date, nights] of routes) {
       if (!from || !to) continue;
-      const k = key(from, to);
+      const k = key(from, to, date);
       if (seen.has(k)) continue;
       seen.add(k);
-      if (!fresh(cache.get(k))) todo.push([from, to]);
+      if (!fresh(cache.get(k))) todo.push([from, to, date, nights]);
     }
     if (!todo.length) return;
-    const results = await Promise.all(todo.map(([f, t]) => fetchFare(f, t)));
+    const results = await Promise.all(
+      todo.map(([f, t, d, n]) => fetchFare(f, t, d, n))
+    );
     if (results.some(Boolean) && typeof onUpdate === "function") onUpdate();
   }
 

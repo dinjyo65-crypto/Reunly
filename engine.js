@@ -357,9 +357,16 @@
     const kids = Math.max(0, parseInt((prefs && prefs.kids) || 0, 10) || 0);
     const party = 1 + kids;
     const season = seasonFactorFor(dateRange);
-    // Only scale OUR estimate — a searched/live fare already reflects its own
-    // season, and multiplying it would corrupt a real observed price.
-    const fareSeason = f.source === "estimated" ? season.fare : 1;
+    // Only skip the seasonal uplift for a price that was actually quoted for
+    // THIS window — such a fare already embodies its own season, and scaling it
+    // would corrupt a real observed value. A quote for a different departure
+    // has no more claim to the season than our own estimate does; treating any
+    // non-estimated fare as season-correct meant an August quote could be shown
+    // for a Christmas trip with the 1.35x uplift suppressed, wearing the "live"
+    // badge — the exact under-reporting seasonFactorFor exists to prevent.
+    const quotedForThisWindow =
+      f.source !== "estimated" && (!f.quotedFor || f.quotedFor === dateRange.start);
+    const fareSeason = quotedForThisWindow ? 1 : season.fare;
     // A car costs the same with three people in it as with one, so a drive is
     // priced per VEHICLE. Multiplying it per head charged a family of three
     // $308 to drive 190 miles — three separate "fares", each carrying the $60
