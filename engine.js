@@ -1029,6 +1029,115 @@
     return { added, updated };
   }
 
+  /**
+   * The things a group has to do between agreeing a trip and leaving for it,
+   * with the lead time each one really needs.
+   *
+   * The app stopped at "we locked it", which is where real trips start going
+   * wrong: nobody tracks who has booked, a non-refundable deposit falls due,
+   * and someone discovers at week three that their passport has four months
+   * left and the airline won't board them. These are prompts with links, never
+   * assertions — entry rules depend on nationality and change, and this app
+   * cannot know either.
+   */
+  const PREP_STEPS = [
+    {
+      id: "passport",
+      byDays: 90,
+      title: "Check everyone's passport",
+      detail:
+        "Many countries refuse entry with under six months' validity left, and " +
+        "a renewal can take weeks. Check the expiry date, not just that it exists.",
+      international: true,
+    },
+    {
+      id: "visa",
+      byDays: 75,
+      title: "Check whether anyone needs a visa",
+      detail:
+        "Requirements depend on each person's nationality, not the group's. " +
+        "Some need an appointment booked months ahead.",
+      international: true,
+    },
+    {
+      id: "book-travel",
+      byDays: 60,
+      title: "Book flights or transport",
+      detail: "Prices climb closer in, and the group loses the option of sitting together.",
+    },
+    {
+      id: "book-stay",
+      byDays: 60,
+      title: "Book the accommodation",
+      detail: "Confirm who is paying the deposit and how they get repaid.",
+    },
+    {
+      id: "insurance",
+      byDays: 30,
+      title: "Sort travel insurance",
+      detail:
+        "Cover for cancellation usually has to be in place well before the trip " +
+        "to pay out — buying it the week before is often too late.",
+      international: true,
+    },
+    {
+      id: "balance",
+      byDays: 14,
+      title: "Settle the outstanding balance",
+      detail: "Final payments are usually due before arrival, not on the day.",
+    },
+    {
+      id: "details",
+      byDays: 7,
+      title: "Share arrival times and addresses",
+      detail: "Who lands when, where everyone is staying, and one contact number.",
+    },
+  ];
+
+  /**
+   * The country part of a "City, Country" label. Our US entries are
+   * "New York, NY" — a two-letter state code, not a country — so those all
+   * resolve to the US rather than to seven different countries.
+   */
+  // Matching any two-letter tail as a state made "London, UK" American.
+  const US_STATES = new Set(
+    ("AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN " +
+     "MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA " +
+     "WV WI WY PR").split(" ")
+  );
+  function countryOf(city) {
+    const parts = String(city || "").split(",");
+    if (parts.length < 2) return (parts[0] || "").trim().toLowerCase();
+    const tail = parts[parts.length - 1].trim();
+    if (US_STATES.has(tail.toUpperCase())) return "usa";
+    return tail.toLowerCase();
+  }
+
+  /** True when anyone on the trip is crossing a border to get there. */
+  function isInternationalTrip(participants, destination) {
+    const to = countryOf(destination);
+    if (!to) return false;
+    return (participants || []).some(
+      (p) => p.city && p.rsvp !== "out" && countryOf(p.city) !== to
+    );
+  }
+
+  /**
+   * Which prep steps apply, and how urgent each is now.
+   * `international` steps are dropped for a domestic trip.
+   */
+  function prepStepsFor(daysToGo, isInternational) {
+    return PREP_STEPS.filter((step) => isInternational || !step.international).map((step) => {
+      const slack = daysToGo == null ? null : daysToGo - step.byDays;
+      let urgency = "later";
+      if (slack != null) {
+        if (slack < 0) urgency = "overdue";
+        else if (slack <= 14) urgency = "soon";
+      }
+      return { ...step, slack, urgency };
+    });
+  }
+
   /** Whole days from today until an ISO date (negative if past). */
   function daysUntil(iso) {
     if (!iso) return null;
@@ -1166,6 +1275,10 @@
     // currency
     isUnclaimedParticipant,
     mergeParticipants,
+    PREP_STEPS,
+    prepStepsFor,
+    countryOf,
+    isInternationalTrip,
     convertFromUSD,
     toUSD,
     formatExact,

@@ -890,3 +890,61 @@ test("a drive is priced per car, not per passenger", () => {
   const airSolo = E.tripCostFor("London, UK", "Goa, India", range, E.getFare, { kids: 0 });
   assert.ok(air.travel > airSolo.travel * 2.5, "three seats cost about three fares");
 });
+
+test("a partial repayment reduces the debt without clearing it", () => {
+  // The engine always handled this; the UI had no amount field, so a treasurer
+  // recording a £100 instalment against a £300 debt had to either log £300 that
+  // was never paid — inventing a credit — or lose the record.
+  const people = goers("a", "b");
+  const base = [{ id: "x1", payerId: "a", amount: 600, sharedWith: ["a", "b"] }];
+  const before = E.computeSettlement(people, base);
+  assert.strictEqual(Math.round(before.transfers[0].amount), 300);
+  const after = E.computeSettlement(people, [
+    ...base,
+    { id: "s1", payerId: "b", amount: 100, sharedWith: ["a"], settlement: true },
+  ]);
+  assert.strictEqual(after.transfers.length, 1, "still owed something");
+  assert.strictEqual(after.transfers[0].from, "b");
+  assert.strictEqual(Math.round(after.transfers[0].amount), 200, "300 less the 100 paid");
+  assert.strictEqual(after.total, 600, "and the repayment isn't counted as spend");
+});
+
+// ---- Before-you-go prep ----------------------------------------------------
+test("a domestic trip isn't asked about passports and visas", () => {
+  const home = [person({ city: "Delhi, India", rsvp: "in" }), person({ city: "Mumbai, India", rsvp: "in" })];
+  assert.strictEqual(E.isInternationalTrip(home, "Goa, India"), false);
+  const ids = E.prepStepsFor(60, false).map((s) => s.id);
+  assert.ok(!ids.includes("passport") && !ids.includes("visa"));
+  assert.ok(ids.includes("book-travel"), "but the booking steps still apply");
+});
+
+test("one person crossing a border makes it an international trip", () => {
+  const mixed = [person({ city: "Delhi, India", rsvp: "in" }), person({ city: "London, UK", rsvp: "in" })];
+  assert.strictEqual(E.isInternationalTrip(mixed, "Goa, India"), true);
+  // Someone who has declined doesn't drag the whole group across a border.
+  const declined = [person({ city: "Delhi, India", rsvp: "in" }), person({ city: "London, UK", rsvp: "out" })];
+  assert.strictEqual(E.isInternationalTrip(declined, "Goa, India"), false);
+});
+
+test("US state suffixes aren't mistaken for countries", () => {
+  // "New York, NY" is a state, but "London, UK" is not — matching any
+  // two-letter tail as a state made London American.
+  assert.strictEqual(E.countryOf("New York, NY"), "usa");
+  assert.strictEqual(E.countryOf("Boston, MA"), "usa");
+  assert.strictEqual(E.countryOf("London, UK"), "uk");
+  assert.strictEqual(E.countryOf("Dubai, UAE"), "uae");
+  assert.strictEqual(
+    E.isInternationalTrip([person({ city: "Boston, MA", rsvp: "in" })], "New York, NY"),
+    false, "a US domestic trip needs no passport prompt"
+  );
+});
+
+test("prep urgency reflects how close the trip is", () => {
+  const far = E.prepStepsFor(200, true);
+  assert.ok(far.every((s) => s.urgency === "later"), "nothing is urgent six months out");
+  const close = E.prepStepsFor(43, true);
+  const passport = close.find((s) => s.id === "passport");
+  assert.strictEqual(passport.urgency, "overdue", "90-day passport check is past at 43 days");
+  const insurance = close.find((s) => s.id === "insurance");
+  assert.strictEqual(insurance.urgency, "soon", "30-day insurance step is due about now");
+});

@@ -36,6 +36,11 @@
     // so an invite link can carry "the plan moved" and "the plan was called
     // off" as distinct, orderable facts rather than only "there is a plan".
     lockTs: 0,
+    // Prep checklist: { [stepId]: true } once done, and per-person booking
+    // status. Travels with the invite link so the group sees one shared answer
+    // to "who has actually booked?".
+    prepDone: {},
+    booked: {},
     ballot: null, // { open, openedBy, options:[...], votesByParticipant:{ id:{optionId} } }
     memories: [], // [{ id, authorId, authorName, type:"note"|"photo", text, dataUrl?, ts }]
     expenses: [], // [{ id, payerId, desc, amount(USD), ts, settlement? }]
@@ -115,6 +120,8 @@
           demoMode: state.demoMode,
           lockedPlan: state.lockedPlan,
           lockTs: state.lockTs,
+          prepDone: state.prepDone,
+          booked: state.booked,
           ballot: state.ballot,
           memories: state.memories,
           expenses: state.expenses,
@@ -182,6 +189,8 @@
     state.demoMode = !!s.demoMode;
     state.lockedPlan = s.lockedPlan || null;
     state.lockTs = s.lockTs || 0;
+    state.prepDone = s.prepDone && typeof s.prepDone === "object" ? s.prepDone : {};
+    state.booked = s.booked && typeof s.booked === "object" ? s.booked : {};
     state.ballot = s.ballot || null;
     state.memories = Array.isArray(s.memories) ? s.memories : [];
     state.expenses = Array.isArray(s.expenses) ? s.expenses : [];
@@ -274,6 +283,10 @@
       // Sent even when `locked` is null: that combination is how a link says
       // "the plan was unlocked", which the old payload simply could not express.
       lts: state.lockTs || 0,
+      // Prep progress travels too: "who has booked?" is only useful as one
+      // shared answer, not a private note on each person's phone.
+      pd: Object.keys(state.prepDone || {}).slice(0, 40),
+      bk: Object.keys(state.booked || {}).slice(0, MAX_PEOPLE),
       // Privacy: the invite link does NOT carry anyone's email address. The
       // participant id IS included — it's a random local token, not PII, and
       // without it the same person re-appears as a duplicate on every merge.
@@ -401,6 +414,12 @@
     // Carried even when there is no lock: `locked: null` with a newer stamp is
     // how a link says the organiser called the plan off.
     clean.lts = Number.isFinite(data.lts) ? data.lts : 0;
+    clean.pd = Array.isArray(data.pd)
+      ? data.pd.slice(0, 40).map((i) => str(i, 40)).filter(Boolean)
+      : [];
+    clean.bk = Array.isArray(data.bk)
+      ? data.bk.slice(0, MAX_PEOPLE).map((i) => str(i, 40)).filter(Boolean)
+      : [];
     if (data.locked && typeof data.locked === "object") {
       const l = data.locked;
       const start = isoOrEmpty(l.dateStart);
@@ -448,6 +467,10 @@
     state.participants = data.p.map(participantFromPayload);
     if (data.locked) state.lockedPlan = data.locked;
     state.lockTs = data.lts || 0;
+    state.prepDone = {};
+    (data.pd || []).forEach((id) => (state.prepDone[id] = true));
+    state.booked = {};
+    (data.bk || []).forEach((id) => (state.booked[id] = true));
     // A first-time joiner previously arrived with an EMPTY ledger while the
     // UI called settle-up the group's shared record.
     state.expenses = Array.isArray(data.x)
@@ -484,6 +507,12 @@
     // had already opened the first link stayed pinned to the dead plan, with
     // their countdown, .ics and Trip Pack all quoting it. Newest write wins,
     // exactly as participant answers already do.
+    // Union, not replace: a tick records something someone actually did, and
+    // an older link simply hasn't seen it yet. Unticking is rare and local.
+    state.prepDone = { ...(state.prepDone || {}) };
+    (data.pd || []).forEach((id) => (state.prepDone[id] = true));
+    state.booked = { ...(state.booked || {}) };
+    (data.bk || []).forEach((id) => (state.booked[id] = true));
     let lockChanged = null;
     const incomingLockTs = data.lts || 0;
     if (incomingLockTs > (state.lockTs || 0)) {
@@ -2830,6 +2859,123 @@
     toast("Trip pack downloaded — open it to print or share");
   }
 
+  /**
+   * What still has to happen before anyone leaves.
+   *
+   * The app used to stop at "we locked it", which is exactly where real trips
+   * come apart: nobody tracks who has booked, a non-refundable deposit falls
+   * due, and someone finds out too late that their passport is inside the
+   * six-month window and they will not be boarded. Everything here is a prompt
+   * with a link, never an assertion — entry rules depend on nationality and
+   * change, and the app cannot know either.
+   */
+  function renderPrep(panel, plan) {
+    const days = E.daysUntil(plan.dateStart);
+    if (days == null || days < 0) return; // the trip has been and gone
+    const international = E.isInternationalTrip(state.participants, plan.destination);
+    const steps = E.prepStepsFor(days, international);
+    const done = state.prepDone || {};
+    const outstanding = steps.filter((st) => !done[st.id]);
+
+    const card = el("div", { class: "card toolkit stagger" });
+    const head = el("div", { class: "itin-head" });
+    head.appendChild(
+      el("div", {
+        class: "toolkit-title",
+        text: `✅ Before you go — ${days} day${days === 1 ? "" : "s"} to go`,
+      })
+    );
+    card.appendChild(head);
+    card.appendChild(
+      el("div", {
+        class: "itin-sub",
+        text: outstanding.length
+          ? `${outstanding.length} of ${steps.length} still to do. Lead times are typical, not rules — check the ones that apply to you.`
+          : "Everything on the list is ticked off.",
+      })
+    );
+
+    steps.forEach((st) => {
+      const isDone = !!done[st.id];
+      const row = el("div", { class: `prep-row${isDone ? " done" : ""}` });
+      const box = el("button", {
+        type: "button",
+        class: `prep-check${isDone ? " on" : ""}`,
+        "aria-pressed": isDone ? "true" : "false",
+        "aria-label": `${isDone ? "Undo" : "Mark done"}: ${st.title}`,
+        text: isDone ? "✓" : "",
+        onClick: () => {
+          state.prepDone = { ...(state.prepDone || {}) };
+          if (state.prepDone[st.id]) delete state.prepDone[st.id];
+          else state.prepDone[st.id] = true;
+          saveState();
+          renderPlan();
+        },
+      });
+      row.appendChild(box);
+      const body = el("div", { class: "prep-body" });
+      const title = el("div", { class: "prep-title" });
+      title.appendChild(el("span", { text: st.title }));
+      if (!isDone && st.urgency !== "later") {
+        title.appendChild(
+          el("span", {
+            class: `badge ${st.urgency === "overdue" ? "warn" : ""}`,
+            text:
+              st.urgency === "overdue"
+                ? `${Math.abs(st.slack)} day${Math.abs(st.slack) === 1 ? "" : "s"} past the usual point`
+                : "due about now",
+          })
+        );
+      }
+      body.appendChild(title);
+      body.appendChild(el("div", { class: "prep-detail", text: st.detail }));
+      row.appendChild(body);
+      card.appendChild(row);
+    });
+
+    // Who has actually booked. The single question an organiser is asked most
+    // and the one the app could never answer.
+    const goers = state.participants.filter((p) => p.rsvp !== "out");
+    if (goers.length) {
+      card.appendChild(el("div", { class: "prep-sub", text: "Who's booked" }));
+      const chips = el("div", { class: "chip-select" });
+      goers.forEach((p) => {
+        const on = !!(state.booked || {})[p.id];
+        chips.appendChild(
+          el("button", {
+            type: "button",
+            class: `chip-toggle${on ? " on" : ""}`,
+            "aria-pressed": on ? "true" : "false",
+            text: `${on ? "✓ " : ""}${p.name || "Unnamed"}`,
+            onClick: () => {
+              if (state.role !== "organizer" && !isMe(p)) {
+                toast("Only you or the organiser can change this");
+                return;
+              }
+              state.booked = { ...(state.booked || {}) };
+              if (state.booked[p.id]) delete state.booked[p.id];
+              else state.booked[p.id] = true;
+              saveState();
+              renderPlan();
+            },
+          })
+        );
+      });
+      card.appendChild(chips);
+      const bookedCount = goers.filter((p) => (state.booked || {})[p.id]).length;
+      card.appendChild(
+        el("div", {
+          class: "itin-sub",
+          text:
+            bookedCount === goers.length
+              ? "Everyone's booked."
+              : `${bookedCount} of ${goers.length} booked · share the invite link to sync this with the group.`,
+        })
+      );
+    }
+    panel.appendChild(card);
+  }
+
   function renderPlan() {
     const panel = $("#planPanel");
     if (!panel) return;
@@ -2838,6 +2984,8 @@
     if (!plan) return; // toolkit + itinerary only exist once the plan is locked
 
     const dest = plan.destination;
+
+    renderPrep(panel, plan);
 
     // --- Trip toolkit ---
     const kit = el("div", { class: "card toolkit stagger" });
@@ -3200,9 +3348,29 @@
               class: "btn ghost sm settle-btn",
               text: "Mark paid",
               onClick: () => {
-                if (window.confirm(`Record that ${pName(t.from)} paid ${pName(t.to)} ${money(t.amount)}?`)) {
-                  addSettlement(t.from, t.to, t.amount);
+                // Prefilled with the full balance but editable. People repay in
+                // round numbers and in instalments, and the settle-up maths has
+                // always handled a partial correctly — the UI just had no way to
+                // enter one, so the only options were to record money that was
+                // never handed over or to lose the record entirely.
+                const full = Math.round(E.convertFromUSD(t.amount, displayCode()) * 100) / 100;
+                const typed = window.prompt(
+                  `How much did ${pName(t.from)} pay ${pName(t.to)}?
+` +
+                    `Full balance is ${money(t.amount)} (${displayCode()}).`,
+                  String(full)
+                );
+                if (typed === null) return;
+                const amt = E.toUSD(parseFloat(typed), displayCode());
+                if (!Number.isFinite(amt) || amt <= 0) {
+                  toast("Enter an amount greater than zero");
+                  return;
                 }
+                if (amt > t.amount + 0.005) {
+                  toast(`That's more than the ${money(t.amount)} outstanding`);
+                  return;
+                }
+                addSettlement(t.from, t.to, amt);
               },
             })
           );

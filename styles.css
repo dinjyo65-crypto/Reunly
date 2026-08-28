@@ -884,6 +884,21 @@ a:focus-visible {
 .itin-note { font-size: 0.8rem; color: var(--text-dim); line-height: 1.5; margin-top: 2px; }
 /* Arrival/departure rows aren't links, so they must not look clickable. */
 .itin-fixed { cursor: default; opacity: 0.85; }
+/* Before-you-go checklist. */
+.prep-row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0;
+  border-top: 1px solid var(--border); }
+.prep-row.done { opacity: 0.55; }
+.prep-check { flex: 0 0 auto; width: 22px; height: 22px; margin-top: 1px;
+  border-radius: var(--radius-sm); border: 1.5px solid var(--border-strong);
+  background: transparent; color: var(--text); font-size: 0.8rem; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.prep-check.on { background: var(--good); border-color: var(--good); color: #06231a; }
+.prep-body { min-width: 0; }
+.prep-title { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  font-size: 0.88rem; font-weight: 600; }
+.prep-row.done .prep-title { text-decoration: line-through; }
+.prep-detail { font-size: 0.78rem; color: var(--text-dim); line-height: 1.45; margin-top: 2px; }
+.prep-sub { font-size: 0.8rem; font-weight: 600; margin: 14px 0 6px; }
 /* "The ranking moved since you locked this" — a prompt, not an alarm. */
 .alert-inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-sm);
