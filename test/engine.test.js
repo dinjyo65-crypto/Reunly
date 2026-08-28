@@ -1362,3 +1362,91 @@ test("writing off a debt keeps the record of what was spent", () => {
   const bo = after.positions.find((p) => p.id === "bo");
   assert.strictEqual(bo.share, 600, "and Bo absorbed it");
 });
+
+// ---- Round 11: honesty about what we don't know ----------------------------
+test("a repayment to nobody doesn't move anyone's balance", () => {
+  // sharedWith fell through to the default split, so a settlement with no
+  // recipient was credited to the WHOLE GROUP: Bob repaying Ana pushed Cara's
+  // debt from $150 to $200, money she never touched. Not reachable from the UI,
+  // but a crafted invite link can carry it.
+  const people = goers("a", "b", "c");
+  const base = [{ id: "x1", payerId: "a", amount: 300, sharedWith: ["b", "c"] }];
+  const before = E.computeSettlement(people, base);
+  const after = E.computeSettlement(people, [
+    ...base,
+    { id: "s1", payerId: "b", amount: 150, sharedWith: [], settlement: true },
+  ]);
+  assert.strictEqual(after.balances.get("c"), before.balances.get("c"),
+    "an uninvolved third party must not move");
+  assert.strictEqual(after.balances.get("a"), before.balances.get("a"));
+  assert.strictEqual(after.balances.get("b"), before.balances.get("b"),
+    "and the payer isn't credited for money that went nowhere");
+});
+
+test("an unknown city borrows a nightly rate from its own country", () => {
+  // 32 cities span a 5.6x range and everything else got one flat band, so Kochi
+  // was priced at $420-780 for six nights against Goa's $180-420 — enough to
+  // take the cost score to zero and tell all three travellers they were priced
+  // out of a city that is no dearer than the one it lost to.
+  const goa = E.estimateLodging("Goa, India", 6);
+  const kochi = E.estimateLodging("Kochi, India", 6);
+  assert.strictEqual(goa.basis, "known");
+  assert.strictEqual(kochi.basis, "country", "borrowed from Indian cities we do know");
+  assert.strictEqual(kochi.approximate, true, "still flagged as a guess");
+  assert.ok(kochi.max < goa.max * 1.3, `Kochi ${kochi.max} should be near Goa ${goa.max}`);
+  // With no countrymen in the table we fall back to the global band and say so.
+  const oslo = E.estimateLodging("Oslo, Norway", 6);
+  assert.strictEqual(oslo.basis, "global");
+});
+
+test("July isn't a summer peak below the equator", () => {
+  // seasonBandFor read the calendar month and nothing about where the trip was,
+  // so a July reunion in Sydney was scaled 1.2x and labelled "summer peak" —
+  // inflating the absolute figure budgetFitFor compares against a stated
+  // ceiling, and naming people as priced out for money the trip doesn't cost.
+  const july = { start: "2027-07-10", end: "2027-07-17" };
+  assert.strictEqual(E.seasonFactorFor(july, "London, UK").fare, 1.2);
+  assert.strictEqual(E.seasonFactorFor(july, "Sydney, Australia").fare, 1);
+  assert.strictEqual(E.seasonFactorFor(july, "Cape Town, South Africa").fare, 1,
+    "recognised from the country when we have no coordinates");
+  // Christmas stays global — it's a holiday, not a season.
+  const xmas = { start: "2026-12-19", end: "2026-12-26" };
+  assert.ok(E.seasonFactorFor(xmas, "Sydney, Australia").fare > 1);
+});
+
+test("not knowing where people live isn't the same as a domestic trip", () => {
+  // The organiser's "add participant" button creates rows with no city, and a
+  // participant with no city couldn't make a trip international — so the prep
+  // card silently dropped passport, visa and insurance, the three items with
+  // the longest lead times, and printed "Everything on the list is ticked off."
+  const known = [person({ city: "Delhi, India", rsvp: "in" })];
+  assert.strictEqual(E.isInternationalTrip(known, "Goa, India"), false);
+  const partial = [...known, person({ city: "", rsvp: "in", name: "Priya" })];
+  assert.strictEqual(E.isInternationalTrip(partial, "Goa, India"), "unknown");
+  const steps = E.prepStepsFor(120, E.isInternationalTrip(partial, "Goa, India")).map((s) => s.id);
+  assert.ok(steps.includes("passport") && steps.includes("visa") && steps.includes("insurance"),
+    "shown when we can't rule them out");
+  assert.deepStrictEqual(E.participantsWithoutCity(partial), ["Priya"], "and we can say who");
+});
+
+test("only people who are coming get a vote", () => {
+  // Every other consumer of the roster filters decliners; the ballot numerator
+  // did not, and nothing pruned votes from people since removed — so five votes
+  // could read "5 of 3 voted" and lock the option the three actual travellers
+  // liked least.
+  const ballot = {
+    options: [{ id: "rome" }, { id: "lisbon" }],
+    votesByParticipant: {
+      ghost: { optionId: "rome" }, b: { optionId: "rome" }, c: { optionId: "rome" },
+      d: { optionId: "lisbon" }, e: { optionId: "lisbon" },
+    },
+  };
+  const roster = [
+    person({ id: "b", rsvp: "in" }), person({ id: "c", rsvp: "in" }),
+    person({ id: "d", rsvp: "in" }), person({ id: "e", rsvp: "out" }),
+  ];
+  const t = E.tallyBallot(roster, ballot);
+  assert.strictEqual(t.totalVotes, 3, "the removed voter and the decliner drop out");
+  assert.strictEqual(t.eligible, 3);
+  assert.deepStrictEqual(t.counts, { rome: 2, lisbon: 1 });
+});

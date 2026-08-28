@@ -209,6 +209,36 @@
    * UI must present these as estimates, never as quoted prices.
    */
   const DEFAULT_NIGHTLY = [70, 130];
+
+  /**
+   * A nightly band for a city we don't have a rate for.
+   *
+   * NIGHTLY_RATES holds 32 cities spanning $25-60 to $140-260 — a 5.6x range —
+   * and everything else got a single flat [70, 130]. Since any-city geocoding
+   * shipped, most destinations a real group types are not in that table, so the
+   * app's largest cost line was pinned near the middle of that spread: Kochi
+   * came out at $420-780 for six nights against Goa's $180-420, which took the
+   * cost score to 0 and told all three travellers they were priced out of a
+   * city that is no dearer than the one it lost to. Neighbours in the same
+   * country are a far better guess than the global mean.
+   */
+  function fallbackNightly(city) {
+    const country = countryOf(city);
+    if (!country) return { band: DEFAULT_NIGHTLY, basis: "global" };
+    const peers = Object.keys(NIGHTLY_RATES)
+      .filter((key) => countryOf(key) === country)
+      .map((key) => NIGHTLY_RATES[key]);
+    if (!peers.length) return { band: DEFAULT_NIGHTLY, basis: "global" };
+    const mid = (arr) => {
+      const sorted = [...arr].sort((a, b) => a - b);
+      const i = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[i] : (sorted[i - 1] + sorted[i]) / 2;
+    };
+    return {
+      band: [mid(peers.map((r) => r[0])), mid(peers.map((r) => r[1]))],
+      basis: "country",
+    };
+  }
   const NIGHTLY_RATES = {
     // Pricier hubs
     "london, uk": [110, 210], "paris, france": [105, 200],
@@ -241,13 +271,19 @@
     const key = (destination || "").trim().toLowerCase();
     const band = NIGHTLY_RATES[key];
     // A generic fallback can be badly wrong in either direction (it was ~2.5x
-    // reality for Indian cities), so say when we're guessing rather than
-    // presenting it with the same confidence as a known rate.
+    // reality for Indian cities), so fall back to cities in the same country
+    // first, and say when we're guessing rather than presenting it with the
+    // same confidence as a known rate.
+    const fallback = band ? null : fallbackNightly(destination);
+    const use = band || fallback.band;
     return {
-      min: Math.round((band || DEFAULT_NIGHTLY)[0] * nights),
-      max: Math.round((band || DEFAULT_NIGHTLY)[1] * nights),
+      min: Math.round(use[0] * nights),
+      max: Math.round(use[1] * nights),
       source: "estimated",
       approximate: !band,
+      // "country" means we borrowed from neighbours; "global" means we really
+      // had nothing to go on, which the UI should weigh differently.
+      basis: band ? "known" : fallback.basis,
     };
   }
 
@@ -263,8 +299,15 @@
    * Applied ONLY to our own estimates. A real captured fare already reflects
    * whatever season it was quoted for, and scaling it would corrupt real data.
    */
-  /** Which pricing band a single calendar day falls in. */
-  function seasonBandFor(iso) {
+  // Where the calendar's summer is our winter. Coordinates cover the curated
+  // cities; this covers the ones people type in.
+  const SOUTHERN_COUNTRIES = new Set([
+    "au", "nz", "za", "ar", "cl", "pe", "bo", "py", "uy", "br", "ec",
+    "id", "pg", "fj", "zw", "zm", "mz", "bw", "na", "mg", "tz", "ao",
+  ]);
+
+  /** Which pricing band a single calendar day falls in, at a destination. */
+  function seasonBandFor(iso, southern = false) {
     const md = iso.slice(5); // "MM-DD"
     const month = Number(iso.slice(5, 7));
     const day = Number(iso.slice(8, 10));
@@ -272,9 +315,18 @@
     if ((month === 12 && day >= 18) || (month === 1 && day <= 5)) {
       return { fare: 1.35, lodging: 1.5, label: "Christmas & New Year peak" };
     }
-    // Northern-hemisphere summer holidays.
-    if (month === 7 || month === 8) {
+    // Summer holidays. July in Sydney, Cape Town or Buenos Aires is LOW season,
+    // and asserting a peak there inflated the absolute figure the budget check
+    // compares against a stated ceiling — so one person tipped over capped the
+    // whole combination's fit and was named in an over-budget warning for money
+    // the trip doesn't cost.
+    if (!southern && (month === 7 || month === 8)) {
       return { fare: 1.2, lodging: 1.25, label: "summer peak" };
+    }
+    if (southern && (month === 12 || month === 1)) {
+      // Handled by the Christmas band above for most of the window; this
+      // catches the rest of the southern summer holidays.
+      return { fare: 1.15, lodging: 1.2, label: "summer peak" };
     }
     // Easter-ish shoulder spike.
     if (md >= "03-25" && md <= "04-15") {
@@ -297,9 +349,19 @@
   // combination, and the day loop inside runs a Date + toISOString per night —
   // real work to repeat for an answer that depends only on the two dates.
   const seasonCache = new Map();
-  function seasonFactorFor(dateRange) {
+  function seasonFactorFor(dateRange, destination = null) {
     if (!isValidRange(dateRange)) return { fare: 1, lodging: 1, label: null };
-    const cacheKey = `${dateRange.start}|${dateRange.end}`;
+    // Below the equator the summer months are reversed. Where we have no
+    // coordinates we don't guess — the band is skipped rather than asserted.
+    const coords = destination ? CITY_COORDS[resolveCity(destination) || destination] : null;
+    // Coordinates when we have them; otherwise the country in the label, which
+    // the geocoder always supplies. Northern remains the default for a place we
+    // can't place at all — most of the world, and the app's regions, are north
+    // of the equator, so it's the better prior rather than a claim.
+    const southern = coords
+      ? coords.lat < 0
+      : SOUTHERN_COUNTRIES.has(countryOf(destination));
+    const cacheKey = `${dateRange.start}|${dateRange.end}|${southern ? "s" : "n"}`;
     const hit = seasonCache.get(cacheKey);
     if (hit) return hit;
     const start = Date.parse(dateRange.start + "T00:00:00Z");
@@ -313,7 +375,7 @@
     let peakDays = 0;
     const labels = new Map();
     for (let t = start; t <= end && days < 400; t += 86400000) {
-      const band = seasonBandFor(new Date(t).toISOString().slice(0, 10));
+      const band = seasonBandFor(new Date(t).toISOString().slice(0, 10), southern);
       fare += band.fare;
       lodging += band.lodging;
       days += 1;
@@ -456,7 +518,7 @@
     // to be priced out.
     const kids = Math.max(0, parseInt((prefs && prefs.kids) || 0, 10) || 0);
     const party = 1 + kids;
-    const season = seasonFactorFor(dateRange);
+    const season = seasonFactorFor(dateRange, destination);
     // Only skip the seasonal uplift for a price that was actually quoted for
     // THIS window — such a fare already embodies its own season, and scaling it
     // would corrupt a real observed value. A quote for a different departure
@@ -1382,13 +1444,66 @@
     return normalizeCountry(tail);
   }
 
-  /** True when anyone on the trip is crossing a border to get there. */
+  /**
+   * Is anyone crossing a border to get there? Returns true, false, or
+   * "unknown".
+   *
+   * "unknown" matters. A participant with no home city could not make a trip
+   * international, and the organiser's "Add participant" button creates exactly
+   * such rows — so an organiser in Delhi planning Goa who types in cousins from
+   * London and Dubai got a domestic answer, and the prep card silently dropped
+   * the passport, visa and insurance steps: the three highest-stakes items,
+   * with 90-, 75- and 30-day lead times. It then printed "Everything on the
+   * list is ticked off." By the time those guests filled in their cities, the
+   * lead times had passed. The code is careful not to cry wolf on a domestic
+   * trip; silence is the more dangerous error.
+   */
   function isInternationalTrip(participants, destination) {
     const to = countryOf(destination);
-    if (!to) return false;
-    return (participants || []).some(
-      (p) => p.city && p.rsvp !== "out" && countryOf(p.city) !== to
-    );
+    if (!to) return "unknown";
+    const going = (participants || []).filter((p) => p.rsvp !== "out");
+    if (going.some((p) => p.city && countryOf(p.city) !== to)) return true;
+    if (going.some((p) => !p.city)) return "unknown";
+    return false;
+  }
+
+  /**
+   * Count a ballot, ignoring anyone who isn't coming.
+   *
+   * The tally was the last place a decliner could still steer the trip. Every
+   * other consumer of the roster filters rsvp !== "out" — the ranking, the
+   * prefs summary, the split base, room sharing, the border check, the fare
+   * routes — and even the ballot's OWN denominator did. The numerator did not,
+   * and nothing pruned votes cast by people since removed, so a five-vote
+   * Rome 3-2 could read "5 of 3 voted" and lock Rome while the three people
+   * actually going preferred Lisbon 2-1.
+   */
+  function tallyBallot(participants, ballot) {
+    const counts = {};
+    let totalVotes = 0;
+    if (!ballot || !ballot.votesByParticipant) {
+      return { counts, totalVotes, eligible: 0 };
+    }
+    const eligibleIds = new Set();
+    (participants || []).forEach((p) => {
+      if (p.rsvp === "out") return;
+      eligibleIds.add(p.id);
+      (p.aliasIds || []).forEach((a) => eligibleIds.add(a));
+    });
+    Object.entries(ballot.votesByParticipant).forEach(([voterId, v]) => {
+      if (!eligibleIds.has(voterId)) return;
+      counts[v.optionId] = (counts[v.optionId] || 0) + 1;
+      totalVotes += 1;
+    });
+    const eligible = (participants || []).filter((p) => p.rsvp !== "out").length;
+    return { counts, totalVotes, eligible };
+  }
+
+  /** Who we can't place, so the UI can say why it's asking. */
+  function participantsWithoutCity(participants) {
+    return (participants || [])
+      .filter((p) => p.rsvp !== "out" && !p.city)
+      .map((p) => p.name || "Someone");
   }
 
   /**
@@ -1396,6 +1511,7 @@
    * `international` steps are dropped for a domestic trip.
    */
   function prepStepsFor(daysToGo, isInternational) {
+    // "unknown" is truthy, so border steps are shown — the caller says why.
     return PREP_STEPS.filter((step) => isInternational || !step.international).map((step) => {
       const slack = daysToGo == null ? null : daysToGo - step.byDays;
       let urgency = "later";
@@ -1458,6 +1574,10 @@
     // of them paid the other back, at which point the same $300 read "$100".
     const chargedBySpend = new Set();
     expenses.forEach((x) => {
+      // A settlement with no recipient describes money going nowhere. Skip it
+      // whole — crediting the payer while charging no one leaves the books
+      // unbalanced, which is a worse lie than ignoring the line.
+      if (x.settlement && !(Array.isArray(x.sharedWith) && x.sharedWith.length)) return;
       paid[x.payerId] = (paid[x.payerId] || 0) + x.amount;
       // Whoever an expense was pinned to at the time still owes their share,
       // whether or not they are on the roster now. Filtering to current members
@@ -1467,12 +1587,19 @@
       // then billed $450, more than before they paid. Leaving is not the same
       // as never having owed anything; forgiving a debt is a decision the group
       // has to make explicitly, not a side effect of tidying the roster.
-      let sharers =
-        Array.isArray(x.sharedWith) && x.sharedWith.length ? x.sharedWith : baseIds;
-      // A settlement is one person repaying another. It must never collapse
-      // onto its own payer, which would cancel the repayment entirely.
-      if (!sharers.length) sharers = x.settlement ? [] : [x.payerId];
-      if (!sharers.length) return;
+      // A settlement is one person handing money to specific people. With no
+      // recipient it is meaningless, and falling through to baseIds credited
+      // the WHOLE GROUP: Bob repaying Ana $150 pushed Cara's debt from $150 to
+      // $200, money she never touched. The old guard for this was unreachable
+      // because baseIds is never empty in practice. Not reachable from the UI —
+      // addSettlement always writes one recipient — but a crafted invite link
+      // can carry it.
+      let sharers = x.settlement
+        ? x.sharedWith
+        : Array.isArray(x.sharedWith) && x.sharedWith.length
+        ? x.sharedWith
+        : baseIds;
+      if (!sharers.length) sharers = [x.payerId];
       if (!x.settlement) sharers.forEach((id) => chargedBySpend.add(id));
       // Largest-remainder allocation in whole cents. A plain division leaves
       // orphan cents ($100 across 3 shows three $33.33s against a $100 total),
@@ -1588,6 +1715,8 @@
     countryOf,
     normalizeCountry,
     isInternationalTrip,
+    participantsWithoutCity,
+    tallyBallot,
     convertFromUSD,
     toUSD,
     formatExact,

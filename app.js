@@ -48,6 +48,9 @@
     // Ticks older than this describe a trip that was cancelled or moved.
     planTs: 0,
     planKeepIds: [],
+    // The plan before the current one, so an unlock followed by a re-lock of
+    // the same trip isn't mistaken for a move.
+    lastPlan: null,
     // Participant removals, as timestamped flags like the others. A removal
     // only wins over an incoming row if it is NEWER than that row's own edit —
     // someone re-adding themselves after being removed should stick.
@@ -247,6 +250,7 @@
           lockTs: state.lockTs,
           planTs: state.planTs,
           planKeepIds: state.planKeepIds,
+          lastPlan: state.lastPlan,
           removedPeople: state.removedPeople,
           pastNames: state.pastNames,
           prepDone: state.prepDone,
@@ -320,6 +324,7 @@
     state.lockTs = s.lockTs || 0;
     state.planTs = s.planTs || 0;
     state.planKeepIds = Array.isArray(s.planKeepIds) ? s.planKeepIds : [];
+    state.lastPlan = s.lastPlan || null;
     state.removedPeople = normalizeFlags(s.removedPeople);
     state.prepDone = normalizeFlags(s.prepDone);
     state.booked = normalizeFlags(s.booked);
@@ -565,10 +570,13 @@
           };
         })
         // Drop anything unusable rather than letting a NaN poison every balance.
+        // A transfer with no recipient describes money going nowhere; the
+        // engine ignores it, but there's no reason to carry it either.
         // Negative amounts are legitimate — a refund line — so only zero and
         // non-numbers are rejected. Requiring > 0 here silently deleted every
         // refund the moment the ledger travelled through an invite link.
-        .filter((e) => e.id && e.by && Number.isFinite(e.a) && e.a !== 0);
+        .filter((e) => e.id && e.by && Number.isFinite(e.a) && e.a !== 0)
+        .filter((e) => !e.s || e.w.length);
     }
     if (Array.isArray(data.xd)) {
       clean.xd = data.xd.slice(0, MAX_EXPENSES).map((i) => str(i, 60)).filter(Boolean);
@@ -1395,7 +1403,16 @@
             // so any other member's link put them straight back — with their
             // old RSVP, which quietly re-entered them into splitBaseFor as a
             // default sharer on every expense logged afterwards.
-            setFlag("removedPeople", p.id, true);
+            // Every id this row is known by, not just the local one. A person
+            // who claimed a placeholder keeps the local id and stores the
+            // incoming one in aliasIds — and once the row is deleted those
+            // aliases are gone, so a tombstone on the local id alone could
+            // never match the id their own device sends. They came back as a
+            // brand-new participant, and splitBaseFor made them a default
+            // sharer on every expense logged afterwards.
+            [p.id, ...(p.aliasIds || [])].forEach((id) =>
+              setFlag("removedPeople", id, true)
+            );
             state.participants = state.participants.filter((x) => x.id !== p.id);
             if (state.editingId === p.id) state.editingId = null;
             renderAll();
@@ -1864,13 +1881,19 @@
    * February still showed "Book flights ✓" and "Everyone's booked."
    */
   function applyLock(plan) {
-    const before = state.lockedPlan;
+    // Compare against the last plan we had, not just the current one. An
+    // unlock sets lockedPlan to null, so re-locking the SAME trip afterwards
+    // looked like a move and voided every passport/visa tick and booking chip —
+    // while switching Rome to Milan directly kept them. Unlocking to discuss
+    // before re-agreeing is the normal route, so the two must agree.
+    const before = state.lockedPlan || state.lastPlan || null;
     const movedTo =
       !plan ||
       !before ||
       before.destination !== plan.destination ||
       before.dateStart !== plan.dateStart ||
       before.dateEnd !== plan.dateEnd;
+    if (state.lockedPlan) state.lastPlan = state.lockedPlan;
     state.lockedPlan = plan;
     state.lockTs = Date.now();
     if (!movedTo) return;
@@ -2664,18 +2687,42 @@
     // Region-aware display currency (the traveller pays from their home city),
     // unless the user has toggled the whole board to USD.
     const code = state.currencyMode === "usd" ? "USD" : D.currencyForCity(p.city);
+    // Print what this person is actually charged. estimateFare still hard-
+    // switches at 300 miles, so the raw band jumped 19% for one extra mile AND
+    // changed unit from per-car to per-seat — Bangalore to Goa (306mi) showed
+    // "$100–$155 · estimated" per head while the model charged $104 for the car,
+    // and a searched fare carried real-fare authority over a number the cost
+    // model discards. The band is right for a flight; for a drive it isn't.
+    const party = 1 + Math.max(0, parseInt((p.prefs && p.prefs.kids) || 0, 10) || 0);
+    const legMiles = E.milesBetween(p.city, toCity, fareProvider);
+    const leg =
+      legMiles == null || fare.min === 0
+        ? null
+        : E.chooseTravel(legMiles, (fare.min + fare.max) / 2, party);
+    const driving = leg && leg.mode === "drive";
     const fareRow = el("div", { class: "fare-row" });
     fareRow.appendChild(
       el("div", {
         class: "cost-fare",
-        text: fare.min === 0 ? "Local" : E.formatRange(fare.min, fare.max, code),
+        text:
+          fare.min === 0
+            ? "Local"
+            : driving
+            ? est(leg.cost)
+            : E.formatRange(fare.min, fare.max, code),
       })
     );
     if (fare.min !== 0) {
-      fareRow.appendChild(el("span", { class: "muted cur", text: code }));
+      fareRow.appendChild(
+        el("span", { class: "muted cur", text: driving ? `${code} · one car` : code })
+      );
     }
     // Provenance badge: live / sandbox (test data) / searched / estimated.
-    if (fare.source === "live") {
+    // A drive is our own fuel estimate whatever the fare table says, so the
+    // airline-quote badges would be claiming authority we don't have here.
+    if (driving) {
+      fareRow.appendChild(el("span", { class: "badge warn", text: "estimated" }));
+    } else if (fare.source === "live") {
       fareRow.appendChild(el("span", { class: "badge good", text: "● live" }));
     } else if (fare.source === "sandbox") {
       // Amadeus sandbox returns fictional inventory — flag it as test data
@@ -3034,7 +3081,12 @@
     let worst = 0;
     for (const p of state.participants) {
       if (p.rsvp === "out" || !p.city) continue;
-      const miles = E.distanceMiles(p.city, destination);
+      // milesBetween exists so every caller resolves distance the same way. Two
+      // sites still read the local table only, and any city from the live
+      // autocomplete ("Bath, United Kingdom") isn't in it — so this returned 0
+      // and the arrival/departure bookends, the whole reason this function
+      // exists, were never inserted for those groups.
+      const miles = E.milesBetween(p.city, destination, fareProvider);
       if (miles == null) continue;
       const hours = E.journeyHours(miles);
       if (hours > worst) worst = hours;
@@ -4285,10 +4337,7 @@
     // Tally.
     const counts = {};
     let totalVotes = 0;
-    Object.values(b.votesByParticipant).forEach((v) => {
-      counts[v.optionId] = (counts[v.optionId] || 0) + 1;
-      totalVotes += 1;
-    });
+    ({ counts, totalVotes } = E.tallyBallot(state.participants, b));
     const myVote = state.me ? (b.votesByParticipant[state.me] || {}).optionId : null;
     const ordered = [...b.options].sort(
       (a, c) => (counts[c.id] || 0) - (counts[a.id] || 0) || c.seedTotal - a.seedTotal
@@ -4298,9 +4347,7 @@
     const card = el("div", { class: "card vote-card" });
     const head = el("div", { class: "vote-head" });
     head.appendChild(el("h3", { class: "vote-title", text: b.open ? "🗳️ Vote for the plan" : "🏁 Vote results" }));
-    // People who've said they can't come aren't waiting to vote, so counting
-    // them made the tally permanently incomplete.
-    const eligible = state.participants.filter((p) => p.rsvp !== "out").length;
+    const { eligible } = E.tallyBallot(state.participants, b);
     head.appendChild(
       el("span", { class: "hint", text: `${totalVotes} of ${eligible} voted` })
     );
@@ -4850,7 +4897,10 @@
     if (state.lockedPlan && state.lockedPlan.dateStart) {
       return { start: state.lockedPlan.dateStart, end: state.lockedPlan.dateEnd };
     }
-    const wanted = E.tallyDates(state.participants);
+    // A decliner's dates could set the window every live fare is quoted for,
+    // while the ranking scored windows drawn from a filtered roster.
+    const going = state.participants.filter((p) => p.rsvp !== "out");
+    const wanted = E.tallyDates(going.length ? going : state.participants);
     return wanted.length && wanted[0].range.start ? wanted[0].range : null;
   }
 
@@ -5170,18 +5220,20 @@
 
   function travelModeFor(fromCity, toCity, prefs) {
     if (!fromCity || !toCity) return "flight";
-    const miles = E.distanceMiles(fromCity, toCity);
+    const miles = E.milesBetween(fromCity, toCity, fareProvider);
     if (miles == null) return "flight"; // unknown city — don't invent a road
-    if (miles < 25) return "walk";
     // Ask the cost model, not the distance. Whether a journey is driven now
     // depends on party size as well as distance, so reading the raw
     // drive/fly threshold would draw a plane beside a fare priced as one car.
     const f = fareProvider(fromCity, toCity);
     if (!f || f.min == null) return "flight";
     const party = 1 + Math.max(0, parseInt((prefs && prefs.kids) || 0, 10) || 0);
-    return E.chooseTravel(miles, (f.min + f.max) / 2, party).mode === "drive"
-      ? "drive"
-      : "flight";
+    // Take the local/walk case from the cost model too, rather than a separate
+    // 25-mile literal — someone whose geocoded home city IS the destination was
+    // drawn as flying, contradicting a fare card showing zero travel.
+    const mode = E.chooseTravel(miles, (f.min + f.max) / 2, party).mode;
+    if (mode === "local") return "walk";
+    return mode === "drive" ? "drive" : "flight";
   }
 
   /**
