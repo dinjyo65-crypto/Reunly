@@ -1001,3 +1001,41 @@ test("country names from the two vocabularies compare equal", () => {
   assert.strictEqual(E.isInternationalTrip([P("London, UK")], "Goa, India"), true);
   assert.strictEqual(E.normalizeCountry("gb"), "gb", "an ISO code is already canonical");
 });
+
+test("a group trip doesn't bill everyone a single-room supplement", () => {
+  // NIGHTLY_RATES is quoted per person SHARING A TWIN, then every childless
+  // participant was charged 1.6x it. Two friends travelling together are two
+  // such records, so they were billed 3.2x the band for one room — and three
+  // people in a family room came out cheaper per head than one adult.
+  const range = { start: "2026-11-21", end: "2026-11-28" };
+  const cost = (kids, canShare) =>
+    E.tripCostFor("Mumbai, India", "Goa, India", range, E.getFare,
+      { kids, accommodation: true }, { canShare });
+  const shared = cost(0, true);
+  const alone = cost(0, false);
+  const family = cost(2, true);
+  assert.ok(shared.lodging < alone.lodging, "sharing must cost less than not sharing");
+  assert.strictEqual(shared.sharing, "twin");
+  assert.strictEqual(alone.sharing, "single");
+  // Someone sharing pays the band as quoted — no supplement on top. The
+  // supplement is 1.6x, so this is the whole fix in one number.
+  assert.ok(Math.abs(alone.lodging / shared.lodging - 1.6) < 0.01,
+    "the single supplement should be the only difference between the two");
+  // A family room IS cheaper per head than a twin — children share a bed. What
+  // was wrong before is that a LONE ADULT cost 2.4x a child's head; now the gap
+  // is the ordinary one between an adult bed and a child sharing.
+  assert.ok(shared.lodging < alone.lodging &&
+    family.lodging / family.party < shared.lodging,
+    "kids cheapest, then an adult sharing, then an adult alone");
+});
+
+test("who can share is decided by the group, not assumed", () => {
+  const bed = (kids) => person({ city: "Mumbai, India", rsvp: "in", prefs: { kids } });
+  assert.strictEqual(E.soloBedCount([bed(0), bed(0)]), 2, "two lone adults can pair up");
+  assert.strictEqual(E.soloBedCount([bed(0)]), 1, "one lone adult cannot");
+  assert.strictEqual(E.soloBedCount([bed(0), bed(2)]), 1, "a parent already shares with their kids");
+  const declined = person({ city: "Mumbai, India", rsvp: "out", prefs: { kids: 0 } });
+  assert.strictEqual(E.soloBedCount([bed(0), declined]), 1, "someone not coming can't share a room");
+  const noBed = person({ city: "Mumbai, India", rsvp: "in", prefs: { kids: 0, accommodation: false } });
+  assert.strictEqual(E.soloBedCount([bed(0), noBed]), 1, "nor can someone staying with family");
+});

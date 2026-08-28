@@ -110,6 +110,12 @@
     if (pricingWindowCache === null) pricingWindowCache = { w: pricingWindow() };
     return pricingWindowCache.w ? pricingWindowCache.w.start : null;
   };
+  // Whether people needing a bed on their own can pair up in a twin — which is
+  // the basis the nightly bands are quoted on. Everything that prices lodging
+  // must agree on this, or the Costs tab, the winner card and the Trip Pack
+  // quote different stays for the same trip.
+  const tripOpts = () => ({ canShare: E.soloBedCount(state.participants) >= 2 });
+
   const fareProvider = (from, to) =>
     window.ReunlyFares.getCached(from, to, fareDate()) || E.getFare(from, to);
 
@@ -2064,7 +2070,7 @@
     const myTrip = (() => {
       const me = state.participants.find(isMe);
       if (!me || !me.city) return null;
-      return E.tripCostFor(me.city, c.destination, c.dateRange, fareProvider, me.prefs);
+      return E.tripCostFor(me.city, c.destination, c.dateRange, fareProvider, me.prefs, tripOpts());
     })();
     grid.appendChild(
       scoreCell(
@@ -2096,7 +2102,13 @@
           class: "cost-breakdown",
           text:
             `≈ ${est(brTravel)} travel + ${est(brStay)} stay ` +
-            `(${c.nights} night${c.nights === 1 ? "" : "s"}) · estimates, excludes food & activities` +
+            `(${c.nights} night${c.nights === 1 ? "" : "s"}` +
+            // Say what the stay assumed about occupancy. It's the single
+            // biggest lever on the figure and people can't sanity-check it
+            // without knowing which way it went.
+            (myTrip && myTrip.sharing === "twin" ? ", sharing a twin" : "") +
+            (myTrip && myTrip.sharing === "single" ? ", own room" : "") +
+            `) · estimates, excludes food & activities` +
             // Don't present a generic fallback rate with the same confidence
             // as one we actually hold for that city.
             (c.season ? ` · ${c.season} — prices run higher` : "") +
@@ -2410,7 +2422,7 @@
           end: plan.dateEnd || (plan.dateRange && plan.dateRange.end) }
       : null;
     if (window_ && window_.start && window_.end && fare.min !== 0) {
-      const trip = E.tripCostFor(p.city, toCity, window_, fareProvider, p.prefs);
+      const trip = E.tripCostFor(p.city, toCity, window_, fareProvider, p.prefs, tripOpts());
       if (trip && trip.nights > 0) {
         const partyNote = trip.party > 1 ? ` · ${trip.party} travelling` : "";
         const stayNote =
@@ -2946,7 +2958,7 @@
       .filter((p) => p.city)
       .map((p) => {
         const f = fareProvider(p.city, plan.destination);
-        const trip = E.tripCostFor(p.city, plan.destination, window_, fareProvider, p.prefs);
+        const trip = E.tripCostFor(p.city, plan.destination, window_, fareProvider, p.prefs, tripOpts());
         // Show the travel figure that's actually inside the all-in total —
         // party size and seasonal uplift included. The raw fare band beside a
         // scaled total made the pack contradict itself for a family or a

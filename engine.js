@@ -358,7 +358,24 @@
    * under-report what a trip actually costs, which is exactly the number
    * people compare against their stated budget.
    */
-  function tripCostFor(fromCity, destination, dateRange, fareProvider = getFare, prefs = null) {
+  /**
+   * How many people on this trip would be looking for a bed on their own.
+   * Two of them can share a twin, which is the basis the nightly bands are
+   * quoted on — so on a group trip, sharing is the normal case, not the
+   * exception.
+   */
+  function soloBedCount(participants) {
+    return (participants || []).filter(
+      (p) =>
+        p.rsvp !== "out" &&
+        (!p.prefs || p.prefs.accommodation !== false) &&
+        !(Number(p.prefs && p.prefs.kids) || 0)
+    ).length;
+  }
+
+  function tripCostFor(
+    fromCity, destination, dateRange, fareProvider = getFare, prefs = null, opts = null
+  ) {
     const f = fareProvider(fromCity, destination);
     if (!f || f.min == null) return null;
     // Someone bringing two children books three seats, not one. Costing every
@@ -390,16 +407,24 @@
     // cost — charging it anyway invents an expense they never face.
     const needsBed = !prefs || prefs.accommodation !== false;
     const lodge = needsBed ? estimateLodging(destination, nights) : null;
-    // Children share the room rather than each taking a full rate.
-    // Children share the room rather than each taking a full rate. A lone
-    // adult, conversely, can't split a twin — the bands assume sharing.
-    const roomFactor = kids > 0 ? 1 + kids * 0.5 : 1.6;
+    // NIGHTLY_RATES is quoted per person SHARING A TWIN, so the factor is what
+    // that person's occupancy does to it. Children share the room rather than
+    // each taking a full rate. A lone adult can't split a twin — but on a group
+    // trip they usually aren't alone, and charging every childless participant
+    // the single supplement billed two friends 3.2x the band for one room, and
+    // made three people in a family room cost less per head than one adult.
+    // Whether sharing is possible is now the caller's answer, not an assumption.
+    const canShare = opts && opts.canShare;
+    const roomFactor = kids > 0 ? 1 + kids * 0.5 : canShare ? 1 : 1.6;
     const lodging = lodge ? ((lodge.min + lodge.max) / 2) * roomFactor * season.lodging : 0;
     return {
       travel, lodging, nights, party,
       total: travel + lodging,
       source: f.source,
       season: season.label,
+      // What the lodging figure assumed, so the UI can say so rather than
+      // leaving people to discover it from a number that looks wrong.
+      sharing: kids > 0 ? "family" : canShare ? "twin" : "single",
     };
   }
 
@@ -689,16 +714,24 @@
    * (1 = comfortably inside everyone's budget), or null when nobody supplied a
    * budget — in which case callers should stay neutral rather than guess.
    */
-  function budgetFitFor(destination, participants, fareProvider = getFare, dateRange = null) {
+  function budgetFitFor(
+    destination, participants, fareProvider = getFare, dateRange = null, opts = null
+  ) {
     const ratios = [];
     const overNames = [];
+    // Must price lodging the same way the ranking does. Calling tripCostFor
+    // without this charged every childless participant a single-room
+    // supplement here alone, so four friends on a $600 budget were all flagged
+    // as priced out of a $458 trip — the cost score capped for a clash that
+    // didn't exist.
+    const costOpts = opts || { canShare: soloBedCount(participants) >= 2 };
     for (const p of participants) {
       const budget = parseFloat(p.prefs && p.prefs.budget);
       if (!p.city || Number.isNaN(budget) || budget <= 0) continue;
       // Compare against the whole trip (travel + lodging) when we know the
       // dates — that's the number people actually have to find.
       const trip = dateRange
-        ? tripCostFor(p.city, destination, dateRange, fareProvider, p.prefs)
+        ? tripCostFor(p.city, destination, dateRange, fareProvider, p.prefs, costOpts)
         : null;
       let cost;
       if (trip) {
@@ -781,6 +814,10 @@
     // computed window as though someone proposed it.
     const submittedKeys = new Set(tallyDates(participants).map((d) => rangeKey(d.range)));
 
+    // Two or more people needing a bed on their own can pair up in a twin,
+    // which is what the nightly bands already assume.
+    const tripOpts = { canShare: soloBedCount(participants) >= 2 };
+
     // Pre-compute average fares per destination so we can normalize cost.
     const fareByDest = new Map(); // dest -> avg fare (number) or null
     const searchedByDest = new Map(); // dest -> bool (any searched/live fare?)
@@ -801,7 +838,7 @@
         const dateScore = dateScoreFor(dateRange, participants);
         // Budget fit depends on the window as well as the place: a longer stay
         // means more nights of lodging, so it's evaluated per combination.
-        const budget = budgetFitFor(dest, participants, fareProvider, dateRange);
+        const budget = budgetFitFor(dest, participants, fareProvider, dateRange, tripOpts);
         const { viability, nights, required } = tripViabilityFor(
           dest, participants, dateRange, submittedKeys.has(rangeKey(dateRange))
         );
@@ -823,7 +860,7 @@
         const perLodging = [];
         for (const p of participants) {
           if (!p.city) continue;
-          const trip = tripCostFor(p.city, dest, dateRange, fareProvider, p.prefs);
+          const trip = tripCostFor(p.city, dest, dateRange, fareProvider, p.prefs, tripOpts);
           if (!trip) continue;
           const head = Math.max(1, trip.party);
           perBooking.push(trip.total);
@@ -1374,6 +1411,7 @@
     avgFareTo,
     budgetFitFor,
     estimateLodging,
+    soloBedCount,
     tripCostFor,
     rankCombinations,
     // links
