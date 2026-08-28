@@ -63,6 +63,26 @@
     );
   }
 
+  /**
+   * Format components and their total so the printed digits reconcile.
+   *
+   * roundMoney quantises to ~1% of each value's OWN magnitude, so rounding the
+   * parts and the total independently left them disagreeing on screen — the
+   * winner card printed "$533 travel + $980 stay" under a $1,510 headline
+   * (sum $1,513), and the Trip Pack's rows summed to $6,935 under a $6,930
+   * group total. Round 7 went to some trouble to make the parts explain the
+   * headline; this is the same promise at the level of the digits.
+   *
+   * Returns { parts: [string], total: string } with total === sum of parts.
+   */
+  function formatParts(usdValues, code) {
+    const c = CURRENCIES[code] || CURRENCIES.USD;
+    const rounded = (usdValues || []).map((v) => roundMoney(convertFromUSD(v || 0, code)));
+    const sum = rounded.reduce((a, b) => a + b, 0);
+    const fmt = (v) => c.symbol + v.toLocaleString("en-US");
+    return { parts: rounded.map(fmt), total: fmt(sum), totalValue: sum };
+  }
+
   /** Format a USD min–max band in a target currency, e.g. "₹17,850–₹28,200". */
   function formatRange(usdMin, usdMax, code) {
     const c = CURRENCIES[code] || CURRENCIES.USD;
@@ -124,10 +144,46 @@
    * scales: short hops are priced higher per mile than long-haul (where fares
    * flatten out). Callers must label the result "estimated".
    */
-  // Below this, people drive rather than fly. Used for pricing, for journey
-  // time, and for deciding whether a trip can sensibly be a day trip — they
-  // must agree, so there is one constant.
+  // Below this, driving is the obvious choice for anyone. Above ROAD_MAX it
+  // stops being plausible at all. Between them it depends on how many people
+  // are in the car — see chooseTravel().
   const DRIVE_MILES = 300;
+  const ROAD_MAX = 700;
+  const DRIVE_COST_PER_MILE = 0.34; // round-trip fuel and tolls, per vehicle
+
+  /** What it costs to drive a party there and back. Per car, not per head. */
+  function driveCostFor(miles) {
+    return miles * DRIVE_COST_PER_MILE;
+  }
+
+  /**
+   * How this party actually gets there, and what it costs them.
+   *
+   * A single distance threshold was wrong because the choice depends on how
+   * many people are travelling together, not just how far. Switching at exactly
+   * 300 miles made one extra mile multiply a family's travel cost by 3.6x —
+   * $107.50 for a car at 300 miles, $382.50 for three seats at 301 — and real
+   * city pairs sit right on the line (Bangalore to Goa is 306 miles). Cost is
+   * 40% of the ranking, so a member typing a home city six miles further out
+   * could reorder the group's destinations.
+   *
+   * Now both options are priced for this party and the cheaper one wins, which
+   * is what a real group does. A family of four still drives 500 miles; a lone
+   * traveller flies it.
+   */
+  function chooseTravel(miles, fareMid, party) {
+    const heads = Math.max(1, party);
+    const flying = { mode: "flight", cost: fareMid * heads };
+    // Unknown distance must not become a free trip. Only a genuine zero — the
+    // same city — is local; anything we can't measure is priced per seat, which
+    // is the conservative assumption.
+    if (miles === 0) return { mode: "local", cost: 0 };
+    if (miles == null || !Number.isFinite(miles) || miles < 0) return flying;
+    if (miles > ROAD_MAX) return flying;
+    const driving = { mode: "drive", cost: driveCostFor(miles) };
+    if (miles <= DRIVE_MILES) return driving;
+    return driving.cost <= flying.cost ? driving : flying;
+  }
 
   function estimateFare(miles) {
     if (miles == null) return null;
@@ -399,8 +455,14 @@
     // $308 to drive 190 miles — three separate "fares", each carrying the $60
     // airport booking overhead that a road trip never incurs. That figure then
     // fed the budget check, producing spurious "over budget" warnings on drives.
-    const driving = f.mode === "drive";
-    const travel = ((f.min + f.max) / 2) * (driving ? 1 : party) * fareSeason;
+    // The mode is decided here, from distance AND party size, rather than being
+    // taken from the fare provider — the server and the engine would otherwise
+    // each hold half the rule, which is exactly how the per-vehicle pricing
+    // ended up silently dead in normal operation once before.
+    const miles = f.miles != null ? f.miles : distanceMiles(fromCity, destination);
+    const chosen = chooseTravel(miles, (f.min + f.max) / 2, party);
+    const driving = chosen.mode === "drive";
+    const travel = chosen.cost * fareSeason;
     // Nights = nights slept, so one fewer than the inclusive day count.
     const nights = Math.max(0, rangeDays(dateRange) - 1);
     // "I don't need a bed" (staying with family, own place) means no lodging
@@ -422,6 +484,8 @@
       total: travel + lodging,
       source: f.source,
       season: season.label,
+      // How they're getting there, decided for this party.
+      mode: chosen.mode,
       // What the lodging figure assumed, so the UI can say so rather than
       // leaving people to discover it from a number that looks wrong.
       sharing: kids > 0 ? "family" : canShare ? "twin" : "single",
@@ -437,13 +501,18 @@
   function getFare(fromCity, toCity) {
     const from = resolveCity(fromCity) || fromCity;
     const to = resolveCity(toCity) || toCity;
+    const miles = distanceMiles(fromCity, toCity);
     const searched = SEARCHED_FARES[`${from}|${to}`];
+    // `miles` on every return, matching the proxy's shape. tripCostFor decides
+    // drive-vs-fly from it, and a fare object without it silently reverted to
+    // per-seat pricing for the whole journey.
     if (searched) {
-      return { min: searched.min, max: searched.max, mode: "flight", source: "searched", asOf: FARES_AS_OF };
+      return { min: searched.min, max: searched.max, mode: "flight",
+               source: "searched", asOf: FARES_AS_OF, miles };
     }
-    const est = estimateFare(distanceMiles(fromCity, toCity));
+    const est = estimateFare(miles);
     if (!est) return null;
-    return { ...est, source: "estimated" };
+    return { ...est, source: "estimated", miles };
   }
 
   /** Rough flight time (hrs): taxi/climb overhead + cruise at ~500 mph. */
@@ -1398,11 +1467,14 @@
     toUSD,
     formatExact,
     formatMoney,
+    formatParts,
     formatRange,
     // geo/cost
     resolveCity,
     distanceMiles,
     estimateFare,
+    chooseTravel,
+    driveCostFor,
     getFare,
     flightTimeHours,
     journeyHours,

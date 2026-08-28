@@ -1068,3 +1068,49 @@ test("someone who declined doesn't shape the itinerary or the insights", () => {
   assert.strictEqual(s.accessibility.length, 0, "nor their access needs");
   assert.deepStrictEqual(s.activitiesRanked, [["Nightlife", 1]]);
 });
+
+// ---- Drive or fly is a party decision, not a distance one ------------------
+test("one extra mile doesn't triple a family's travel cost", () => {
+  // A hard switch at 300 miles meant 300mi cost a family $107.50 (one car) and
+  // 301mi cost $382.50 (three seats). Real pairs sit on the line — Bangalore to
+  // Goa is 306 miles — and cost is 40% of the ranking, so a member typing a
+  // home city six miles further out could reorder the group's destinations.
+  const cost = (miles, party) => {
+    const f = E.estimateFare(miles);
+    return E.chooseTravel(miles, (f.min + f.max) / 2, party).cost;
+  };
+  for (const party of [1, 3]) {
+    const before = cost(300, party);
+    const after = cost(301, party);
+    assert.ok(Math.abs(after - before) / before < 0.05,
+      `party of ${party}: ${before} -> ${after} across the boundary`);
+  }
+});
+
+test("a family drives where a lone traveller flies", () => {
+  // The choice depends on how many people are in the car, which is why a single
+  // distance threshold could never be right.
+  const f = E.estimateFare(500);
+  const mid = (f.min + f.max) / 2;
+  assert.strictEqual(E.chooseTravel(500, mid, 1).mode, "flight", "one seat is cheaper than the fuel");
+  assert.strictEqual(E.chooseTravel(500, mid, 4).mode, "drive", "four seats are not");
+  // Beyond road range nobody drives, however big the party.
+  assert.strictEqual(E.chooseTravel(3000, mid, 6).mode, "flight");
+});
+
+test("an unmeasurable journey is priced, not made free", () => {
+  // Falling through to "local" on a null distance would have handed out free
+  // trips for any city pair the coordinate table doesn't know.
+  assert.strictEqual(E.chooseTravel(null, 200, 2).mode, "flight");
+  assert.strictEqual(E.chooseTravel(null, 200, 2).cost, 400);
+  assert.strictEqual(E.chooseTravel(0, 200, 2).cost, 0, "but the same city really is free");
+});
+
+test("a fare always carries the distance it was priced for", () => {
+  // tripCostFor decides drive-vs-fly from f.miles; a fare object without it
+  // silently reverted the whole journey to per-seat pricing.
+  for (const [a, b] of [["London, UK", "Goa, India"], ["Boston, MA", "New York, NY"]]) {
+    const f = E.getFare(a, b);
+    assert.ok(Number.isFinite(f.miles), `${a} -> ${b} fare must carry miles`);
+  }
+});

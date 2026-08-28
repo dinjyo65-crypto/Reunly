@@ -63,6 +63,20 @@
   const canEdit = (p) => state.role === "organizer" || isMe(p);
   const SVG_NS = "http://www.w3.org/2000/svg";
 
+  // What the all-in figure does NOT include. Enumerating three items made the
+  // list read as complete while omitting visas and travel insurance — the two
+  // costs the app's own prep checklist instructs international groups to buy.
+  // They also differ in kind from food and activities: mandatory, pre-departure
+  // and non-discretionary. One string, so the three places that disclose this
+  // can't drift apart again.
+  const COST_EXCLUSIONS = "food, activities, local transport, visas and travel insurance";
+
+  /** How stale a dated reference is, in whole days (negative = future). */
+  function ageInDays(iso) {
+    const days = E.daysUntil(iso);
+    return days == null ? null : -days;
+  }
+
   // Timestamped on/off flags, used for the prep checklist and booking status.
   // Accepts the old bare-boolean shape so existing saves and older links still
   // load — an untimestamped tick is treated as very old, so any real decision
@@ -2118,13 +2132,24 @@
       if (!me || !me.city) return null;
       return E.tripCostFor(me.city, c.destination, c.dateRange, fareProvider, me.prefs, tripOpts());
     })();
+    // Headline and breakdown come from ONE rounding pass, so the digits on
+    // screen add up. Rounding the total separately from its parts printed
+    // "$533 travel + $980 stay" under a $1,510 headline.
+    const brTravelUsd = myTrip ? myTrip.travel : c.travelApplied;
+    const brStayUsd = myTrip ? myTrip.lodging : c.lodgingApplied;
+    const money3 =
+      brTravelUsd != null && brStayUsd != null
+        ? E.formatParts([brTravelUsd, brStayUsd], displayCode())
+        : null;
     grid.appendChild(
       scoreCell(
         // For a family, "your cost" is the whole booking — that's the number
         // they have to find, so show it and say who it covers.
         myTrip ? (myTrip.party > 1 ? `Your ${myTrip.party}` : "Your cost")
           : c.nights > 0 ? "Avg per person" : "Avg fare",
-        myTrip
+        money3
+          ? money3.total
+          : myTrip
           ? est(myTrip.total)
           : c.avgTripCost != null
           ? est(c.avgTripCost)
@@ -2140,21 +2165,19 @@
     // explanation of it. (It also used to print the raw fare and raw nightly
     // band — before party size, room factor and festive uplift — so it could
     // total less than half the figure above it.)
-    const brTravel = myTrip ? myTrip.travel : c.travelApplied;
-    const brStay = myTrip ? myTrip.lodging : c.lodgingApplied;
-    if (c.nights > 0 && brTravel != null && brStay != null) {
+    if (c.nights > 0 && money3) {
       body.appendChild(
         el("div", {
           class: "cost-breakdown",
           text:
-            `≈ ${est(brTravel)} travel + ${est(brStay)} stay ` +
+            `≈ ${money3.parts[0]} travel + ${money3.parts[1]} stay ` +
             `(${c.nights} night${c.nights === 1 ? "" : "s"}` +
             // Say what the stay assumed about occupancy. It's the single
             // biggest lever on the figure and people can't sanity-check it
             // without knowing which way it went.
             (myTrip && myTrip.sharing === "twin" ? ", sharing a twin" : "") +
             (myTrip && myTrip.sharing === "single" ? ", own room" : "") +
-            `) · estimates, excludes food & activities` +
+            `) · estimates, excludes ${COST_EXCLUSIONS}` +
             // Don't present a generic fallback rate with the same confidence
             // as one we actually hold for that city.
             (c.season ? ` · ${c.season} — prices run higher` : "") +
@@ -2446,7 +2469,17 @@
       fareRow.appendChild(el("span", { class: "badge warn", text: "test data" }));
     } else if (fare.source === "searched") {
       fareRow.appendChild(
-        el("span", { class: "badge good", text: `searched · ${fare.asOf}` })
+        // A captured fare doesn't stay true. It was badged green forever — the
+        // same treatment a genuinely live quote gets — so a price from months
+        // ago read as freshly confirmed. Past a month it says how old it is.
+        (() => {
+          const age = ageInDays(fare.asOf);
+          const stale = age != null && age > 30;
+          return el("span", {
+            class: `badge ${stale ? "warn" : "good"}`,
+            text: stale ? `searched · ${age} days old` : `searched · ${fare.asOf}`,
+          });
+        })()
       );
     } else if (fare.min !== 0) {
       fareRow.appendChild(el("span", { class: "badge warn", text: "estimated" }));
@@ -2555,9 +2588,9 @@
         class: "scope-note",
         text:
           "Estimates only. The all-in figure covers return travel plus an " +
-          "estimated stay for the chosen dates — it excludes food, activities " +
-          "and local transport. " +
-          `Non-USD amounts use approximate rates set ${D.RATES_AS_OF}.`,
+          `estimated stay for the chosen dates — it excludes ${COST_EXCLUSIONS}. ` +
+          `Fares priced ${D.FARES_AS_OF}; non-USD amounts use approximate rates ` +
+          `set ${D.RATES_AS_OF}.`,
       })
     );
 
@@ -2999,7 +3032,10 @@
     // same all-in figure as the app — printing airfare alone here contradicted
     // both the winner card and the Costs tab.
     const window_ = { start: plan.dateStart, end: plan.dateEnd };
-    let packTotal = 0;
+    // Collect first, format once. Accumulating exact totals and rounding at the
+    // end left the printed column summing to something other than the printed
+    // group total ($6,935 of rows under a $6,930 total).
+    const packRows = [];
     const rows = goers
       .filter((p) => p.city)
       .map((p) => {
@@ -3012,8 +3048,8 @@
         const fare = trip ? est(trip.travel) : f && f.min != null ? estRange(f.min, f.max) : "—";
         let allIn = "—";
         if (trip) {
-          packTotal += trip.total;
-          allIn = est(trip.total);
+          packRows.push(trip.total);
+          allIn = E.formatParts([trip.total], displayCode()).parts[0];
           if (trip.party > 1) allIn += ` (${trip.party} people)`;
         }
         // Say who has actually confirmed. Listing an unconfirmed guest without
@@ -3025,8 +3061,10 @@
         );
       })
       .join("");
-    const packFooter = packTotal
-      ? `<tr><td colspan="3"><b>Group total</b></td><td><b>${est(packTotal)}</b></td></tr>`
+    // The group total is the sum of the ROUNDED rows, so the column adds up.
+    const packFooter = packRows.length
+      ? `<tr><td colspan="3"><b>Group total</b></td><td><b>` +
+        `${E.formatParts(packRows, displayCode()).total}</b></td></tr>`
       : "";
     const itHtml = it.days
       .map(
@@ -3058,9 +3096,14 @@
       `<table><tr><th>Name</th><th>From</th>` +
       `<th>Travel</th><th>Travel + stay</th></tr>${rows}${packFooter}</table>` +
       `<h2>Suggested itinerary</h2>${itHtml}` +
-      `<div class="foot">Generated by Reunly · estimates only. "Travel + stay" covers return ` +
-      `travel plus an estimated stay for these dates; it excludes food, activities and local ` +
-      `transport. Confirm real prices before booking.</div>` +
+      // The pack is printed and re-read weeks later, so it has to carry enough
+      // for its reader to judge the numbers: when it was made, what currency
+      // they're in, and how old the fares and exchange rates behind them are.
+      `<div class="foot">Generated by Reunly on ${escapeHtml(new Date().toISOString().slice(0, 10))} · ` +
+      `estimates only. "Travel + stay" covers return travel plus an estimated stay for these ` +
+      `dates; it excludes ${escapeHtml(COST_EXCLUSIONS)}. Amounts in ` +
+      `${escapeHtml(displayCode())}, converted at rates set ${escapeHtml(D.RATES_AS_OF)}; ` +
+      `fares priced ${escapeHtml(D.FARES_AS_OF)}. Confirm real prices before booking.</div>` +
       `</body></html>`;
     const blob = new Blob([html], { type: "text/html" });
     const a = document.createElement("a");
@@ -4557,13 +4600,20 @@
   // Fixed order so the caption reads the same way on every render.
   const MODE_ORDER = ["flight", "drive", "walk"];
 
-  function travelModeFor(fromCity, toCity) {
+  function travelModeFor(fromCity, toCity, prefs) {
     if (!fromCity || !toCity) return "flight";
     const miles = E.distanceMiles(fromCity, toCity);
     if (miles == null) return "flight"; // unknown city — don't invent a road
     if (miles < 25) return "walk";
-    const est = E.estimateFare(miles);
-    return est && est.mode === "drive" ? "drive" : "flight";
+    // Ask the cost model, not the distance. Whether a journey is driven now
+    // depends on party size as well as distance, so reading the raw
+    // drive/fly threshold would draw a plane beside a fare priced as one car.
+    const f = fareProvider(fromCity, toCity);
+    if (!f || f.min == null) return "flight";
+    const party = 1 + Math.max(0, parseInt((prefs && prefs.kids) || 0, 10) || 0);
+    return E.chooseTravel(miles, (f.min + f.max) / 2, party).mode === "drive"
+      ? "drive"
+      : "flight";
   }
 
   /**
@@ -4600,7 +4650,7 @@
       const offset = i - (n - 1) / 2;
       const y = H / 2 + offset * gap;
       const x = 46 + Math.abs(offset) * 9;
-      const mode = TRAVEL_MODES[travelModeFor(person.city, destination)];
+      const mode = TRAVEL_MODES[travelModeFor(person.city, destination, person.prefs)];
       // Lift the control point for a flight and keep a road route low, so the
       // shape of the line already says how they're getting there.
       const midX = (x + HUB.x) / 2;
@@ -4684,7 +4734,7 @@
     // and told you nothing about how many people face each journey.
     const tally = {};
     goers.forEach((p) => {
-      const m = travelModeFor(p.city, plan.destination);
+      const m = travelModeFor(p.city, plan.destination, p.prefs);
       tally[m] = (tally[m] || 0) + 1;
     });
     const parts = MODE_ORDER.filter((m) => tally[m]).map(
