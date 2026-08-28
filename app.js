@@ -1455,6 +1455,10 @@
   function dateInput(p, idx, end) {
     return el("input", {
       type: "date",
+      // A trip can't be planned into the past. Without this the picker happily
+      // accepted a window that has already gone, which could then be locked —
+      // and the countdown just read "Past".
+      min: new Date().toISOString().slice(0, 10),
       value: p.dates[idx][end] || "",
       onInput: (e) => {
         p.dates[idx][end] = e.target.value;
@@ -1654,6 +1658,47 @@
         state.lockedPlan.dateEnd === c.dateRange.end
     );
   }
+  /**
+   * The single place the agreed plan changes. Both the winner card and the
+   * ballot lock through here.
+   *
+   * Two things have to happen together and neither is optional. The stamp:
+   * lockBallotOption used to set lockedPlan without touching lockTs, and since
+   * the merge is strictly newest-wins, a plan locked from a vote could never
+   * reach anyone — every guest already held a stamp >= the stale one, so they
+   * stayed pinned to the previous destination while the push notification told
+   * them it had changed. And the reset: nothing cleared the prep checklist when
+   * the plan moved, so a trip rescheduled from Rome in December to Lisbon in
+   * February still showed "Book flights ✓" and "Everyone's booked."
+   */
+  function applyLock(plan) {
+    const before = state.lockedPlan;
+    const movedTo =
+      !plan ||
+      !before ||
+      before.destination !== plan.destination ||
+      before.dateStart !== plan.dateStart ||
+      before.dateEnd !== plan.dateEnd;
+    state.lockedPlan = plan;
+    state.lockTs = Date.now();
+    if (!movedTo) return;
+    // Anything tied to THIS trip's dates or place is no longer true. Cleared
+    // with a fresh stamp rather than deleted: a deleted key can't be expressed
+    // on the wire, so the clear would never reach anyone else's device.
+    state.participants.forEach((p) => {
+      if (flagOn(state.booked, p.id)) setFlag("booked", p.id, false);
+    });
+    const sameCountry =
+      before && plan && E.countryOf(before.destination) === E.countryOf(plan.destination);
+    // Passport and visa depend on the destination country, not the dates, so
+    // they survive a reschedule to the same country.
+    const keep = sameCountry ? ["passport", "visa"] : [];
+    E.PREP_STEPS.forEach((step) => {
+      if (keep.includes(step.id)) return;
+      if (flagOn(state.prepDone, step.id)) setFlag("prepDone", step.id, false);
+    });
+  }
+
   function toggleLock(c) {
     const locked = lockState(c);
     // The role check only guarded LOCKING, and the button renders for everyone
@@ -1676,15 +1721,16 @@
     } else if (state.lockedPlan) {
       if (!window.confirm(`Lock ${c.destination} on ${c.dateLabel} for everyone?`)) return;
     }
-    state.lockedPlan = locked
-      ? null
-      : {
-          destination: c.destination,
-          dateStart: c.dateRange.start,
-          dateEnd: c.dateRange.end,
-          dateLabel: c.dateLabel,
-        };
-    state.lockTs = Date.now();
+    applyLock(
+      locked
+        ? null
+        : {
+            destination: c.destination,
+            dateStart: c.dateRange.start,
+            dateEnd: c.dateRange.end,
+            dateLabel: c.dateLabel,
+          }
+    );
     state.phase = "decide";
     renderAll();
     if (!locked) {
@@ -3668,12 +3714,12 @@
       return;
     }
     if (!window.confirm(`Lock ${o.destination} on ${o.dateLabel} for everyone?`)) return;
-    state.lockedPlan = {
+    applyLock({
       destination: o.destination,
       dateStart: o.dateStart,
       dateEnd: o.dateEnd,
       dateLabel: o.dateLabel,
-    };
+    });
     state.phase = "decide";
     renderAll();
     confetti();
@@ -3929,7 +3975,11 @@
       (p) => isMe(p) || !String(p.id).startsWith("p_seed_")
     );
     state.demoMode = false;
-    state.lockedPlan = null;
+    // Through applyLock so the stamp moves and the prep checklist is cleared —
+    // otherwise dropping the demo data left "Everyone's booked" over a plan
+    // that no longer exists.
+    applyLock(null);
+    invalidateCombos();
     renderAll();
   }
 

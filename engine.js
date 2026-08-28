@@ -500,7 +500,17 @@
     if (!r || !r.start || !r.end) return `${r ? r.start : ""} → ${r ? r.end : ""}`;
     const sameMonth = r.start.slice(0, 7) === r.end.slice(0, 7);
     const endLabel = sameMonth ? Number(r.end.slice(8, 10)).toString() : formatDay(r.end);
-    return `${formatDay(r.start)} – ${endLabel}`;
+    // This label is what people read on the confirm card they say yes to, the
+    // countdown, the lock dialog and the Trip Pack they book from. Groups plan
+    // Christmas the better part of a year ahead, and "Dec 19 – 26" does not say
+    // which December. lockState was already changed to compare ISO dates rather
+    // than labels for exactly this reason; the human-facing half was missed.
+    const startYear = r.start.slice(0, 4);
+    const endYear = r.end.slice(0, 4);
+    const thisYear = String(new Date().getFullYear());
+    const base = `${formatDay(r.start)} – ${endLabel}`;
+    if (startYear !== endYear) return `${formatDay(r.start)} ${startYear} – ${formatDay(r.end)} ${endYear}`;
+    return startYear === thisYear ? base : `${base}, ${startYear}`;
   }
 
   /** Do two inclusive date ranges overlap at all? */
@@ -950,7 +960,14 @@
    * Roll up participant preferences for the host's "group insights" panel.
    * Returns counts/medians that are safe to render even when fields are blank.
    */
-  function summarizePrefs(participants) {
+  function summarizePrefs(allParticipants) {
+    // Same rule as rankCombinations and soloBedCount: someone who declined does
+    // not shape the trip. They were setting the itinerary's activity pool and
+    // its constraints, so a family dropping out still stripped every
+    // adults-only idea — and the card asserted "Nothing adults-only, since 2
+    // children are coming" about children who were not coming. They also
+    // inflated every headline tile on the People tab.
+    const participants = (allParticipants || []).filter((p) => p.rsvp !== "out");
     const out = {
       total: participants.length,
       accommodation: 0,

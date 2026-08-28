@@ -1039,3 +1039,32 @@ test("who can share is decided by the group, not assumed", () => {
   const noBed = person({ city: "Mumbai, India", rsvp: "in", prefs: { kids: 0, accommodation: false } });
   assert.strictEqual(E.soloBedCount([bed(0), noBed]), 1, "nor can someone staying with family");
 });
+
+// ---- Labels people book from ----------------------------------------------
+test("a date label says which year when it isn't this one", () => {
+  // The label is what people read on the confirm card they say yes to, the
+  // countdown, the lock dialog and the Trip Pack. Groups plan Christmas the
+  // better part of a year ahead, and "Dec 19 – 26" doesn't say which December.
+  const year = new Date().getFullYear();
+  const thisYear = E.rangeLabel({ start: `${year}-09-05`, end: `${year}-09-12` });
+  assert.ok(!/\d{4}/.test(thisYear), "no year clutter for the current year");
+  const next = E.rangeLabel({ start: `${year + 1}-01-16`, end: `${year + 1}-01-23` });
+  assert.match(next, new RegExp(String(year + 1)), "a future year must be stated");
+  const straddling = E.rangeLabel({ start: `${year}-12-28`, end: `${year + 1}-01-02` });
+  assert.match(straddling, new RegExp(String(year)));
+  assert.match(straddling, new RegExp(String(year + 1)), "both years when it crosses");
+});
+
+test("someone who declined doesn't shape the itinerary or the insights", () => {
+  // summarizePrefs drives the itinerary's idea pool AND its constraints, so a
+  // family dropping out still stripped every adults-only idea — and the card
+  // asserted "since 2 children are coming" about children who weren't.
+  const going = person({ rsvp: "in", prefs: { kids: 0, activities: ["Nightlife"] } });
+  const gone = person({ rsvp: "out", prefs: { kids: 2, accessibility: "Uses a wheelchair" } });
+  const s = E.summarizePrefs([going, gone]);
+  assert.strictEqual(s.total, 1, "headline tiles must not count decliners");
+  assert.strictEqual(s.withKids, 0, "their children aren't coming either");
+  assert.strictEqual(s.kids, 0);
+  assert.strictEqual(s.accessibility.length, 0, "nor their access needs");
+  assert.deepStrictEqual(s.activitiesRanked, [["Nightlife", 1]]);
+});
