@@ -738,6 +738,12 @@
   // ---- Smart invitations modal (WhatsApp / SMS / Email / Copy) ----
   function inviteMessage() {
     const name = state.reunion.name || "our get-together";
+    // A participant sending their answers back is not inviting anyone. The
+    // modal was written entirely from the organiser's side, which is part of
+    // why nothing ever prompted the return trip.
+    if (state.role !== "organizer") {
+      return `Here are my dates & preferences for ${name}: ${buildShareUrl()}`;
+    }
     return `You're invited to ${name} on Reunly 🎉 Add your dates & preferences here: ${buildShareUrl()}`;
   }
   let inviteOpener = null;
@@ -4102,6 +4108,40 @@
   function hasResponded(p) {
     return p.destinations.some(Boolean) || p.dates.some(E.isValidRange);
   }
+  /**
+   * Participants answer on their own device and their answers stay there until
+   * they send a link back. Nothing in the app ever asked them to — the only
+   * affordance that produces a link is the organiser-worded "Invite people"
+   * button — so the common outcome was a group where everyone had filled the
+   * app in and the organiser's roster was still empty. Meanwhile a push
+   * notification told the organiser they had responded.
+   */
+  function renderSendBack() {
+    const host = $("#sendBackBar");
+    if (!host) return;
+    host.textContent = "";
+    const me = state.participants.find(isMe);
+    const show = state.role !== "organizer" && me && hasResponded(me);
+    host.hidden = !show;
+    if (!show) return;
+    const bar = el("div", { class: "sendback" });
+    bar.appendChild(
+      el("div", {
+        class: "sendback-text",
+        text: "Your answers are only on this device — send them to the organiser.",
+      })
+    );
+    bar.appendChild(
+      el("button", {
+        class: "btn sm",
+        style: "width:auto",
+        text: "📤 Send my answers",
+        onClick: openInviteModal,
+      })
+    );
+    host.appendChild(bar);
+  }
+
   function renderMeta() {
     $("#inviteChip").textContent = `Invite code: ${state.reunion.code}`;
     const going = state.participants.filter((p) => p.rsvp === "in").length;
@@ -4112,6 +4152,7 @@
     const proBadge = $("#proBadge");
     if (proBadge) proBadge.hidden = !state.pro;
     renderDemoBanner();
+    renderSendBack();
     const notifWrap = $("#notifWrap");
     if (notifWrap) notifWrap.hidden = state.role !== "organizer";
   }
@@ -4161,6 +4202,18 @@
         item.appendChild(el("div", { class: "notif-meta", text: bits.join(" · ") }));
         panel.appendChild(item);
       });
+    // The notification says somebody answered; their answers are still on their
+    // phone. Presenting it as receipt of the data was the app asserting
+    // something it had no way to back up — the organiser's roster stays
+    // unchanged until that person sends their link back.
+    if (notifItems.some((n) => n.kind !== "locked")) {
+      panel.appendChild(
+        el("div", {
+          class: "notif-empty",
+          text: "Their answers arrive when they send their link back — ask anyone whose card still looks empty.",
+        })
+      );
+    }
   }
   async function pollNotifications() {
     const code = state.reunion.notifyToken;
