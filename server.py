@@ -113,6 +113,21 @@ def resolve_city(name):
 # --- Geocoding for ANY city (OpenStreetMap Nominatim, keyless) ----------------
 # Serialized via a lock so concurrent fare requests for the same new city only
 # hit Nominatim once (respects their fair-use policy).
+# Every cache below is keyed by a raw query string from an unauthenticated
+# client, so on the public deployment they would otherwise grow without bound
+# while amplifying requests to Nominatim/Wikipedia from the server's IP.
+CACHE_LIMIT = 5000
+
+
+def _cache_put(cache, key, value):
+    """Store, discarding the oldest entries once the cache is full."""
+    if len(cache) >= CACHE_LIMIT:
+        for old in list(cache)[: CACHE_LIMIT // 4]:
+            cache.pop(old, None)
+    cache[key] = value
+    return value
+
+
 _geo_cache = {}
 _geo_lock = threading.Lock()
 
@@ -140,7 +155,7 @@ def geocode(name):
     except Exception:
         coord = None
     with _geo_lock:
-        _geo_cache[key] = coord
+        _cache_put(_geo_cache, key, coord)
     return coord
 
 
@@ -197,7 +212,7 @@ def suggest_places(q):
     except Exception:
         results = []
     with _suggest_lock:
-        _suggest_cache[key] = results
+        _cache_put(_suggest_cache, key, results)
     return results
 
 
@@ -386,71 +401,76 @@ def _avg(values):
 
 def weather_for(place, start, end):
     key = f"{place}|{start}|{end}".lower()
+    # Check the cache under the lock, then RELEASE it for the network calls.
+    # geocode() was fixed for this and these two handlers reintroduced it:
+    # holding a global lock across two 8-second upstream requests serialised
+    # every other user behind one slow response. Measured as a clean staircase
+    # (0.23 / 0.38 / 0.83 / 0.98s) for four concurrent lookups of four cities.
     with _weather_lock:
         if key in _weather_cache:
             return _weather_cache[key]
+    result = {"ok": False}
+    try:
+        coords = coords_for(place)
+        if coords and start:
+            today = datetime.date.today()
+            s = datetime.date.fromisoformat(start)
+            e = datetime.date.fromisoformat(end) if end else s
+            if e < s:
+                e = s
+            days_until = (s - today).days
+            if 0 <= days_until <= 15:
+                mode = "forecast"
+                qs, qe = s, min(e, s + datetime.timedelta(days=15 - days_until))
+                url = (
+                    "https://api.open-meteo.com/v1/forecast?"
+                    + urllib.parse.urlencode({
+                        "latitude": coords[0], "longitude": coords[1],
+                        "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+                        "start_date": qs.isoformat(), "end_date": qe.isoformat(),
+                        "timezone": "auto",
+                    })
+                )
+            else:
+                mode = "typical"
+                # Same dates one year earlier (historical archive).
+                shift = datetime.timedelta(days=365)
+                qs, qe = s - shift, e - shift
+                # Ask for rainfall too. Without it, a trip more than 15 days
+                # out (i.e. most trips) showed temperature only — so the
+                # monsoon-season case this exists to warn about went
+                # completely unflagged.
+                url = (
+                    "https://archive-api.open-meteo.com/v1/archive?"
+                    + urllib.parse.urlencode({
+                        "latitude": coords[0], "longitude": coords[1],
+                        "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
+                        "start_date": qs.isoformat(), "end_date": qe.isoformat(),
+                        "timezone": "auto",
+                    })
+                )
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=8) as r:
+                body = json.loads(r.read())
+            daily = body.get("daily", {})
+            tmax = _avg(daily.get("temperature_2m_max", []))
+            tmin = _avg(daily.get("temperature_2m_min", []))
+            rain = _avg(daily.get("precipitation_probability_max", []))
+            if tmax is not None and tmin is not None:
+                result = {"ok": True, "mode": mode, "tMin": tmin, "tMax": tmax}
+                if rain is not None:
+                    result["rainPct"] = rain
+                # Historical branch: express rain as how many days that week
+                # actually saw meaningful rainfall (>1mm) a year earlier.
+                sums = [v for v in daily.get("precipitation_sum", []) if v is not None]
+                if sums:
+                    wet = sum(1 for v in sums if v >= 1.0)
+                    result["wetDays"] = wet
+                    result["totalDays"] = len(sums)
+    except Exception:
         result = {"ok": False}
-        try:
-            coords = coords_for(place)
-            if coords and start:
-                today = datetime.date.today()
-                s = datetime.date.fromisoformat(start)
-                e = datetime.date.fromisoformat(end) if end else s
-                if e < s:
-                    e = s
-                days_until = (s - today).days
-                if 0 <= days_until <= 15:
-                    mode = "forecast"
-                    qs, qe = s, min(e, s + datetime.timedelta(days=15 - days_until))
-                    url = (
-                        "https://api.open-meteo.com/v1/forecast?"
-                        + urllib.parse.urlencode({
-                            "latitude": coords[0], "longitude": coords[1],
-                            "daily": "temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-                            "start_date": qs.isoformat(), "end_date": qe.isoformat(),
-                            "timezone": "auto",
-                        })
-                    )
-                else:
-                    mode = "typical"
-                    # Same dates one year earlier (historical archive).
-                    shift = datetime.timedelta(days=365)
-                    qs, qe = s - shift, e - shift
-                    # Ask for rainfall too. Without it, a trip more than 15 days
-                    # out (i.e. most trips) showed temperature only — so the
-                    # monsoon-season case this exists to warn about went
-                    # completely unflagged.
-                    url = (
-                        "https://archive-api.open-meteo.com/v1/archive?"
-                        + urllib.parse.urlencode({
-                            "latitude": coords[0], "longitude": coords[1],
-                            "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
-                            "start_date": qs.isoformat(), "end_date": qe.isoformat(),
-                            "timezone": "auto",
-                        })
-                    )
-                req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-                with urllib.request.urlopen(req, timeout=8) as r:
-                    body = json.loads(r.read())
-                daily = body.get("daily", {})
-                tmax = _avg(daily.get("temperature_2m_max", []))
-                tmin = _avg(daily.get("temperature_2m_min", []))
-                rain = _avg(daily.get("precipitation_probability_max", []))
-                if tmax is not None and tmin is not None:
-                    result = {"ok": True, "mode": mode, "tMin": tmin, "tMax": tmax}
-                    if rain is not None:
-                        result["rainPct"] = rain
-                    # Historical branch: express rain as how many days that week
-                    # actually saw meaningful rainfall (>1mm) a year earlier.
-                    sums = [v for v in daily.get("precipitation_sum", []) if v is not None]
-                    if sums:
-                        wet = sum(1 for v in sums if v >= 1.0)
-                        result["wetDays"] = wet
-                        result["totalDays"] = len(sums)
-        except Exception:
-            result = {"ok": False}
-        _weather_cache[key] = result
-        return result
+    with _weather_lock:
+        return _cache_put(_weather_cache, key, result)
 
 
 # --- Destination photos (Wikipedia REST summary, keyless) ---------------------
@@ -463,25 +483,28 @@ def wiki_photo(place):
     key = (place or "").strip().lower()
     if not key:
         return None
+    # Cache lookup under the lock, network call outside it — the same reason
+    # geocode() does: one slow Wikipedia response must not stall every other
+    # user's photo lookup behind it.
     with _photo_lock:
         if key in _photo_cache:
             return _photo_cache[key]
+    url = None
+    try:
+        # Use the part before the first comma ("Goa, India" -> "Goa").
+        title = place.split(",")[0].strip().replace(" ", "_")
+        req = urllib.request.Request(
+            "https://en.wikipedia.org/api/rest_v1/page/summary/"
+            + urllib.parse.quote(title),
+            headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            body = json.loads(r.read())
+        img = body.get("originalimage") or body.get("thumbnail") or {}
+        url = img.get("source")
+    except Exception:
         url = None
-        try:
-            # Use the part before the first comma ("Goa, India" -> "Goa").
-            title = place.split(",")[0].strip().replace(" ", "_")
-            req = urllib.request.Request(
-                "https://en.wikipedia.org/api/rest_v1/page/summary/"
-                + urllib.parse.quote(title),
-                headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=8) as r:
-                body = json.loads(r.read())
-            img = body.get("originalimage") or body.get("thumbnail") or {}
-            url = img.get("source")
-        except Exception:
-            url = None
-        _photo_cache[key] = url
-        return url
+    with _photo_lock:
+        return _cache_put(_photo_cache, key, url)
 
 
 # --- Cross-device "someone responded" notifications --------------------------
@@ -609,9 +632,19 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/notify":
             try:
                 length = int(self.headers.get("Content-Length", "0") or "0")
-                # Reject absurdly large bodies rather than reading unbounded input.
-                if length <= 0 or length > 8192:
+                # Reject absurdly large bodies rather than reading unbounded
+                # input -- but DRAIN them first. Raising before the read left
+                # the body sitting in the socket, where the next request on the
+                # same keep-alive connection parsed it as a request line: the
+                # client got "501 Unsupported method" and every subsequent call
+                # on that connection was lost. The app fires ~90 fare and photo
+                # requests over these connections, so one oversized POST took
+                # out the rest of the pipeline.
+                if length < 0 or length > 8192:
+                    self._drain_body(length)
                     raise ValueError("bad content length")
+                if length == 0:
+                    raise ValueError("empty body")
                 raw = self.rfile.read(length)
                 data = json.loads(raw)
                 # The client sends a 128-bit token, not the short join code.
@@ -638,12 +671,22 @@ class Handler(SimpleHTTPRequestHandler):
         # Drain any body before replying: on a keep-alive connection unread
         # bytes would be mis-read as the start of the next request.
         try:
-            pending = int(self.headers.get("Content-Length", "0") or "0")
-            if 0 < pending <= 1 << 20:
-                self.rfile.read(pending)
-        except (ValueError, OSError):
+            self._drain_body(int(self.headers.get("Content-Length", "0") or "0"))
+        except ValueError:
             pass
         return self._send_json({"error": "not found"}, code=404)
+
+    def _drain_body(self, length):
+        """Read and discard a request body so the connection stays in sync."""
+        remaining = min(max(0, length), 1 << 20)
+        try:
+            while remaining > 0:
+                chunk = self.rfile.read(min(remaining, 65536))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            pass
 
 
 if __name__ == "__main__":
