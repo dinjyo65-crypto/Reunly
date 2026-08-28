@@ -3294,6 +3294,40 @@
       })
       .join("");
     // The group total is the sum of the ROUNDED rows, so the column adds up.
+    // --- The ledger, if there is one. ---------------------------------------
+    const split = computeSplit();
+    let ledgerHtml = "";
+    if (split.spend.length) {
+      const posRows = split.positions
+        .map(
+          (pos) =>
+            `<tr><td>${escapeHtml(pName(pos.id))}${pos.paidNothing ? " <i>(paid in nothing)</i>" : ""}` +
+            `${pos.onRoster ? "" : " <i>(left)</i>"}</td>` +
+            `<td>${escapeHtml(money(pos.paid))}</td><td>${escapeHtml(money(pos.share))}</td>` +
+            `<td><b>${escapeHtml(
+              pos.net > 0.005
+                ? `owed ${money(pos.net)}`
+                : pos.net < -0.005
+                ? `owes ${money(-pos.net)}`
+                : "square"
+            )}</b></td></tr>`
+        )
+        .join("");
+      const owingRows = split.transfers
+        .map(
+          (t) =>
+            `<li>${escapeHtml(pName(t.from))} → ${escapeHtml(pName(t.to))}: ` +
+            `<b>${escapeHtml(money(t.amount))}</b></li>`
+        )
+        .join("");
+      ledgerHtml =
+        `<h2>Money</h2><p>Shared costs total <b>${escapeHtml(money(split.total))}</b>.</p>` +
+        `<table><tr><th>Name</th><th>Paid</th><th>Share</th><th>Position</th></tr>${posRows}</table>` +
+        (owingRows
+          ? `<h4>To settle up</h4><ul>${owingRows}</ul>`
+          : `<p><b>Everyone's square.</b></p>`);
+    }
+
     const packFooter = packRows.length
       ? `<tr><td colspan="3"><b>Group total</b></td><td><b>` +
         `${E.formatParts(packRows, displayCode()).total}</b></td></tr>`
@@ -3328,6 +3362,10 @@
       `<table><tr><th>Name</th><th>From</th>` +
       `<th>Travel</th><th>Travel + stay</th></tr>${rows}${packFooter}</table>` +
       `<h2>Suggested itinerary</h2>${itHtml}` +
+      // The document people reconcile from had no ledger in it at all — only
+      // estimates and the itinerary. If money has changed hands, it belongs
+      // here alongside them.
+      ledgerHtml +
       // The pack is printed and re-read weeks later, so it has to carry enough
       // for its reader to judge the numbers: when it was made, what currency
       // they're in, and how old the fares and exchange rates behind them are.
@@ -3657,6 +3695,36 @@
     saveState();
     renderExpenses();
   }
+  /**
+   * Forgive a departed member's debt. Recorded as a labelled settlement so the
+   * ledger still shows what was spent and who owed it — deleting the original
+   * expense would clear the balance by destroying the evidence.
+   */
+  function writeOffBalance(id, amount) {
+    const amt = parseFloat(amount);
+    if (!id || !Number.isFinite(amt) || amt <= 0) return;
+    // Spread across whoever is still owed money, in proportion to what they're
+    // owed, so the group absorbs it the way it actually falls.
+    const { balances } = computeSplit();
+    const creditors = [...balances.entries()].filter(([, b]) => b > 0.005);
+    if (!creditors.length) return;
+    const owedTotal = creditors.reduce((sum, [, b]) => sum + b, 0);
+    creditors.forEach(([creditorId, b]) => {
+      state.expenses.unshift({
+        id: `x_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        payerId: id,
+        desc: `Written off — ${pName(id)}`,
+        amount: Math.round(amt * (b / owedTotal) * 100) / 100,
+        sharedWith: [creditorId],
+        settlement: true,
+        ts: Date.now(),
+      });
+    });
+    saveState();
+    renderExpenses();
+    toast(`Wrote off ${money(amt)} owed by ${pName(id)}`);
+  }
+
   function deleteExpense(id) {
     state.expenses = state.expenses.filter((x) => x.id !== id);
     // Tombstone it. The merge is a union by id, so without a record of the
@@ -3704,8 +3772,10 @@
     const card = el("div", { class: "card" });
     card.appendChild(el("div", { class: "toolkit-title", text: "💸 Expenses & settle-up" }));
 
-    const { total, share, shareExact, base, balances, transfers, spend, chargedIds } =
-      computeSplit();
+    const {
+      total, share, shareExact, base, balances, transfers, spend, chargedIds,
+      positions, allSquare,
+    } = computeSplit();
     card.appendChild(
       el("div", {
         class: "itin-sub",
@@ -3868,8 +3938,15 @@
 
     // Expense list.
     const list = el("div", { class: "exp-list" });
-    state.expenses.forEach((x) => {
-      const r = el("div", { class: "exp-item" });
+    // Costs and transfers are different things and were rendered identically,
+    // so the rows never summed to the printed Total and nothing said why. The
+    // "Money in" mode made it stark: a treasurer collecting $250 from eleven
+    // people before a $2,400 deposit saw twelve rows adding to $5,150 above a
+    // line reading "Total $2,400". Two sections now, each labelled.
+    const costRows = state.expenses.filter((x) => !x.settlement);
+    const moveRows = state.expenses.filter((x) => x.settlement);
+    const buildRow = (x) => {
+      const r = el("div", { class: `exp-item${x.settlement ? " exp-transfer-row" : ""}` });
       const w = el("div", { style: "flex:1;min-width:0" });
       w.appendChild(el("div", { class: "exp-desc", text: x.desc }));
       // Show the split scope so an unequal share is visible, not hidden.
@@ -3893,7 +3970,14 @@
             ? ` · split between ${sharers.map(pName).join(", ")}`
             : ` · split ${sharers.length} ways`;
       }
-      w.appendChild(el("div", { class: "exp-meta", text: `paid by ${pName(x.payerId)}${scope}` }));
+      w.appendChild(
+        el("div", {
+          class: "exp-meta",
+          text: x.settlement
+            ? `${pName(x.payerId)} → ${sharers.map(pName).join(", ") || "the group"}`
+            : `paid by ${pName(x.payerId)}${scope}`,
+        })
+      );
       r.appendChild(w);
       r.appendChild(
         el("span", {
@@ -3906,9 +3990,85 @@
           el("button", { class: "icon-btn sm", "aria-label": "Delete expense", text: "✕", onClick: () => deleteExpense(x.id) })
         );
       }
-      list.appendChild(r);
-    });
+      return r;
+    };
+
+    if (costRows.length) {
+      list.appendChild(el("div", { class: "exp-group-label", text: "Shared costs" }));
+      costRows.forEach((x) => list.appendChild(buildRow(x)));
+    }
+    if (moveRows.length) {
+      list.appendChild(
+        el("div", {
+          class: "exp-group-label",
+          text: "Money moved between people — not part of the total",
+        })
+      );
+      moveRows.forEach((x) => list.appendChild(buildRow(x)));
+    }
     card.appendChild(list);
+
+    // The settle-up list nets everything down to the fewest payments, which
+    // hides who actually carried the trip. A treasurer closing the books needs
+    // to see that Bo fronted £900 and Cy has paid in nothing.
+    if (positions.length && spend.length) {
+      card.appendChild(el("div", { class: "prep-sub", text: "Where everyone stands" }));
+      const table = el("div", { class: "pos-list" });
+      positions.forEach((pos) => {
+        const row = el("div", { class: "pos-row" });
+        const name = el("div", { class: "pos-name" });
+        name.appendChild(el("span", { text: pName(pos.id) }));
+        if (pos.paidNothing) {
+          name.appendChild(el("span", { class: "badge warn", text: "paid in nothing" }));
+        }
+        if (!pos.onRoster) {
+          name.appendChild(el("span", { class: "badge", text: "left" }));
+        }
+        row.appendChild(name);
+        row.appendChild(
+          el("div", {
+            class: "pos-detail",
+            text: `paid ${money(pos.paid)} · share ${money(pos.share)}`,
+          })
+        );
+        const net = el("div", {
+          class: `pos-net ${pos.net > 0.005 ? "up" : pos.net < -0.005 ? "down" : ""}`,
+          text:
+            pos.net > 0.005
+              ? `owed ${money(pos.net)}`
+              : pos.net < -0.005
+              ? `owes ${money(-pos.net)}`
+              : "square",
+        });
+        row.appendChild(net);
+        // Forgiving a debt is a decision the group makes, so it needs to be an
+        // explicit, recorded act — not a deleted expense, which would destroy
+        // the record of what was actually paid.
+        if (state.role === "organizer" && !pos.onRoster && pos.net < -0.005) {
+          row.appendChild(
+            el("button", {
+              class: "btn ghost sm",
+              style: "width:auto",
+              text: "Write off",
+              onClick: () => {
+                if (!window.confirm(
+                  `Write off ${money(-pos.net)} owed by ${pName(pos.id)}?\n\n` +
+                    "The group absorbs it. The original expenses stay on the books."
+                )) return;
+                writeOffBalance(pos.id, -pos.net);
+              },
+            })
+          );
+        }
+        table.appendChild(row);
+      });
+      card.appendChild(table);
+    }
+    if (allSquare) {
+      card.appendChild(
+        el("div", { class: "exp-square", text: "🎉 Everyone's square — the books are closed." })
+      );
+    }
     // "each" is only meaningful when every expense is split the same way;
     // otherwise show the average so it isn't mistaken for an exact figure.
     // "each" is a definite claim, so check WHO each expense was split between,

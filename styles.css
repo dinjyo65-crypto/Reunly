@@ -903,6 +903,28 @@ a:focus-visible {
   border: 1px solid var(--accent); }
 .sendback-text { font-size: 0.84rem; font-weight: 600; line-height: 1.4; flex: 1 1 200px; }
 
+/* Closing the books: who actually carried the trip, which the netted
+   settle-up list deliberately hides. */
+.pos-list { display: flex; flex-direction: column; gap: 2px; }
+.pos-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 0; border-top: 1px solid var(--border); }
+.pos-name { display: flex; align-items: center; gap: 6px; font-size: 0.86rem;
+  font-weight: 650; flex: 1 1 120px; min-width: 0; }
+.pos-detail { font-size: 0.76rem; color: var(--text-dim); flex: 0 0 auto; }
+.pos-net { font-size: 0.86rem; font-weight: 700; flex: 0 0 auto; }
+.pos-net.up { color: var(--good); }
+.pos-net.down { color: var(--danger); }
+.exp-square { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--accent-soft); font-size: 0.84rem; font-weight: 650; text-align: center; }
+
+/* Costs sum to the Total; transfers deliberately don't, so they're separated
+   and labelled rather than sitting in the same column. */
+.exp-group-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em;
+  text-transform: uppercase; color: var(--text-dim); margin: 12px 0 4px; }
+.exp-group-label:first-child { margin-top: 0; }
+.exp-transfer-row .exp-amt { font-weight: 600; color: var(--text-dim); }
+.exp-transfer-row .exp-amt::before { content: "↔ "; }
+
 /* Shared cost vs money handed to the treasurer — different maths, so the
    ledger asks which one you mean rather than guessing. */
 .exp-mode { margin-bottom: 8px; }

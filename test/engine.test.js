@@ -1311,3 +1311,54 @@ test("a removal isn't undone by a link that predates it", () => {
   E.mergeParticipants(roster, rejoined, fromWire, removed);
   assert.strictEqual(roster.length, 2, "a newer edit beats the removal");
 });
+
+// ---- Closing the books -----------------------------------------------------
+test("the final position shows who carried the trip, not just who pays whom", () => {
+  // The settle-up list nets everything down to the fewest payments, which
+  // deliberately hides that Bo fronted $900 and Cy has paid in nothing.
+  const r = E.computeSettlement(goers("bo", "cy", "di"), [
+    { id: "x1", payerId: "bo", amount: 900, sharedWith: ["bo", "cy", "di"] },
+    { id: "x2", payerId: "di", amount: 150, sharedWith: ["bo", "cy", "di"] },
+  ]);
+  const by = Object.fromEntries(r.positions.map((p) => [p.id, p]));
+  assert.strictEqual(by.bo.paid, 900);
+  assert.strictEqual(by.bo.share, 350);
+  assert.strictEqual(by.bo.net, 550);
+  assert.strictEqual(by.cy.paidNothing, true, "charged a share, contributed nothing");
+  assert.strictEqual(by.bo.paidNothing, false);
+  assert.strictEqual(by.di.paidNothing, false, "paying anything at all clears the flag");
+  // Sorted most-owed first, and the whole thing nets to zero.
+  assert.strictEqual(r.positions[0].id, "bo");
+  const sum = r.positions.reduce((s, p) => s + p.net, 0);
+  assert.ok(Math.abs(sum) < 0.005, "positions must balance");
+});
+
+test("a settled trip is distinguishable from one with no expenses", () => {
+  const people = goers("a", "b");
+  assert.strictEqual(E.computeSettlement(people, []).allSquare, false,
+    "no expenses is not the same as settled");
+  const square = E.computeSettlement(people, [
+    { id: "x1", payerId: "a", amount: 100, sharedWith: ["a", "b"] },
+    { id: "s1", payerId: "b", amount: 50, sharedWith: ["a"], settlement: true },
+  ]);
+  assert.strictEqual(square.allSquare, true);
+  assert.strictEqual(square.transfers.length, 0);
+});
+
+test("writing off a debt keeps the record of what was spent", () => {
+  // Clearing a departed member's balance by deleting the original expense
+  // would destroy the evidence of what was actually paid. A write-off is a
+  // labelled settlement instead, so the spend total is untouched.
+  const roster = goers("bo", "cy");
+  const ledger = [{ id: "x1", payerId: "bo", amount: 900, sharedWith: ["bo", "cy", "gone"] }];
+  const before = E.computeSettlement(roster, ledger);
+  assert.strictEqual(before.balances.get("gone"), -300);
+  const after = E.computeSettlement(roster, [
+    ...ledger,
+    { id: "w1", payerId: "gone", amount: 300, sharedWith: ["bo"], settlement: true },
+  ]);
+  assert.strictEqual(after.total, 900, "the spend is still on the books");
+  assert.ok(!after.transfers.some((t) => t.from === "gone"), "but the debt is closed");
+  const bo = after.positions.find((p) => p.id === "bo");
+  assert.strictEqual(bo.share, 600, "and Bo absorbed it");
+});

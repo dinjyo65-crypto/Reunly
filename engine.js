@@ -1534,7 +1534,28 @@
     // decide whether "each" is true — comparing LENGTHS let it print a definite
     // "$150.00 each" for a $300 dinner split between Ana and Bob after Ana was
     // removed, telling Cara she owed $150 when she owed nothing.
-    return { total, share, shareExact, base, balances, transfers, spend, chargedIds };
+    // Where each person actually stands. The settle-up list deliberately nets
+    // everything down to the fewest payments, which HIDES who carried the trip
+    // — a treasurer closing the books needs to see that Bo fronted £900 and
+    // Cy has paid in nothing, not just the two transfers that square it up.
+    const positions = [...balances.keys()]
+      .map((id) => ({
+        id,
+        paid: Math.round((paid[id] || 0) * 100) / 100,
+        share: Math.round((owed[id] || 0) * 100) / 100,
+        net: Math.round(((paid[id] || 0) - (owed[id] || 0)) * 100) / 100,
+        // Never contributed anything, though they were charged a share.
+        paidNothing: !(paid[id] > 0.005) && owed[id] > 0.005,
+        onRoster: participants.some((p) => p.id === id),
+      }))
+      .sort((a, b) => b.net - a.net);
+    // True when the books balance AND there was something to balance — the
+    // difference between a settled trip and one with no expenses at all.
+    const allSquare = spend.length > 0 && transfers.length === 0;
+    return {
+      total, share, shareExact, base, balances, transfers, spend, chargedIds,
+      positions, allSquare,
+    };
   }
 
   // External deep-link builders (verification, not integration).
