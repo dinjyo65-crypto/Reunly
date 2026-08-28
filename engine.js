@@ -429,13 +429,21 @@
    * quoted on — so on a group trip, sharing is the normal case, not the
    * exception.
    */
-  function soloBedCount(participants) {
-    return (participants || []).filter(
-      (p) =>
-        p.rsvp !== "out" &&
-        (!p.prefs || p.prefs.accommodation !== false) &&
-        !(Number(p.prefs && p.prefs.kids) || 0)
-    ).length;
+  function soloBedCount(participants, destination = null, fareProvider = null) {
+    return (participants || []).filter((p) => {
+      if (p.rsvp === "out") return false;
+      if (p.prefs && p.prefs.accommodation === false) return false;
+      if (Number(p.prefs && p.prefs.kids) || 0) return false;
+      // Somebody who lives at the destination isn't in a hotel, so they're not
+      // available to share a twin with the people who are. Counting them let a
+      // lone visitor to a city where everyone else lives be priced at the
+      // shared rate — $640 where single occupancy is $1,024.
+      if (destination && p.city) {
+        const miles = milesBetween(p.city, destination, fareProvider);
+        if (miles === 0) return false;
+      }
+      return true;
+    }).length;
   }
 
   function tripCostFor(
@@ -955,7 +963,11 @@
 
     // Two or more people needing a bed on their own can pair up in a twin,
     // which is what the nightly bands already assume.
-    const tripOpts = { canShare: soloBedCount(participants) >= 2 };
+    // Whether sharing is possible genuinely differs per destination — everyone
+    // is local to somewhere — so this is resolved inside the destination loop.
+    const sharingFor = (dest) => ({
+      canShare: soloBedCount(participants, dest, fareProvider) >= 2,
+    });
 
     // Pre-compute average fares per destination so we can normalize cost.
     const fareByDest = new Map(); // dest -> avg fare (number) or null
@@ -977,6 +989,7 @@
         const dateScore = dateScoreFor(dateRange, participants);
         // Budget fit depends on the window as well as the place: a longer stay
         // means more nights of lodging, so it's evaluated per combination.
+        const tripOpts = sharingFor(dest);
         const budget = budgetFitFor(dest, participants, fareProvider, dateRange, tripOpts);
         const { viability, nights, required } = tripViabilityFor(
           dest, participants, dateRange, submittedKeys.has(rangeKey(dateRange)), fareProvider
@@ -1182,7 +1195,19 @@
    * Mutates `current` in place (the caller holds the live roster) and returns
    * a tally. `fromPayload` converts one wire row into a normalized participant.
    */
-  function mergeParticipants(current, rows, fromPayload) {
+  function mergeParticipants(current, rows, fromPayload, removed = null) {
+    // Someone removed from the trip must not be re-added by a link that hasn't
+    // heard about it yet. Expenses have had this protection since round 7
+    // ("so removing an expense sticks instead of reappearing from whichever
+    // link is opened next"); people did not, so any other member's link put
+    // them straight back — with their old RSVP, which quietly re-entered them
+    // into splitBaseFor as a default sharer on every later expense. A removal
+    // only wins if it is newer than the row's own last edit, so someone who
+    // re-adds themselves afterwards sticks.
+    const wasRemoved = (id, updatedAt) => {
+      const rm = removed && removed[id];
+      return !!(rm && rm.on && (rm.ts || 0) > (updatedAt || 0));
+    };
     let added = 0;
     let updated = 0;
     const byId = new Map();
@@ -1199,6 +1224,7 @@
     (rows || []).forEach((x) => {
       const nameKey = (x.n || "").trim().toLowerCase();
       const incoming = fromPayload(x);
+      if (wasRemoved(x.id, incoming.updatedAt)) return;
       let existing = x.id ? byId.get(x.id) : null;
       let claiming = false;
       if (!existing && nameKey) {

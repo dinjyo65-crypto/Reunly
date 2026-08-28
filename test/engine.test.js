@@ -1277,3 +1277,37 @@ test("a destination we couldn't price can't outrank one we could", () => {
   assert.ok(unknown.total < cheapest.total,
     "an unpriced option must not tie the cheapest real one");
 });
+
+test("someone already at the destination can't share a room with the visitor", () => {
+  // canShare means "two or more people need their own bed, so they can split a
+  // twin". Counting locals — who are sleeping at home — priced the one actual
+  // hotel guest at the shared rate.
+  const local = (id) => person({ id, city: "London, UK", rsvp: "in", prefs: { kids: 0 } });
+  const group = ["a", "b", "c", "d", "e"].map(local)
+    .concat(person({ id: "f", city: "Paris, France", rsvp: "in", prefs: { kids: 0 } }));
+  assert.strictEqual(E.soloBedCount(group), 6, "without a destination it can only count heads");
+  assert.strictEqual(E.soloBedCount(group, "London, UK", E.getFare), 1,
+    "but only the visitor needs a bed in London");
+  const win = { start: "2026-11-21", end: "2026-11-28" };
+  const alone = E.tripCostFor("Paris, France", "London, UK", win, E.getFare,
+    { kids: 0, accommodation: true }, { canShare: false });
+  const shared = E.tripCostFor("Paris, France", "London, UK", win, E.getFare,
+    { kids: 0, accommodation: true }, { canShare: true });
+  assert.ok(alone.lodging > shared.lodging, "and nobody is there to share with");
+  assert.strictEqual(alone.sharing, "single");
+});
+
+test("a removal isn't undone by a link that predates it", () => {
+  // Expenses have had tombstones since round 7; people did not, so any other
+  // member's link put a removed person straight back — with their old RSVP,
+  // which quietly re-entered them into splitBaseFor as a default sharer.
+  const roster = [person({ id: "keep", name: "Keep", rsvp: "in", updatedAt: 100 })];
+  const removed = { gone: { on: true, ts: 500 } };
+  const stale = [{ id: "gone", n: "Gone", c: "London, UK", ts: 200, rsvp: "in" }];
+  E.mergeParticipants(roster, stale, fromWire, removed);
+  assert.strictEqual(roster.length, 1, "a link older than the removal can't resurrect them");
+  // But somebody re-adding themselves AFTER the removal does stick.
+  const rejoined = [{ id: "gone", n: "Gone", c: "London, UK", ts: 900, rsvp: "in" }];
+  E.mergeParticipants(roster, rejoined, fromWire, removed);
+  assert.strictEqual(roster.length, 2, "a newer edit beats the removal");
+});

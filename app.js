@@ -44,6 +44,14 @@
     // Stamping each key lets the most recent decision win in both directions.
     prepDone: {},
     booked: {},
+    // When the agreed plan last changed, and which prep steps survived it.
+    // Ticks older than this describe a trip that was cancelled or moved.
+    planTs: 0,
+    planKeepIds: [],
+    // Participant removals, as timestamped flags like the others. A removal
+    // only wins over an incoming row if it is NEWER than that row's own edit —
+    // someone re-adding themselves after being removed should stick.
+    removedPeople: {},
     ballot: null, // { open, openedBy, options:[...], votesByParticipant:{ id:{optionId} } }
     memories: [], // [{ id, authorId, authorName, type:"note"|"photo", text, dataUrl?, ts }]
     expenses: [], // [{ id, payerId, desc, amount(USD), ts, settlement? }]
@@ -93,7 +101,19 @@
     }
     return out;
   }
-  const flagOn = (map, key) => !!(map && map[key] && map[key].on);
+  /**
+   * Is this flag on, and still about the trip we're actually taking?
+   *
+   * Ticks made before the plan last moved are ignored rather than deleted, so
+   * the rule holds on every device without needing the clear to propagate.
+   */
+  function flagOn(map, key) {
+    const f = map && map[key];
+    if (!f || !f.on) return false;
+    const planTs = state.planTs || 0;
+    if (!planTs || (f.ts || 0) >= planTs) return true;
+    return (state.planKeepIds || []).includes(key);
+  }
 
   /** Wire form -> ballot. */
   function ballotFromPayload(b) {
@@ -166,7 +186,11 @@
   // the basis the nightly bands are quoted on. Everything that prices lodging
   // must agree on this, or the Costs tab, the winner card and the Trip Pack
   // quote different stays for the same trip.
-  const tripOpts = () => ({ canShare: E.soloBedCount(state.participants) >= 2 });
+  // Per destination: everyone is local to somewhere, so whether the people
+  // needing a bed can pair up depends on where the trip is.
+  const tripOpts = (destination) => ({
+    canShare: E.soloBedCount(state.participants, destination, fareProvider) >= 2,
+  });
 
   const fareProvider = (from, to) =>
     window.ReunlyFares.getCached(from, to, fareDate()) || E.getFare(from, to);
@@ -221,6 +245,10 @@
           demoMode: state.demoMode,
           lockedPlan: state.lockedPlan,
           lockTs: state.lockTs,
+          planTs: state.planTs,
+          planKeepIds: state.planKeepIds,
+          removedPeople: state.removedPeople,
+          pastNames: state.pastNames,
           prepDone: state.prepDone,
           booked: state.booked,
           ballot: state.ballot,
@@ -290,6 +318,9 @@
     state.demoMode = !!s.demoMode;
     state.lockedPlan = s.lockedPlan || null;
     state.lockTs = s.lockTs || 0;
+    state.planTs = s.planTs || 0;
+    state.planKeepIds = Array.isArray(s.planKeepIds) ? s.planKeepIds : [];
+    state.removedPeople = normalizeFlags(s.removedPeople);
     state.prepDone = normalizeFlags(s.prepDone);
     state.booked = normalizeFlags(s.booked);
     state.ballot = s.ballot || null;
@@ -384,6 +415,8 @@
       // Sent even when `locked` is null: that combination is how a link says
       // "the plan was unlocked", which the old payload simply could not express.
       lts: state.lockTs || 0,
+      pts: state.planTs || 0,
+      pk: (state.planKeepIds || []).slice(0, 8),
       // The ballot travels. Everything else the group shares was deliberately
       // made to round-trip; the vote was missed, which left the whole feature
       // inert in the only mode that matters — recipients saw a blank vote area,
@@ -402,6 +435,12 @@
               .map(([pid, vote]) => [pid, vote.optionId, vote.ts || 0]),
           }
         : null,
+      // Removals travel, with the names so a departed payer doesn't degrade to
+      // "Someone" on every other device.
+      rm: Object.entries(state.removedPeople || {})
+        .filter(([, v]) => v.on)
+        .slice(0, MAX_PEOPLE)
+        .map(([id, v]) => [id, v.ts || 0, str((state.pastNames || {})[id] || "", 80)]),
       // Prep progress travels too: "who has booked?" is only useful as one
       // shared answer, not a private note on each person's phone. Sent as
       // [key, on, ts] triples — sending only the keys that were true made an
@@ -537,6 +576,10 @@
     // Carried even when there is no lock: `locked: null` with a newer stamp is
     // how a link says the organiser called the plan off.
     clean.lts = Number.isFinite(data.lts) ? data.lts : 0;
+    clean.pts = clampTs(data.pts);
+    clean.pk = Array.isArray(data.pk)
+      ? data.pk.slice(0, 8).map((i) => str(i, 40)).filter(Boolean)
+      : [];
     // Accepts both the [key, on, ts] triples and the older bare-key arrays.
     const flags = (arr, cap) =>
       Array.isArray(arr)
@@ -578,6 +621,12 @@
         };
       }
     }
+    clean.rm = Array.isArray(data.rm)
+      ? data.rm
+          .slice(0, MAX_PEOPLE)
+          .filter((r) => Array.isArray(r) && str(r[0], 40))
+          .map((r) => [str(r[0], 40), clampTs(r[1]), str(r[2], 80)])
+      : [];
     clean.pd = flags(data.pd, 40);
     clean.bk = flags(data.bk, MAX_PEOPLE);
     if (data.locked && typeof data.locked === "object") {
@@ -627,6 +676,14 @@
     state.participants = data.p.map(participantFromPayload);
     if (data.locked) state.lockedPlan = data.locked;
     state.lockTs = data.lts || 0;
+    state.planTs = data.pts || 0;
+    state.planKeepIds = data.pk || [];
+    state.removedPeople = {};
+    state.pastNames = { ...(state.pastNames || {}) };
+    (data.rm || []).forEach(([id, ts, name]) => {
+      state.removedPeople[id] = { on: true, ts };
+      if (name) state.pastNames[id] = name;
+    });
     state.ballot = ballotFromPayload(data.b);
     state.prepDone = normalizeFlags(data.pd);
     state.booked = normalizeFlags(data.bk);
@@ -659,13 +716,31 @@
     const { added, updated } = E.mergeParticipants(
       state.participants,
       data.p,
-      participantFromPayload
+      participantFromPayload,
+      // A removal only wins over an incoming row if it happened AFTER that
+      // row's own last edit — someone re-adding themselves should stick.
+      state.removedPeople
     );
+    // Drop anyone this device has since removed, in case they arrived on a link
+    // that predates the removal.
+    state.participants = state.participants.filter((p) => {
+      const rm = (state.removedPeople || {})[p.id];
+      return !(rm && rm.on && (rm.ts || 0) > (p.updatedAt || 0));
+    });
     // The plan itself was merged only when this device had no lock at all, so
     // a organiser who moved the dates could never tell anyone: every guest who
     // had already opened the first link stayed pinned to the dead plan, with
     // their countdown, .ics and Trip Pack all quoting it. Newest write wins,
     // exactly as participant answers already do.
+    // Take on their removals before merging people, so a row this link is
+    // carrying can be dropped rather than re-added.
+    state.removedPeople = { ...(state.removedPeople || {}) };
+    state.pastNames = { ...(state.pastNames || {}) };
+    (data.rm || []).forEach(([id, ts, name]) => {
+      const mine = state.removedPeople[id];
+      if (!mine || ts > (mine.ts || 0)) state.removedPeople[id] = { on: true, ts };
+      if (name && !state.pastNames[id]) state.pastNames[id] = name;
+    });
     state.ballot = mergeBallot(state.ballot, ballotFromPayload(data.b));
     // Newest write per key wins, so an untick propagates like a tick does.
     state.prepDone = mergeFlags(state.prepDone, normalizeFlags(data.pd));
@@ -676,6 +751,11 @@
       const before = state.lockedPlan;
       state.lockedPlan = data.locked || null;
       state.lockTs = incomingLockTs;
+      // The cutoff travels with the plan it belongs to.
+      if ((data.pts || 0) > (state.planTs || 0)) {
+        state.planTs = data.pts || 0;
+        state.planKeepIds = data.pk || [];
+      }
       const same =
         before &&
         state.lockedPlan &&
@@ -1309,6 +1389,13 @@
             if (!window.confirm(`Remove ${who} from this event?${warn}`)) return;
             // Keep their name so any expense they paid still reads sensibly.
             rememberName(p.id, p.name);
+            // Stamped so it can propagate. Expenses got tombstones for exactly
+            // this reason ("so removing an expense sticks instead of
+            // reappearing from whichever link is opened next"); people didn't,
+            // so any other member's link put them straight back — with their
+            // old RSVP, which quietly re-entered them into splitBaseFor as a
+            // default sharer on every expense logged afterwards.
+            setFlag("removedPeople", p.id, true);
             state.participants = state.participants.filter((x) => x.id !== p.id);
             if (state.editingId === p.id) state.editingId = null;
             renderAll();
@@ -1787,21 +1874,23 @@
     state.lockedPlan = plan;
     state.lockTs = Date.now();
     if (!movedTo) return;
-    // Anything tied to THIS trip's dates or place is no longer true. Cleared
-    // with a fresh stamp rather than deleted: a deleted key can't be expressed
-    // on the wire, so the clear would never reach anyone else's device.
-    state.participants.forEach((p) => {
-      if (flagOn(state.booked, p.id)) setFlag("booked", p.id, false);
-    });
+    // When the plan moved. Anything ticked BEFORE this is about a trip that no
+    // longer exists, so it stops counting — a read-time rule rather than a
+    // stamping pass.
+    //
+    // Stamping a clear per key looked equivalent and wasn't, in two ways. It
+    // ran only here, and a guest learns the plan moved through the invite
+    // merge, which never calls applyLock — so their side reset nothing. And it
+    // could only clear keys this device could already see, so a tick that
+    // existed solely on someone else's phone produced no stamp for mergeFlags
+    // to beat, and came back on their next link. Comparing against planTs
+    // needs neither the device nor the key to be present.
+    state.planTs = state.lockTs;
+    // Passport and visa depend on the destination country rather than the
+    // dates, so a reschedule within the same country doesn't void them.
     const sameCountry =
       before && plan && E.countryOf(before.destination) === E.countryOf(plan.destination);
-    // Passport and visa depend on the destination country, not the dates, so
-    // they survive a reschedule to the same country.
-    const keep = sameCountry ? ["passport", "visa"] : [];
-    E.PREP_STEPS.forEach((step) => {
-      if (keep.includes(step.id)) return;
-      if (flagOn(state.prepDone, step.id)) setFlag("prepDone", step.id, false);
-    });
+    state.planKeepIds = sameCountry ? ["passport", "visa"] : [];
   }
 
   function toggleLock(c) {
@@ -2255,7 +2344,7 @@
     const myTrip = (() => {
       const me = state.participants.find(isMe);
       if (!me || !me.city) return null;
-      return E.tripCostFor(me.city, c.destination, c.dateRange, fareProvider, me.prefs, tripOpts());
+      return E.tripCostFor(me.city, c.destination, c.dateRange, fareProvider, me.prefs, tripOpts(c.destination));
     })();
     // Headline and breakdown come from ONE rounding pass, so the digits on
     // screen add up. Rounding the total separately from its parts printed
@@ -2626,7 +2715,7 @@
           end: plan.dateEnd || (plan.dateRange && plan.dateRange.end) }
       : null;
     if (window_ && window_.start && window_.end && fare.min !== 0) {
-      const trip = E.tripCostFor(p.city, toCity, window_, fareProvider, p.prefs, tripOpts());
+      const trip = E.tripCostFor(p.city, toCity, window_, fareProvider, p.prefs, tripOpts(toCity));
       if (trip && trip.nights > 0) {
         const partyNote = trip.party > 1 ? ` · ${trip.party} travelling` : "";
         const stayNote =
@@ -2645,22 +2734,31 @@
     // so overseas routes don't display a nonsensical multi-day "drive".
     if (info.miles != null) {
       const metaParts = [`${Math.round(info.miles)} mi`];
-      // Label it honestly: this is great-circle time in the air, not the
-      // journey. Printed bare, it told people a long-haul trip with a
-      // connection was an afternoon's travel.
-      // Only annotate door-to-door on journeys people would actually fly. Below
-      // the drive threshold journeyHours returns the DRIVE time, so pairing it
-      // with a plane icon claimed a 256-mile drive was a 4-hour flight.
+      // Ask the cost model how this person is getting there — a third copy of
+      // the drive/fly threshold lived here and had drifted. chooseTravel decides
+      // from distance AND party size, so this line printed a door-to-door
+      // FLIGHT narrative over Bangalore-to-Goa (306mi) while the fare beside it
+      // was one tank of fuel, and drew a plane over a $73 London-Paris drive.
+      // Great-circle air time also isn't the journey, so say which is which.
       if (info.miles > 0) {
-        const flying = info.miles > 300;
+        const fare = fareProvider(p.city, toCity);
+        const party = 1 + Math.max(0, parseInt((p.prefs && p.prefs.kids) || 0, 10) || 0);
+        const mode = fare && fare.min != null
+          ? E.chooseTravel(info.miles, (fare.min + fare.max) / 2, party).mode
+          : "flight";
         const door = E.journeyHours(info.miles);
-        metaParts.push(
-          flying && door > info.flight + 0.4
-            ? `✈ ${E.formatHours(info.flight)} in the air · ~${E.formatHours(door)} door to door`
-            : `✈ ${E.formatHours(info.flight)}`
-        );
+        if (mode === "drive") {
+          metaParts.push(`🚗 ${E.formatHours(info.drive)} each way`);
+        } else if (mode === "flight") {
+          metaParts.push(
+            door > info.flight + 0.4
+              ? `✈ ${E.formatHours(info.flight)} in the air · ~${E.formatHours(door)} door to door`
+              : `✈ ${E.formatHours(info.flight)}`
+          );
+          // Offer the road as an alternative only where it's actually one.
+          if (info.miles <= 800) metaParts.push(`or 🚗 ${E.formatHours(info.drive)}`);
+        }
       }
-      if (info.miles > 0 && info.miles <= 800) metaParts.push(`🚗 ${E.formatHours(info.drive)}`);
       side.appendChild(el("div", { class: "cost-meta", text: metaParts.join(" · ") }));
     }
     const links = el("div", { class: "cost-links" });
@@ -3174,7 +3272,7 @@
       .filter((p) => p.city)
       .map((p) => {
         const f = fareProvider(p.city, plan.destination);
-        const trip = E.tripCostFor(p.city, plan.destination, window_, fareProvider, p.prefs, tripOpts());
+        const trip = E.tripCostFor(p.city, plan.destination, window_, fareProvider, p.prefs, tripOpts(plan.destination));
         // Show the travel figure that's actually inside the all-in total —
         // party size and seasonal uplift included. The raw fare band beside a
         // scaled total made the pack contradict itself for a family or a
@@ -4597,7 +4695,17 @@
   }
 
   function neededRoutes() {
-    const dests = E.tallyDestinations(state.participants).map((d) => d.destination);
+    // Seed the same way the ranking does. A locked destination LEAVES the tally
+    // as soon as its nominators edit their lists or decline — that's exactly
+    // why rankCombinations pins it — so the agreed plan was never fetched from
+    // the proxy and competed against live-priced rivals on a crude offline
+    // estimate, inside a cost score normalised within the window at 40% weight.
+    const relevant = state.participants.filter((p) => p.rsvp !== "out");
+    const dests = E.tallyDestinations(relevant.length ? relevant : state.participants)
+      .map((d) => d.destination);
+    if (state.lockedPlan && !dests.includes(state.lockedPlan.destination)) {
+      dests.unshift(state.lockedPlan.destination);
+    }
     const win = pricingWindow();
     const date = win ? win.start : null;
     const nights = win ? Math.max(1, E.rangeDays(win) - 1) : null;
