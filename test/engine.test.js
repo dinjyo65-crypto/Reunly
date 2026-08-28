@@ -840,3 +840,53 @@ test("the cost breakdown adds up to the headline it explains", () => {
       `${c.destination} ${c.dateLabel}: breakdown ${sum.toFixed(2)} vs headline ${c.avgTripCost.toFixed(2)}`);
   }
 });
+
+// ---- Journeys and seasons --------------------------------------------------
+test("durations never print sixty minutes", () => {
+  // Rounding the fractional part on its own made 6.995h render as "6h 60m".
+  for (let i = 0; i < 2000; i++) {
+    const out = E.formatHours(i * 0.01337);
+    assert.ok(!/\b60m\b/.test(out), `formatHours(${i * 0.01337}) => ${out}`);
+  }
+  assert.strictEqual(E.formatHours(6.995), "7h");
+  assert.strictEqual(E.formatHours(13.33), "13h 20m");
+});
+
+test("a long-haul journey counts more than time in the air", () => {
+  // Great-circle air time alone made the other side of the world look like an
+  // afternoon, and the same figure gates viability and the itinerary bookends.
+  const goaBali = E.distanceMiles("Goa, India", "Bali, Indonesia");
+  assert.ok(E.journeyHours(goaBali) > E.flightTimeHours(goaBali) + 4,
+    "airport time and a connection must be counted on a 3,000-mile route");
+  assert.ok(E.journeyHours(goaBali) > 12, "Goa-Bali is a whole day, not 7 hours");
+  // Short hops stay short — the day-trip case must not be vetoed.
+  const shortHop = E.distanceMiles("Boston, MA", "New York, NY");
+  assert.ok(E.journeyHours(shortHop) < 4, "a 190-mile drive is still a morning");
+});
+
+test("a window straddling a peak is priced for the nights it actually covers", () => {
+  // Reading the band off day one alone priced Dec 15-28 — which covers
+  // Christmas Day — as completely off-peak, a 30% swing against Dec 19-Jan 1.
+  const straddling = E.seasonFactorFor({ start: "2026-12-15", end: "2026-12-28" });
+  const squarelyOn = E.seasonFactorFor({ start: "2026-12-19", end: "2027-01-01" });
+  const offPeak = E.seasonFactorFor({ start: "2026-10-05", end: "2026-10-12" });
+  assert.ok(straddling.fare > 1.2, "most of the window is in the peak");
+  assert.ok(straddling.fare < squarelyOn.fare, "but less than a window entirely inside it");
+  assert.strictEqual(offPeak.fare, 1, "and an off-peak window is untouched");
+  assert.match(straddling.label, /11 of 14 days/, "the label says how much is affected");
+});
+
+test("a drive is priced per car, not per passenger", () => {
+  // A 190-mile drive with two children cost $308 of 'travel' — three per-head
+  // fares, each carrying a $60 airport booking overhead a road trip never has.
+  const range = { start: "2027-03-01", end: "2027-03-03" };
+  const solo = E.tripCostFor("Boston, MA", "New York, NY", range, E.getFare, { kids: 0 });
+  const family = E.tripCostFor("Boston, MA", "New York, NY", range, E.getFare, { kids: 2 });
+  assert.strictEqual(Math.round(solo.travel), Math.round(family.travel),
+    "the car costs the same however many people are in it");
+  assert.ok(family.travel < 120, `a 190-mile drive should not cost ${family.travel}`);
+  // A flight is still charged per seat.
+  const air = E.tripCostFor("London, UK", "Goa, India", range, E.getFare, { kids: 2 });
+  const airSolo = E.tripCostFor("London, UK", "Goa, India", range, E.getFare, { kids: 0 });
+  assert.ok(air.travel > airSolo.travel * 2.5, "three seats cost about three fares");
+});

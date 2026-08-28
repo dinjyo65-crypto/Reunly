@@ -2200,7 +2200,21 @@
     // so overseas routes don't display a nonsensical multi-day "drive".
     if (info.miles != null) {
       const metaParts = [`${Math.round(info.miles)} mi`];
-      if (info.miles > 0) metaParts.push(`✈ ${E.formatHours(info.flight)}`);
+      // Label it honestly: this is great-circle time in the air, not the
+      // journey. Printed bare, it told people a long-haul trip with a
+      // connection was an afternoon's travel.
+      // Only annotate door-to-door on journeys people would actually fly. Below
+      // the drive threshold journeyHours returns the DRIVE time, so pairing it
+      // with a plane icon claimed a 256-mile drive was a 4-hour flight.
+      if (info.miles > 0) {
+        const flying = info.miles > 300;
+        const door = E.journeyHours(info.miles);
+        metaParts.push(
+          flying && door > info.flight + 0.4
+            ? `✈ ${E.formatHours(info.flight)} in the air · ~${E.formatHours(door)} door to door`
+            : `✈ ${E.formatHours(info.flight)}`
+        );
+      }
       if (info.miles > 0 && info.miles <= 800) metaParts.push(`🚗 ${E.formatHours(info.drive)}`);
       side.appendChild(el("div", { class: "cost-meta", text: metaParts.join(" · ") }));
     }
@@ -2470,7 +2484,7 @@
       if (p.rsvp === "out" || !p.city) continue;
       const miles = E.distanceMiles(p.city, destination);
       if (miles == null) continue;
-      const hours = miles <= 300 ? E.driveTimeHours(miles) : E.flightTimeHours(miles);
+      const hours = E.journeyHours(miles);
       if (hours > worst) worst = hours;
     }
     return worst;

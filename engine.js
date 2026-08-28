@@ -124,17 +124,26 @@
    * scales: short hops are priced higher per mile than long-haul (where fares
    * flatten out). Callers must label the result "estimated".
    */
+  // Below this, people drive rather than fly. Used for pricing, for journey
+  // time, and for deciding whether a trip can sensibly be a day trip — they
+  // must agree, so there is one constant.
+  const DRIVE_MILES = 300;
+
   function estimateFare(miles) {
     if (miles == null) return null;
     if (miles === 0) return { min: 0, max: 0, mode: "local" };
-    const base = 60; // booking/airport overhead
-    const near = Math.min(miles, 600) * 0.2; // first 600 mi: ~$0.20/mi
+    const driving = miles <= DRIVE_MILES;
+    // Fuel and tolls for the round trip, per car — no booking or airport
+    // overhead, because a road trip doesn't have any.
+    const base = driving ? 0 : 60;
+    const perMile = driving ? 0.34 : 0.2; // round-trip fuel+tolls vs airfare
+    const near = Math.min(miles, 600) * perMile;
     const far = Math.max(0, miles - 600) * 0.11; // beyond: ~$0.11/mi
     const mid = base + near + far;
     return {
       min: Math.round((mid * 0.82) / 5) * 5,
       max: Math.round((mid * 1.28) / 5) * 5,
-      mode: miles > 300 ? "flight" : "drive",
+      mode: driving ? "drive" : "flight",
     };
   }
 
@@ -198,11 +207,11 @@
    * Applied ONLY to our own estimates. A real captured fare already reflects
    * whatever season it was quoted for, and scaling it would corrupt real data.
    */
-  function seasonFactorFor(dateRange) {
-    if (!isValidRange(dateRange)) return { fare: 1, lodging: 1, label: null };
-    const md = dateRange.start.slice(5); // "MM-DD"
-    const month = Number(dateRange.start.slice(5, 7));
-    const day = Number(dateRange.start.slice(8, 10));
+  /** Which pricing band a single calendar day falls in. */
+  function seasonBandFor(iso) {
+    const md = iso.slice(5); // "MM-DD"
+    const month = Number(iso.slice(5, 7));
+    const day = Number(iso.slice(8, 10));
     // Christmas / New Year: the sharpest, most reliable spike worldwide.
     if ((month === 12 && day >= 18) || (month === 1 && day <= 5)) {
       return { fare: 1.35, lodging: 1.5, label: "Christmas & New Year peak" };
@@ -219,6 +228,54 @@
   }
 
   /**
+   * Blend the seasonal multipliers across every day of the window.
+   *
+   * Reading the band off day one alone priced a trip that straddles a peak as
+   * if the peak did not exist: Dec 15-28 covers Christmas Day and got no uplift
+   * at all, while Dec 19-Jan 1 got the full 1.35x — a 30% swing between two
+   * near-identical windows. Because dateCandidatesFor synthesises windows from
+   * overlapping availability, those off-by-a-few-days variants are generated
+   * automatically and then compete on a 40%-weighted cost score.
+   */
+  function seasonFactorFor(dateRange) {
+    if (!isValidRange(dateRange)) return { fare: 1, lodging: 1, label: null };
+    const start = Date.parse(dateRange.start + "T00:00:00Z");
+    const end = Date.parse(dateRange.end + "T00:00:00Z");
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      return { fare: 1, lodging: 1, label: null };
+    }
+    let fare = 0;
+    let lodging = 0;
+    let days = 0;
+    let peakDays = 0;
+    const labels = new Map();
+    for (let t = start; t <= end && days < 400; t += 86400000) {
+      const band = seasonBandFor(new Date(t).toISOString().slice(0, 10));
+      fare += band.fare;
+      lodging += band.lodging;
+      days += 1;
+      if (band.label) {
+        peakDays += 1;
+        labels.set(band.label, (labels.get(band.label) || 0) + 1);
+      }
+    }
+    if (!days) return { fare: 1, lodging: 1, label: null };
+    // Name the band that covers the most days, and say how much of the trip it
+    // actually covers so a one-night brush with a peak doesn't read as a
+    // full-price warning.
+    let label = null;
+    let best = 0;
+    labels.forEach((n, name) => {
+      if (n > best) {
+        best = n;
+        label = name;
+      }
+    });
+    if (label && peakDays < days) label = `${label} (${best} of ${days} days)`;
+    return { fare: fare / days, lodging: lodging / days, label, peakDays, days };
+  }
+
+  /**
    * The fewest nights that make a journey worth taking. A 16-hour flight each
    * way for a single night isn't a trip, it's an ordeal — but the date scorer
    * can't see that, because a one-day window is trivially "fully attendable"
@@ -226,20 +283,38 @@
    * of round-trip flying, so a short hop stays flexible while long-haul
    * demands a real stay.
    */
-  const DAY_TRIP_MILES = 300; // same threshold estimateFare uses for drive vs fly
+  const DAY_TRIP_MILES = DRIVE_MILES;
+  const GROUND_HOURS = 3.5; // airport transfers, check-in and security, both ends
+  const CONNECTION_HOURS = 2.5; // typical layover on a route with no nonstop
+  /**
+   * Door-to-door hours one way — what someone actually gives up to get there.
+   *
+   * flightTimeHours is great-circle time in the air. Quoting that as the
+   * journey made a trip to the other side of the world look like an afternoon:
+   * Goa to Bali came out at 7h20m when there is no nonstop and the real answer
+   * is 14-17 hours. It is not only a label — the same number gates trip
+   * viability and decides how much of the first and last day to write off.
+   */
+  function journeyHours(miles) {
+    if (miles == null || miles <= 0) return 0;
+    if (miles <= DRIVE_MILES) return driveTimeHours(miles);
+    const byAir = flightTimeHours(miles);
+    // Below ~600mi driving is usually still quicker door to door.
+    if (miles <= 600) return Math.min(driveTimeHours(miles), byAir + GROUND_HOURS);
+    // Getting to the airport, checking in, security, and the same at the far
+    // end. Beyond ~2,000mi assume a connection too: most such city pairs have
+    // no nonstop, and the ones that do are the exception we'd rather
+    // under-promise on than over-promise.
+    return byAir + GROUND_HOURS + (miles > 2000 ? CONNECTION_HOURS : 0);
+  }
+
   function minSensibleNights(miles) {
     if (miles == null || miles <= 0) return 0;
     // Anything within driving range can legitimately be a day trip — a local
     // wedding, a birthday lunch, a match. Demanding an overnight there vetoed
     // exactly the single-day events the app is meant to support.
     if (miles <= DAY_TRIP_MILES) return 0;
-    // Beyond that, base the bar on the journey people actually face: a long
-    // drive is a long day even though flight time would call it trivial.
-    const byAir = flightTimeHours(miles);
-    const byRoad = driveTimeHours(miles);
-    // Below ~600mi most groups drive; past that flying wins.
-    const oneWayHours = miles <= 600 ? Math.min(byRoad, byAir) : byAir;
-    return Math.min(7, Math.max(1, Math.round((oneWayHours * 2) / 8)));
+    return Math.min(7, Math.max(1, Math.round((journeyHours(miles) * 2) / 8)));
   }
 
   /**
@@ -285,7 +360,13 @@
     // Only scale OUR estimate — a searched/live fare already reflects its own
     // season, and multiplying it would corrupt a real observed price.
     const fareSeason = f.source === "estimated" ? season.fare : 1;
-    const travel = ((f.min + f.max) / 2) * party * fareSeason;
+    // A car costs the same with three people in it as with one, so a drive is
+    // priced per VEHICLE. Multiplying it per head charged a family of three
+    // $308 to drive 190 miles — three separate "fares", each carrying the $60
+    // airport booking overhead that a road trip never incurs. That figure then
+    // fed the budget check, producing spurious "over budget" warnings on drives.
+    const driving = f.mode === "drive";
+    const travel = ((f.min + f.max) / 2) * (driving ? 1 : party) * fareSeason;
     // Nights = nights slept, so one fewer than the inclusive day count.
     const nights = Math.max(0, rangeDays(dateRange) - 1);
     // "I don't need a bed" (staying with family, own place) means no lodging
@@ -338,8 +419,11 @@
   /** Format an hours value as "2h 15m". */
   function formatHours(hrs) {
     if (hrs == null) return "—";
-    const h = Math.floor(hrs);
-    const m = Math.round((hrs - h) * 60);
+    // Round to whole minutes FIRST, then split. Rounding the remainder on its
+    // own let 6.995h print as "6h 60m".
+    const total = Math.round(hrs * 60);
+    const h = Math.floor(total / 60);
+    const m = total % 60;
     return m === 0 ? `${h}h` : `${h}h ${m}m`;
   }
 
@@ -1086,6 +1170,7 @@
     estimateFare,
     getFare,
     flightTimeHours,
+    journeyHours,
     driveTimeHours,
     formatHours,
     seasonFactorFor,
