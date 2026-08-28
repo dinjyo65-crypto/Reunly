@@ -1180,3 +1180,46 @@ test("distance resolves the same way for cost and for viability", () => {
   assert.ok(withProxy.viability < 1, "a 2-night trip to Bali is not waved through");
   assert.ok(withProxy.minNights >= 5);
 });
+
+test("money collected into a kitty isn't counted as group spend", () => {
+  // A treasurer collecting a float before booking anything had no way to record
+  // it except as an ordinary expense, which inflated the headline: 12 people
+  // paying $250 each before a $2,400 deposit showed "Total $5,150 · $429.17
+  // avg per person" for $2,400 of actual spend. As settlements it's exact.
+  const people = Array.from({ length: 12 }, (_, i) => person({ id: `p${i}`, rsvp: "in" }));
+  const ids = people.map((p) => p.id);
+  const ledger = [];
+  for (let i = 1; i < 12; i++) {
+    ledger.push({ id: `c${i}`, payerId: `p${i}`, amount: 250, sharedWith: ["p0"], settlement: true });
+  }
+  ledger.push({ id: "villa", payerId: "p0", amount: 2400, sharedWith: ids });
+  const r = E.computeSettlement(people, ledger);
+  assert.strictEqual(r.total, 2400, "only the villa is group spend");
+  assert.strictEqual(r.share, 200);
+  assert.strictEqual(r.shareExact, true);
+  // Everyone paid 250 towards a 200 share, so each is owed 50 back.
+  assert.strictEqual(r.transfers.length, 11);
+  assert.ok(r.transfers.every((t) => Math.round(t.amount) === 50 && t.from === "p0"),
+    "the treasurer refunds the difference");
+});
+
+test("a departed member's balance can still be corrected", () => {
+  // The pickers were built from the roster alone, so once someone was removed
+  // no refund or correction could be assigned to them — while their balance
+  // stayed on the books with no way to clear it.
+  const roster = goers("a", "b");
+  const ledger = [{ id: "x1", payerId: "a", amount: 400, sharedWith: ["a", "gone"] }];
+  const before = E.computeSettlement(roster, ledger);
+  assert.strictEqual(before.balances.get("gone"), -200, "they still owe");
+  // A correcting settlement assigned to them clears it.
+  const after = E.computeSettlement(roster, [
+    ...ledger,
+    { id: "s1", payerId: "gone", amount: 200, sharedWith: ["a"], settlement: true },
+  ]);
+  // Once square they drop off the books entirely, which is the right outcome —
+  // balances only lists people still owed or owing.
+  const settled = after.balances.get("gone");
+  assert.ok(settled === undefined || Math.abs(settled) < 0.005, "and it can be settled");
+  assert.strictEqual(after.transfers.length, 0, "nothing left outstanding");
+  assert.ok(Math.abs(after.balances.get("a")) < 0.005, "the payer is made whole");
+});

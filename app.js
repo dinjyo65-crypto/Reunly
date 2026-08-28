@@ -3401,13 +3401,16 @@
   // Record "A paid B back": a transfer that settles part of a balance rather
   // than a shared cost. Modelled as an expense that only the recipient shares,
   // so the existing balance maths handles it without a special case.
-  function addSettlement(fromId, toId, amount) {
+  function addSettlement(fromId, toId, amount, kind) {
     const amt = parseFloat(amount);
     if (!fromId || !toId || fromId === toId || Number.isNaN(amt) || amt <= 0) return;
+    // Both a repayment and a contribution to the kitty are one person handing
+    // money to another rather than group spend — same maths, different words.
+    const paidIn = kind === "contribution";
     state.expenses.unshift({
       id: `x_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       payerId: fromId,
-      desc: `Repaid ${pName(toId)}`,
+      desc: paidIn ? `Paid in to ${pName(toId)}` : `Repaid ${pName(toId)}`,
       amount: amt,
       sharedWith: [toId],
       settlement: true,
@@ -3415,7 +3418,7 @@
     });
     saveState();
     renderExpenses();
-    toast("Repayment recorded");
+    toast(paidIn ? "Payment recorded" : "Repayment recorded");
   }
 
   function addExpense(payerId, desc, amount, sharedWith) {
@@ -3510,12 +3513,57 @@
     );
 
     // Add-expense form.
+    // Anyone the ledger still has money with. Building the pickers from the
+    // roster alone meant that once a dropout was removed, no correcting or
+    // refund line could ever be assigned to them — while computeSettlement
+    // went on (correctly) showing their balance, with no way to clear it.
+    const ledgerPeople = [
+      ...state.participants.map((p) => ({ id: p.id, name: p.name || "Unnamed" })),
+      ...[...balances.keys()]
+        .filter((id) => !state.participants.some((p) => p.id === id))
+        .map((id) => ({ id, name: pName(id) })),
+    ];
+
     const form = el("div", { class: "exp-form" });
+    // Two kinds of line, because they mean different things to the maths: a
+    // shared cost is group spend, money handed to the treasurer is not.
+    let entryMode = "spend";
+    const modeRow = el("div", { class: "chip-select exp-mode" });
+    const modeBtns = [
+      ["spend", "Shared cost"],
+      ["collect", "Money in"],
+    ].map(([mode, label]) =>
+      el("button", {
+        type: "button",
+        class: `chip-toggle${entryMode === mode ? " on" : ""}`,
+        "aria-pressed": entryMode === mode ? "true" : "false",
+        text: label,
+        onClick: () => {
+          entryMode = mode;
+          modeBtns.forEach((b, i) => {
+            const on = (i === 0 ? "spend" : "collect") === entryMode;
+            b.classList.toggle("on", on);
+            b.setAttribute("aria-pressed", on ? "true" : "false");
+          });
+          syncMode();
+        },
+      })
+    );
+    modeBtns.forEach((b) => modeRow.appendChild(b));
+    form.appendChild(modeRow);
+
     const payerSel = el("select", { "aria-label": "Who paid" });
-    state.participants.forEach((p) => {
-      const o = el("option", { value: p.id, text: p.name || "Unnamed" });
+    ledgerPeople.forEach((p) => {
+      const o = el("option", { value: p.id, text: p.name });
       if (p.id === state.me) o.selected = true;
       payerSel.appendChild(o);
+    });
+    // Who the money went TO, when it's a contribution rather than a cost.
+    const toSel = el("select", { "aria-label": "Paid to" });
+    ledgerPeople.forEach((p) => {
+      const o = el("option", { value: p.id, text: p.name });
+      if (p.id === state.me) o.selected = true;
+      toSel.appendChild(o);
     });
     const descIn = el("input", { type: "text", placeholder: "What for? e.g. Villa deposit" });
     const amtIn = el("input", {
@@ -3532,13 +3580,13 @@
     const whoWrap = el("div", { class: "exp-who" });
     whoWrap.appendChild(el("div", { class: "exp-who-label", text: "Split between" }));
     const chips = el("div", { class: "chip-select" });
-    state.participants.forEach((p) => {
+    ledgerPeople.forEach((p) => {
       const on = chosen.has(p.id);
       chips.appendChild(
         el("button", {
           type: "button",
           class: `chip-toggle${on ? " on" : ""}`,
-          text: p.name || "Unnamed",
+          text: p.name,
           onClick: (e) => {
             if (chosen.has(p.id)) chosen.delete(p.id);
             else chosen.add(p.id);
@@ -3549,27 +3597,59 @@
     });
     whoWrap.appendChild(chips);
     form.appendChild(whoWrap);
+    const toWrap = el("div", { class: "exp-who" });
+    toWrap.appendChild(el("div", { class: "exp-who-label", text: "Paid to" }));
+    toWrap.appendChild(toSel);
+    form.appendChild(toWrap);
 
     const row = el("div", { class: "exp-form-row" });
     row.appendChild(amtIn);
-    row.appendChild(
-      el("button", {
-        class: "btn sm",
-        text: "Add expense",
-        onClick: () => {
-          if (!chosen.size) {
-            toast("Pick at least one person to split between");
+    const submit = el("button", {
+      class: "btn sm",
+      text: "Add expense",
+      onClick: () => {
+        const amt = E.toUSD(parseAmount(amtIn.value), displayCode());
+        if (!Number.isFinite(amt) || amt === 0) {
+          toast("Enter an amount");
+          return;
+        }
+        if (entryMode === "collect") {
+          // Money handed to the treasurer is a transfer between two people, not
+          // group spend. Recording it as an ordinary expense was the only route
+          // available and it inflated the headline: a 12-person trip where the
+          // treasurer collected $250 each before paying a $2,400 deposit showed
+          // "Total $5,150 · $429.17 avg per person" for $2,400 of actual spend.
+          if (payerSel.value === toSel.value) {
+            toast("Pick two different people");
             return;
           }
-          // Typed in whatever currency the ledger is showing; stored in USD.
-          addExpense(
-            payerSel.value, descIn.value,
-            E.toUSD(parseFloat(amtIn.value), displayCode()), [...chosen]
-          );
-        },
-      })
-    );
+          addSettlement(payerSel.value, toSel.value, Math.abs(amt), "contribution");
+          descIn.value = "";
+          amtIn.value = "";
+          return;
+        }
+        if (!chosen.size) {
+          toast("Pick at least one person to split between");
+          return;
+        }
+        // Typed in whatever currency the ledger is showing; stored in USD.
+        addExpense(payerSel.value, descIn.value, amt, [...chosen]);
+      },
+    });
+    row.appendChild(submit);
     form.appendChild(row);
+
+    // Show only the fields the chosen kind of line actually needs.
+    function syncMode() {
+      const collecting = entryMode === "collect";
+      whoWrap.hidden = collecting;
+      toWrap.hidden = !collecting;
+      descIn.hidden = collecting;
+      payerSel.setAttribute("aria-label", collecting ? "Who paid in" : "Who paid");
+      submit.textContent = collecting ? "Record payment" : "Add expense";
+      descIn.placeholder = "What for? e.g. Villa deposit";
+    }
+    syncMode();
     card.appendChild(form);
 
     if (!state.expenses.length) {

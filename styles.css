@@ -895,6 +895,11 @@ a:focus-visible {
 .itin-note { font-size: 0.8rem; color: var(--text-dim); line-height: 1.5; margin-top: 2px; }
 /* Arrival/departure rows aren't links, so they must not look clickable. */
 .itin-fixed { cursor: default; opacity: 0.85; }
+/* Shared cost vs money handed to the treasurer — different maths, so the
+   ledger asks which one you mean rather than guessing. */
+.exp-mode { margin-bottom: 8px; }
+.exp-form select[aria-label="Paid to"] { width: 100%; }
+
 /* Before-you-go checklist. */
 .prep-row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0;
   border-top: 1px solid var(--border); }
