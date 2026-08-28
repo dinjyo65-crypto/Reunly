@@ -97,9 +97,18 @@
   // fare from the proxy cache, fall back to the synchronous engine estimate.
   // The engine calls this with two arguments, so the window comes from here
   // rather than being threaded through every call site.
+  // Memoised behind the same flag as the ranking. fareProvider is the innermost
+  // function in rankCombinations — called once per destination x window x
+  // participant, three times over — and each call was rebuilding and sorting a
+  // tally of every participant's every date row to find a start date that
+  // cannot change during the pass. That put the O(n^2) blow-up the candidate
+  // caps were added to prevent straight back in through another door: a
+  // 12-person group froze the main thread for ~1s on every keystroke, 20 people
+  // for 8s, and a crafted 60-person link for 47s.
+  let pricingWindowCache = null;
   const fareDate = () => {
-    const w = pricingWindow();
-    return w ? w.start : null;
+    if (pricingWindowCache === null) pricingWindowCache = { w: pricingWindow() };
+    return pricingWindowCache.w ? pricingWindowCache.w.start : null;
   };
   const fareProvider = (from, to) =>
     window.ReunlyFares.getCached(from, to, fareDate()) || E.getFare(from, to);
@@ -1710,6 +1719,7 @@
   let combosCache = null;
   function invalidateCombos() {
     combosCache = null;
+    pricingWindowCache = null;
   }
   function rankedCombos() {
     if (combosCache) return combosCache;
@@ -3315,7 +3325,8 @@
     const card = el("div", { class: "card" });
     card.appendChild(el("div", { class: "toolkit-title", text: "💸 Expenses & settle-up" }));
 
-    const { total, share, shareExact, base, balances, transfers, spend } = computeSplit();
+    const { total, share, shareExact, base, balances, transfers, spend, chargedIds } =
+      computeSplit();
     card.appendChild(
       el("div", {
         class: "itin-sub",
@@ -3406,10 +3417,21 @@
       const w = el("div", { style: "flex:1;min-width:0" });
       w.appendChild(el("div", { class: "exp-desc", text: x.desc }));
       // Show the split scope so an unequal share is visible, not hidden.
-      const alive = new Set(state.participants.map((q) => q.id));
-      const sharers = (Array.isArray(x.sharedWith) ? x.sharedWith : []).filter((id) => alive.has(id));
+      // Show the FULL pinned set. Filtering to people still on the roster made
+      // the label disagree with the maths: a $300 dinner split between Ana and
+      // Bob read "split between Bob" after Ana was removed — claiming Bob bore
+      // all $300 — while he was charged $150 and a transfer row directly below
+      // said Ana still owed him the rest. pName() already renders a departed
+      // person as "Ana (removed)".
+      const sharers = Array.isArray(x.sharedWith) ? x.sharedWith : [];
+      // Compare WHO, not how many. Same-size-but-different-people hid the
+      // scope entirely: a dinner split between Ana and Bob showed no scope at
+      // all on a roster of Bob and Cara, so the row read as everyone's.
+      const coversRoster =
+        sharers.length === state.participants.length &&
+        sharers.every((id) => state.participants.some((q) => q.id === id));
       let scope = "";
-      if (sharers.length && sharers.length !== state.participants.length) {
+      if (sharers.length && !coversRoster) {
         scope =
           sharers.length <= 3
             ? ` · split between ${sharers.map(pName).join(", ")}`
@@ -3433,11 +3455,24 @@
     card.appendChild(list);
     // "each" is only meaningful when every expense is split the same way;
     // otherwise show the average so it isn't mistaken for an exact figure.
+    // "each" is a definite claim, so check WHO each expense was split between,
+    // not just how many. Comparing lengths printed "$150.00 each" for a $300
+    // dinner split between Ana and Bob after Ana was removed — telling Cara,
+    // who owed nothing, that she owed $150.
+    const charged = new Set(chargedIds);
+    const roster = new Set(state.participants.map((p) => p.id));
+    // "each" is read by everyone looking at the card, so it may only appear
+    // when it is true FOR everyone looking at the card. A $300 dinner split
+    // between Ana and Bob is genuinely "$150 each" — for Ana and Bob — but
+    // after Ana is removed, Cara reads the same line as her own debt.
+    const chargedIsWholeRoster =
+      charged.size === roster.size && [...charged].every((id) => roster.has(id));
     const uniform =
       shareExact &&
+      chargedIsWholeRoster &&
       spend.every((x) => {
-        const s = Array.isArray(x.sharedWith) ? x.sharedWith : [];
-        return !s.length || s.length === base.length;
+        const ids = Array.isArray(x.sharedWith) ? x.sharedWith : [];
+        return !ids.length || (ids.length === charged.size && ids.every((id) => charged.has(id)));
       });
     card.appendChild(
       el("div", {

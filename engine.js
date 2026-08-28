@@ -237,8 +237,15 @@
    * overlapping availability, those off-by-a-few-days variants are generated
    * automatically and then compete on a 40%-weighted cost score.
    */
+  // Memoised by window. tripCostFor calls this once per participant per
+  // combination, and the day loop inside runs a Date + toISOString per night —
+  // real work to repeat for an answer that depends only on the two dates.
+  const seasonCache = new Map();
   function seasonFactorFor(dateRange) {
     if (!isValidRange(dateRange)) return { fare: 1, lodging: 1, label: null };
+    const cacheKey = `${dateRange.start}|${dateRange.end}`;
+    const hit = seasonCache.get(cacheKey);
+    if (hit) return hit;
     const start = Date.parse(dateRange.start + "T00:00:00Z");
     const end = Date.parse(dateRange.end + "T00:00:00Z");
     if (!Number.isFinite(start) || !Number.isFinite(end)) {
@@ -272,7 +279,10 @@
       }
     });
     if (label && peakDays < days) label = `${label} (${best} of ${days} days)`;
-    return { fare: fare / days, lodging: lodging / days, label, peakDays, days };
+    const result = { fare: fare / days, lodging: lodging / days, label, peakDays, days };
+    if (seasonCache.size > 500) seasonCache.clear();
+    seasonCache.set(cacheKey, result);
+    return result;
   }
 
   /**
@@ -1217,8 +1227,15 @@
         owed[id] = (owed[id] || 0) + (per + (i < remainder ? 1 : 0)) / 100;
       });
     });
-    const share = base.length ? Math.round((total / base.length) * 100) / 100 : 0;
-    const shareExact = base.length ? Math.round(total * 100) % base.length === 0 : true;
+    // Divide by the people the money was actually allocated to, not by the
+    // current roster. The two diverge as soon as anyone's RSVP changes — which
+    // is the normal life of a trip. A 12-way £6,000 deposit followed by four
+    // people dropping out printed "£750.00 avg per person" above eleven rows
+    // that all said £500, so a treasurer chased the wrong number from everyone.
+    const chargedIds = Object.keys(owed);
+    const divisor = chargedIds.length || base.length;
+    const share = divisor ? Math.round((total / divisor) * 100) / 100 : 0;
+    const shareExact = divisor ? Math.round(total * 100) % divisor === 0 : true;
     const balances = new Map();
     const inBase = new Set(baseIds);
     // Anyone still on the roster, anyone who PAID, and anyone who OWES. Dropping
@@ -1256,7 +1273,11 @@
       if (debtors[di].amt < 0.01) di += 1;
       if (creditors[ci].amt < 0.01) ci += 1;
     }
-    return { total, share, shareExact, base, balances, transfers, spend };
+    // chargedIds: who the money was actually allocated to. The UI needs it to
+    // decide whether "each" is true — comparing LENGTHS let it print a definite
+    // "$150.00 each" for a $300 dinner split between Ana and Bob after Ana was
+    // removed, telling Cara she owed $150 when she owed nothing.
+    return { total, share, shareExact, base, balances, transfers, spend, chargedIds };
   }
 
   // External deep-link builders (verification, not integration).

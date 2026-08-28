@@ -255,16 +255,32 @@ def haversine_miles(a, b):
     return 2 * r * math.asin(math.sqrt(h))
 
 
+# Must mirror estimateFare in engine.js. The client prefers this proxy answer
+# over its own estimate, so any rule that lives only in engine.js is silently
+# bypassed the moment the server is reachable -- which is normal operation, not
+# an edge case. This function had no drive branch and returned no mode, so a
+# 190-mile family drive was costed as three airline tickets ($307.50 instead of
+# $70) while the card beside it drew a car.
+DRIVE_MILES = 300
+
+
 def estimate_fare(miles):
     if miles is None:
         return None
     if miles == 0:
-        return (0, 0)
-    base = 60
-    near = min(miles, 600) * 0.20
+        return (0, 0, "local")
+    driving = miles <= DRIVE_MILES
+    # Round-trip fuel and tolls per car; no booking or airport overhead.
+    base = 0 if driving else 60
+    per_mile = 0.34 if driving else 0.20
+    near = min(miles, 600) * per_mile
     far = max(0, miles - 600) * 0.11
     mid = base + near + far
-    return (round(mid * 0.82 / 5) * 5, round(mid * 1.28 / 5) * 5)
+    return (
+        round(mid * 0.82 / 5) * 5,
+        round(mid * 1.28 / 5) * 5,
+        "drive" if driving else "flight",
+    )
 
 
 # NOTE: lodging estimates live in engine.js only. Scoring needs them
@@ -364,27 +380,36 @@ def resolve_fare(frm_raw, to_raw, date, nights=5):
     frm = resolve_city(frm_raw)
     to = resolve_city(to_raw)
 
+    # Every return below carries `mode`. The client's cost model branches on it
+    # to decide per-vehicle vs per-seat pricing, and a response without it is
+    # read as a flight — so omitting it on any path silently reintroduces
+    # per-head pricing for road trips.
+    mode = "local" if miles == 0 else ("drive" if miles <= DRIVE_MILES else "flight")
+
     # Live (only for canonical cities with known IATA codes).
     if os.environ.get("AMADEUS_CLIENT_ID") and frm in CITY_IATA and to in CITY_IATA:
         live = amadeus_fare(frm, to, date, nights)
         if live:
             # Sandbox inventory is fictional — never badge it as a real fare.
+            # A live airline quote is a flight whatever the distance says.
             return {"min": live[0], "max": live[1], "currency": "USD",
                     "source": "sandbox" if AMADEUS_IS_SANDBOX else "live",
-                    "asOf": time.strftime("%Y-%m-%d"), "miles": miles}
+                    "asOf": time.strftime("%Y-%m-%d"), "miles": miles, "mode": "flight"}
 
     # Curated searched fares (canonical pairs only).
     if frm and to:
         key = f"{frm}|{to}"
         if key in SEARCHED_FARES:
             lo, hi = SEARCHED_FARES[key]
-            return {"min": lo, "max": hi, "currency": "USD",
-                    "source": "searched", "asOf": FARES_AS_OF, "miles": miles}
+            return {"min": lo, "max": hi, "currency": "USD", "source": "searched",
+                    "asOf": FARES_AS_OF, "miles": miles, "mode": "flight"}
 
     if miles == 0:
-        return {"min": 0, "max": 0, "currency": "USD", "source": "estimated", "miles": 0}
+        return {"min": 0, "max": 0, "currency": "USD", "source": "estimated",
+                "miles": 0, "mode": "local"}
     est = estimate_fare(miles)
-    return {"min": est[0], "max": est[1], "currency": "USD", "source": "estimated", "miles": miles}
+    return {"min": est[0], "max": est[1], "currency": "USD", "source": "estimated",
+            "miles": miles, "mode": est[2]}
 
 
 # --- LAN address (so phones on the same Wi-Fi can open the app) ---------------
