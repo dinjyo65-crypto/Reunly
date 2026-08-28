@@ -1481,7 +1481,7 @@
   // Attach a destination photo banner to a recommendation card. Uses the cached
   // photo immediately if present; otherwise fetches once and re-renders.
   let photoReqDest = null;
-  function addRecPhoto(card, dest) {
+  function addRecPhoto(card, dest, pinText) {
     const cached = window.ReunlyFares.getCachedPhoto(dest);
     const banner = el("div", { class: "rec-photo" });
     // This is the only spot that builds CSS from a fetched string. A value
@@ -1503,7 +1503,10 @@
     const label = el("div", { class: "rec-photo-label" });
     label.appendChild(el("span", { class: "rec-photo-emoji", text: D.cityEmoji(dest) }));
     label.appendChild(el("span", { text: dest }));
-    banner.appendChild(el("span", { class: "rec-photo-pin", text: "Top pick" }));
+    // Once a plan is locked the hero shows the AGREED option, which may not be
+    // the top-ranked one any more — calling it the top pick would contradict
+    // the note directly below saying something else now scores higher.
+    banner.appendChild(el("span", { class: "rec-photo-pin", text: pinText || "Top pick" }));
     banner.appendChild(label);
     card.appendChild(banner);
   }
@@ -1840,11 +1843,26 @@
       return;
     }
     maybeCelebrate(combos);
-    const c = combos[0];
+    // Once a plan is locked, the hero IS the locked plan. Rendering combos[0]
+    // regardless meant a late invitee's preferences could push another option
+    // to the top, and the Decide tab — the headline screen — would then show a
+    // different destination, its photo and its costs, complete with a "Lock
+    // this plan" button, while the banner above it counted down to the plan
+    // that was actually agreed and the Costs tab priced that one. In a group
+    // where people book their own flights, that is money spent on the wrong
+    // city. A ranking that has moved is worth saying, but it is a prompt, not
+    // a replacement.
+    const lockedCombo = state.lockedPlan
+      ? combos.find((x) => lockState(x)) || null
+      : null;
+    const c = lockedCombo || combos[0];
     const locked = lockState(c);
+    // The top-ranked option is no longer what the group agreed to.
+    const driftedTo =
+      state.lockedPlan && lockedCombo && combos[0] !== lockedCombo ? combos[0] : null;
     const card = el("div", { class: "card winner-card stagger" });
 
-    addRecPhoto(card, c.destination);
+    addRecPhoto(card, c.destination, locked ? "Agreed" : "Top pick");
 
     const body = el("div", { class: "winner-body" });
     const whenLine = el("div", { class: "winner-when", text: `📅 ${c.dateLabel}` });
@@ -1908,6 +1926,30 @@
         })
       );
     }
+    if (driftedTo) {
+      const note = el("div", { class: "alert-inline" });
+      note.appendChild(
+        el("span", {
+          text:
+            `Since you locked this, ${driftedTo.destination} (${driftedTo.dateLabel}) ` +
+            "now scores higher — answers have changed.",
+        })
+      );
+      if (state.role === "organizer") {
+        note.appendChild(
+          el("button", {
+            class: "btn ghost sm",
+            style: "width:auto",
+            text: "Review",
+            onClick: () => {
+              const alts = document.getElementById("recList");
+              if (alts) alts.scrollIntoView({ behavior: "smooth", block: "center" });
+            },
+          })
+        );
+      }
+      body.appendChild(note);
+    }
     // The range matters more than the mean: it's the furthest traveller who
     // decides whether the trip actually happens.
     if (c.minTripCost != null && c.maxTripCost != null && Math.round(c.maxTripCost) > Math.round(c.minTripCost)) {
@@ -1952,7 +1994,12 @@
   function renderRecommendations() {
     const list = $("#recList");
     list.textContent = "";
-    const others = rankedCombos().slice(1, 3);
+    // Exclude whatever the hero is showing. With a plan locked the hero is the
+    // LOCKED option, which is not necessarily rank 1, so a plain slice(1, 3)
+    // could list it a second time as its own runner-up.
+    const ranked = rankedCombos();
+    const heroCombo = state.lockedPlan ? ranked.find(lockState) || ranked[0] : ranked[0];
+    const others = ranked.filter((c) => c !== heroCombo).slice(0, 2);
     const section = list.closest(".section");
     if (section) section.hidden = !others.length;
     others.forEach((c, i) => {

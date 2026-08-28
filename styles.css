@@ -884,6 +884,11 @@ a:focus-visible {
 .itin-note { font-size: 0.8rem; color: var(--text-dim); line-height: 1.5; margin-top: 2px; }
 /* Arrival/departure rows aren't links, so they must not look clickable. */
 .itin-fixed { cursor: default; opacity: 0.85; }
+/* "The ranking moved since you locked this" — a prompt, not an alarm. */
+.alert-inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--warn-bg, rgba(245,158,11,0.12));
+  border: 1px solid var(--warn, #f59e0b); font-size: 0.82rem; line-height: 1.45; }
 .itin-gap { font-size: 0.78rem; color: var(--text-dim); text-align: center;
   padding: 10px 0; border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border); margin: 8px 0; }
 /* A refund is money coming back, so it must not read like another cost. */
