@@ -77,10 +77,12 @@
         // Cache everything, including resolved-but-unknown, so the UI can stop
         // showing a "pending" state. Only fares with a min are usable values.
         data.fetchedAt = Date.now();
-        // Which departure this price was actually quoted for. Without it the
-        // engine can't tell a Christmas quote from an off-season one and would
-        // trust either to already embody its own seasonal pricing.
-        data.quotedFor = date || null;
+        // Which departure this price was actually quoted for — and ONLY when
+        // the upstream really priced that date. Curated "searched" rows are a
+        // static table with no departure, so stamping them made the engine
+        // believe they already embodied the season and skip the uplift.
+        data.quotedFor =
+          data.source === "live" || data.source === "sandbox" ? date || null : null;
         cache.set(k, data);
         persist();
         return data.min != null ? data : null;

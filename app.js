@@ -1820,10 +1820,25 @@
     // group's date, destination or budget warnings. Keep everyone else,
     // including people who haven't replied yet.
     const relevant = state.participants.filter((p) => p.rsvp !== "out");
+    // Pin the agreed plan so it can never fall out of the ranking. Candidate
+    // windows are derived from overlapping availability, so a locked window
+    // stops being generated as soon as anyone widens their dates — and the
+    // hero would then quietly show a different trip as the "Top pick".
     combosCache = E.rankCombinations(
       relevant.length ? relevant : state.participants,
       undefined,
-      fareProvider
+      fareProvider,
+      state.lockedPlan
+        ? {
+            pinned: {
+              destination: state.lockedPlan.destination,
+              dateRange: {
+                start: state.lockedPlan.dateStart,
+                end: state.lockedPlan.dateEnd,
+              },
+            },
+          }
+        : null
     );
     return combosCache;
   }
@@ -2650,15 +2665,24 @@
     }
     if (!w || w === "pending") return null;
     const mode = w.mode === "forecast" ? "Forecast" : "Typically";
-    let rain = "";
-    if (w.rainPct != null) {
-      rain = ` · ${w.rainPct}% rain risk`;
-    } else if (w.wetDays != null && w.totalDays) {
-      // Historical: "5 of 7 days saw rain" is the seasonality signal that
-      // matters when picking dates months ahead.
-      rain = ` · rain on ${w.wetDays} of ${w.totalDays} days last year`;
+    return `🌤️ ${mode} ${w.tMin}–${w.tMax}°C${rainPhrase(w)}`;
+  }
+
+  /**
+   * How the rain signal reads. The proxy returns rainPct ONLY inside the
+   * 15-day forecast horizon and wetDays/totalDays only beyond it — never both.
+   * The locked-plan toolkit checked rainPct alone, so for every trip planned
+   * further out than a fortnight (which is essentially all of them) it printed
+   * temperature and nothing else. That is the monsoon case the archive branch
+   * exists to flag, lost on the one card people keep.
+   */
+  function rainPhrase(w) {
+    if (!w || w === "pending") return "";
+    if (w.rainPct != null) return ` · ${w.rainPct}% rain risk`;
+    if (w.wetDays != null && w.totalDays) {
+      return ` · rain on ${w.wetDays} of ${w.totalDays} days last year`;
     }
-    return `🌤️ ${mode} ${w.tMin}–${w.tMax}°C${rain}`;
+    return "";
   }
 
   // Download an .ics calendar file for the locked plan (all-day, end-exclusive).
@@ -3248,7 +3272,7 @@
     const w = weatherCache.get(wkey);
     if (w === undefined) fetchWeather(dest, plan.dateStart, plan.dateEnd);
     if (w && w !== "pending") {
-      const rain = w.rainPct != null ? ` · ${w.rainPct}% rain risk` : "";
+      const rain = rainPhrase(w);
       const mode = w.mode === "forecast" ? "Forecast" : "Typically";
       kit.appendChild(
         el("div", {
@@ -4325,9 +4349,22 @@
     return routes;
   }
   let fareFetchPending = false;
+  let fareFetchDirty = false;
   function refreshFares() {
-    if (fareFetchPending) return;
+    // A request that arrives mid-flight used to be DROPPED, not queued, and the
+    // completion callback never re-entered here. Boot fires ~90-180 fare
+    // lookups with 8-10s upstream timeouts, so anything that changes which
+    // routes are needed during that window — locking a plan (which moves the
+    // pricing window, and therefore every cache key), or adding someone from a
+    // new city — was silently lost until the next user-triggered render. For a
+    // geocoded city that left the Costs tab showing "Estimating fare…" forever
+    // and that person contributing nothing to the ranking.
+    if (fareFetchPending) {
+      fareFetchDirty = true;
+      return;
+    }
     fareFetchPending = true;
+    fareFetchDirty = false;
     window.ReunlyFares.ensureFares(neededRoutes(), () => {
       // New fares arrived — re-render derived sections (not inputs). Must drop
       // the memoised ranking first, or the whole point of fetching real fares
@@ -4339,6 +4376,9 @@
       renderCosts();
     }).finally(() => {
       fareFetchPending = false;
+      // ensureFares dedupes per key, so a follow-up pass only requests what is
+      // genuinely still missing.
+      if (fareFetchDirty) refreshFares();
     });
   }
 

@@ -374,15 +374,31 @@ test("peak seasons cost more than quiet ones", () => {
   assert.ok(/Christmas/i.test(xmas.season), "the peak is named so the UI can say why");
 });
 
-test("a real captured fare is never scaled by our seasonal guess", () => {
-  // A searched fare already reflects whatever season it was quoted for;
+test("a fare quoted for these dates isn't scaled by our seasonal guess", () => {
+  // A live quote FOR this departure already reflects that departure's season;
   // multiplying it would corrupt observed data.
-  const searched = fixedFares({ "London, UK|Goa, India": { min: 500, max: 500, source: "searched" } });
+  const live = fixedFares({
+    "London, UK|Goa, India":
+      { min: 500, max: 500, source: "live", quotedFor: "2026-12-20" },
+  });
+  const xmas = E.tripCostFor("London, UK", "Goa, India", { start: "2026-12-20", end: "2026-12-27" }, live);
+  assert.strictEqual(xmas.travel, 500, "a quote for these dates stays exactly as observed");
+});
+
+test("a captured fare with no departure date is still seasonally adjusted", () => {
+  // The curated SEARCHED_FARES table was captured once, months ago, with no
+  // departure attached — `asOf` is when we looked it up, not what it priced.
+  // Treating that as "already seasonal" let those routes escape the Christmas
+  // uplift entirely while every estimated fare paid it, handing the handful of
+  // curated destinations a standing advantage in a 40%-weighted cost score.
+  const searched = fixedFares({
+    "London, UK|Goa, India": { min: 500, max: 500, source: "searched" },
+  });
   const quiet = E.tripCostFor("London, UK", "Goa, India", { start: "2026-05-04", end: "2026-05-11" }, searched);
   const xmas = E.tripCostFor("London, UK", "Goa, India", { start: "2026-12-20", end: "2026-12-27" }, searched);
-  assert.strictEqual(quiet.travel, 500);
-  assert.strictEqual(xmas.travel, 500, "searched fares stay exactly as captured");
-  assert.ok(xmas.lodging > quiet.lodging, "but our own lodging estimate still moves");
+  assert.strictEqual(quiet.travel, 500, "off-peak is the captured figure");
+  assert.ok(xmas.travel > quiet.travel, "an unknown season must not be assumed to be this one");
+  assert.ok(xmas.lodging > quiet.lodging, "and our own lodging estimate still moves");
 });
 
 test("a lone adult isn't charged half a room", () => {
@@ -1113,4 +1129,54 @@ test("a fare always carries the distance it was priced for", () => {
     const f = E.getFare(a, b);
     assert.ok(Number.isFinite(f.miles), `${a} -> ${b} fare must carry miles`);
   }
+});
+
+// ---- The agreed plan must never fall out of the ranking --------------------
+test("a locked window survives someone widening their availability", () => {
+  // Candidate windows are DERIVED from overlapping availability, so the moment
+  // anyone widens their dates the locked overlap stops being generated. The
+  // Decide hero then fell back to combos[0] — a different week, under a "Top
+  // pick" ribbon, one tap from a Lock button that wipes everyone's bookings.
+  const mk = (id, dates) => person({ id, city: "London, UK", rsvp: "in",
+    destinations: ["Goa, India"], dates });
+  const pinned = { destination: "Goa, India", dateRange: { start: "2026-12-22", end: "2026-12-26" } };
+  const has = (list) => list.some((c) =>
+    c.destination === "Goa, India" && c.dateRange.start === "2026-12-22" && c.dateRange.end === "2026-12-26");
+  const widened = [
+    mk("ann", [{ start: "2026-12-01", end: "2026-12-31" }]),
+    mk("bob", [{ start: "2026-12-22", end: "2026-12-29" }]),
+  ];
+  assert.strictEqual(has(E.rankCombinations(widened)), false, "the window really does drop out");
+  assert.ok(has(E.rankCombinations(widened, undefined, E.getFare, { pinned })),
+    "but pinning keeps the agreed plan present and fully scored");
+});
+
+test("a locked destination survives everyone changing their minds", () => {
+  const mk = (id, dests) => person({ id, city: "London, UK", rsvp: "in", destinations: dests,
+    dates: [{ start: "2026-12-22", end: "2026-12-26" }] });
+  const pinned = { destination: "Goa, India", dateRange: { start: "2026-12-22", end: "2026-12-26" } };
+  const moved = [mk("ann", ["Bali, Indonesia"]), mk("bob", ["Bali, Indonesia"])];
+  const ranked = E.rankCombinations(moved, undefined, E.getFare, { pinned });
+  assert.ok(ranked.some((c) => c.destination === "Goa, India"),
+    "the agreed destination stays visible even once nobody is nominating it");
+});
+
+test("distance resolves the same way for cost and for viability", () => {
+  // The live autocomplete returns "London, United Kingdom" while CITY_COORDS
+  // holds "London, UK", so distanceMiles was null for anyone who used the
+  // type-ahead — and minSensibleNights(null) is 0, which silently switched off
+  // the rule that stops a 2-night window winning a 16-hour-flight trip.
+  const geocoded = "London, United Kingdom";
+  assert.strictEqual(E.distanceMiles(geocoded, "Bali, Indonesia"), null, "not in the local table");
+  const proxy = () => ({ min: 600, max: 900, mode: "flight", source: "estimated", miles: 7767 });
+  assert.strictEqual(E.milesBetween(geocoded, "Bali, Indonesia", proxy), 7767,
+    "the provider's mileage is used when ours is missing");
+  assert.ok(E.milesBetween("London, UK", "Bali, Indonesia", proxy) > 7000,
+    "and the local table still wins when it knows");
+
+  const traveller = person({ id: "p", city: geocoded, rsvp: "in",
+    destinations: ["Bali, Indonesia"], dates: [{ start: "2027-03-05", end: "2027-03-07" }] });
+  const withProxy = E.rankCombinations([traveller], undefined, proxy)[0];
+  assert.ok(withProxy.viability < 1, "a 2-night trip to Bali is not waved through");
+  assert.ok(withProxy.minNights >= 5);
 });

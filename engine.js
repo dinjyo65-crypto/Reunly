@@ -389,12 +389,21 @@
    * longest journey in the group sets the bar — a weekend that works for the
    * person driving an hour is still absurd for the one flying 16.
    */
-  function tripViabilityFor(destination, participants, dateRange, wasSubmitted = false) {
+  function tripViabilityFor(
+    destination, participants, dateRange, wasSubmitted = false, fareProvider = null
+  ) {
     const nights = Math.max(0, rangeDays(dateRange) - 1);
     let required = 0;
     for (const p of participants) {
       if (!p.city) continue;
-      const miles = distanceMiles(p.city, destination);
+      // Distance has two sources and this one only ever consulted the local
+      // table. The live autocomplete returns "London, United Kingdom" while
+      // CITY_COORDS holds "London, UK", so for anyone who picked their city
+      // from the type-ahead distanceMiles was null, minSensibleNights returned
+      // 0, and the rule that stops a 2-night window winning a 16-hour-flight
+      // trip was simply off. The cost path already falls back to the proxy's
+      // mileage; this one now does too.
+      const miles = milesBetween(p.city, destination, fareProvider);
       required = Math.max(required, minSensibleNights(miles));
     }
     if (!required || nights >= required) return { viability: 1, nights, required };
@@ -447,8 +456,16 @@
     // non-estimated fare as season-correct meant an August quote could be shown
     // for a Christmas trip with the 1.35x uplift suppressed, wearing the "live"
     // badge — the exact under-reporting seasonFactorFor exists to prevent.
+    // Only a price actually quoted FOR a departure may skip the uplift. Reading
+    // "no quotedFor" as "quoted for this window" let the curated SEARCHED_FARES
+    // table — captured once, months ago, with no departure date at all — escape
+    // the seasonal multiplier entirely: Delhi to Bangkok over Christmas came out
+    // at $275 while a comparable estimated fare paid the 1.35x and came out at
+    // $337. Since cost is normalised within a window at 40% weight, the six
+    // curated routes got a standing ~20% advantage over every other
+    // destination. A missing quote date means the season is UNKNOWN, so scale.
     const quotedForThisWindow =
-      f.source !== "estimated" && (!f.quotedFor || f.quotedFor === dateRange.start);
+      (f.source === "live" || f.source === "sandbox") && f.quotedFor === dateRange.start;
     const fareSeason = quotedForThisWindow ? 1 : season.fare;
     // A car costs the same with three people in it as with one, so a drive is
     // priced per VEHICLE. Multiplying it per head charged a family of three
@@ -460,6 +477,7 @@
     // each hold half the rule, which is exactly how the per-vehicle pricing
     // ended up silently dead in normal operation once before.
     const miles = f.miles != null ? f.miles : distanceMiles(fromCity, destination);
+    // (Same resolution as milesBetween, with the fare already in hand.)
     const chosen = chooseTravel(miles, (f.min + f.max) / 2, party);
     const driving = chosen.mode === "drive";
     const travel = chosen.cost * fareSeason;
@@ -513,6 +531,21 @@
     const est = estimateFare(miles);
     if (!est) return null;
     return { ...est, source: "estimated", miles };
+  }
+
+  /**
+   * Distance between two places, preferring the local coordinate table and
+   * falling back to whatever the fare provider measured. One helper so every
+   * caller resolves it the same way — the cost path and the viability path
+   * disagreeing about how far a trip is, is how the minimum-stay rule ended up
+   * silently disabled for geocoded cities.
+   */
+  function milesBetween(fromCity, toCity, fareProvider) {
+    const local = distanceMiles(fromCity, toCity);
+    if (local != null) return local;
+    if (typeof fareProvider !== "function") return null;
+    const f = fareProvider(fromCity, toCity);
+    return f && Number.isFinite(f.miles) ? f.miles : null;
   }
 
   /** Rough flight time (hrs): taxi/climb overhead + cruise at ~500 mph. */
@@ -869,7 +902,9 @@
    *   [{ destination, dateRange, dateLabel, dateScore, destScore, costScore,
    *      avgFare, budgetFit, overBudgetCount, overBudgetNames, total }]
    */
-  function rankCombinations(allParticipants, weights = WEIGHTS, fareProvider = getFare) {
+  function rankCombinations(
+    allParticipants, weights = WEIGHTS, fareProvider = getFare, opts = null
+  ) {
     // Someone who has said they aren't coming must not shape the trip. They
     // were still pulling the dates, the destination tally, the average cost and
     // the budget warning: on the shipped seed group one decliner pushed "avg
@@ -882,11 +917,28 @@
     // Includes windows where people's availability overlaps, not just the
     // ranges they typed — see dateCandidatesFor().
     const dateCandidates = dateCandidatesFor(participants);
+    // The agreed plan must always be among the candidates, or it can drop out
+    // of the ranking entirely and the Decide hero silently falls back to the
+    // top pick — a different city and week, under a "Top pick" ribbon, one tap
+    // from a Lock button that would wipe everyone's bookings. Candidate windows
+    // are DERIVED from overlapping availability (that is the point of
+    // dateCandidatesFor), so a locked window stops being generated the moment
+    // anyone widens their dates. Same for the destination: it leaves the tally
+    // as soon as the people who nominated it edit their lists.
+    const pinned = opts && opts.pinned;
+    if (pinned && pinned.destination && isValidRange(pinned.dateRange)) {
+      const key = rangeKey(pinned.dateRange);
+      if (!dateCandidates.some((r) => rangeKey(r) === key)) {
+        dateCandidates.unshift(pinned.dateRange);
+      }
+    }
+    const pinnedDest = pinned && pinned.destination ? pinned.destination : null;
     // Same reasoning as the date cap: most-wanted first, bounded work.
     const MAX_DEST_CANDIDATES = 15;
     const destCandidates = tallyDestinations(participants)
       .slice(0, MAX_DEST_CANDIDATES)
       .map((d) => d.destination);
+    if (pinnedDest && !destCandidates.includes(pinnedDest)) destCandidates.unshift(pinnedDest);
     if (!dateCandidates.length || !destCandidates.length) return [];
     // Which candidates did somebody actually type, vs which did we derive from
     // overlapping availability? The UI should say so rather than presenting a
@@ -919,7 +971,7 @@
         // means more nights of lodging, so it's evaluated per combination.
         const budget = budgetFitFor(dest, participants, fareProvider, dateRange, tripOpts);
         const { viability, nights, required } = tripViabilityFor(
-          dest, participants, dateRange, submittedKeys.has(rangeKey(dateRange))
+          dest, participants, dateRange, submittedKeys.has(rangeKey(dateRange)), fareProvider
         );
         const lodge = estimateLodging(dest, nights);
         // What each individual actually faces — an average hides the person
@@ -1472,6 +1524,7 @@
     // geo/cost
     resolveCity,
     distanceMiles,
+    milesBetween,
     estimateFare,
     chooseTravel,
     driveCostFor,
