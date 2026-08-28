@@ -485,7 +485,15 @@
     const nights = Math.max(0, rangeDays(dateRange) - 1);
     // "I don't need a bed" (staying with family, own place) means no lodging
     // cost — charging it anyway invents an expense they never face.
-    const needsBed = !prefs || prefs.accommodation !== false;
+    // chooseTravel already worked out that this person doesn't have to travel;
+    // the lodging branch wasn't asking. The model said "you don't pay to get
+    // there" and "you do pay for a bed there" in the same breath, so six
+    // Londoners planning a London weekend were each billed $480 for a hotel in
+    // their own city — and all six were then flagged as priced out of it. The
+    // accommodation preference can't cover this: it's one global flag, so
+    // somebody who needs a room in Bali but not at home can only say one thing.
+    const atHome = chosen.mode === "local";
+    const needsBed = !atHome && (!prefs || prefs.accommodation !== false);
     const lodge = needsBed ? estimateLodging(destination, nights) : null;
     // NIGHTLY_RATES is quoted per person SHARING A TWIN, so the factor is what
     // that person's occupancy does to it. Children share the room rather than
@@ -506,7 +514,7 @@
       mode: chosen.mode,
       // What the lodging figure assumed, so the UI can say so rather than
       // leaving people to discover it from a number that looks wrong.
-      sharing: kids > 0 ? "family" : canShare ? "twin" : "single",
+      sharing: atHome ? "home" : kids > 0 ? "family" : canShare ? "twin" : "single",
     };
   }
 
@@ -1054,7 +1062,15 @@
       const maxCost = knownCosts.length ? Math.max(...knownCosts) : 0;
       const costSpread = maxCost - minCost;
       for (const c of group) {
-        if (c.avgTripCost == null) c.relCostScore = 0.5; // unknown — stay neutral
+        if (c.avgTripCost == null) {
+          // 0.5 was meant to be neutral, but the scale is normalised min-to-max
+          // WITHIN the window, so it lands on the median of the reachable
+          // options: a destination we couldn't price tied the genuinely
+          // cheapest one and beat a real, reachable option by 0.3 of a
+          // 40%-weighted score. Unknown must not outrank known.
+          c.relCostScore = 0.5;
+          c.costUnknown = true;
+        }
         else if (costSpread === 0) c.relCostScore = 1; // nothing to compare against
         else c.relCostScore = 1 - (c.avgTripCost - minCost) / costSpread;
       }
@@ -1072,7 +1088,10 @@
           weights.cost * costScore) *
         // A stay too short for the journey can't be allowed to win on the
         // strength of being trivially attendable and cheap.
-        c.viability;
+        c.viability *
+        // Nor can a destination we were never able to cost. It stays visible —
+        // somebody nominated it — but it can't win on a number we don't have.
+        (c.costUnknown ? 0.8 : 1);
     }
     return draft.sort((a, b) => b.total - a.total);
   }
@@ -1406,6 +1425,12 @@
     const total = spend.reduce((s, x) => s + x.amount, 0);
     const paid = {};
     const owed = {};
+    // Who was charged by actual SPEND, as opposed to who appeared in a
+    // transfer. A settlement's sharedWith is its recipient, so folding those
+    // ids into the divisor let a repayment change the reported cost of the
+    // trip: a $300 dinner split between two people read "$150 each" until one
+    // of them paid the other back, at which point the same $300 read "$100".
+    const chargedBySpend = new Set();
     expenses.forEach((x) => {
       paid[x.payerId] = (paid[x.payerId] || 0) + x.amount;
       // Whoever an expense was pinned to at the time still owes their share,
@@ -1422,6 +1447,7 @@
       // onto its own payer, which would cancel the repayment entirely.
       if (!sharers.length) sharers = x.settlement ? [] : [x.payerId];
       if (!sharers.length) return;
+      if (!x.settlement) sharers.forEach((id) => chargedBySpend.add(id));
       // Largest-remainder allocation in whole cents. A plain division leaves
       // orphan cents ($100 across 3 shows three $33.33s against a $100 total),
       // which makes a settle-up list quietly fail to balance.
@@ -1437,7 +1463,7 @@
     // is the normal life of a trip. A 12-way £6,000 deposit followed by four
     // people dropping out printed "£750.00 avg per person" above eleven rows
     // that all said £500, so a treasurer chased the wrong number from everyone.
-    const chargedIds = Object.keys(owed);
+    const chargedIds = [...chargedBySpend];
     const divisor = chargedIds.length || base.length;
     const share = divisor ? Math.round((total / divisor) * 100) / 100 : 0;
     const shareExact = divisor ? Math.round(total * 100) % divisor === 0 : true;

@@ -94,6 +94,44 @@
     return out;
   }
   const flagOn = (map, key) => !!(map && map[key] && map[key].on);
+
+  /** Wire form -> ballot. */
+  function ballotFromPayload(b) {
+    if (!b || !Array.isArray(b.options) || !b.options.length) return null;
+    const votesByParticipant = {};
+    (b.votes || []).forEach(([pid, optionId, ts]) => {
+      votesByParticipant[pid] = { optionId, ts: ts || 0 };
+    });
+    return {
+      open: !!b.open,
+      openedBy: b.openedBy || "",
+      ts: b.ts || 0,
+      options: b.options,
+      votesByParticipant,
+    };
+  }
+
+  /**
+   * Merge two ballots. Votes are per-voter last-write-wins, exactly like
+   * participant answers; whether voting is open is the organiser's call, so the
+   * newest stamp wins outright. A ballot re-opened with different options
+   * replaces the old one — its votes were cast on questions that no longer
+   * exist, so carrying them over would be inventing answers.
+   */
+  function mergeBallot(mine, theirs) {
+    if (!theirs) return mine;
+    if (!mine) return theirs;
+    const sameQuestions =
+      mine.options.length === theirs.options.length &&
+      mine.options.every((o, i) => o.id === theirs.options[i].id);
+    if (!sameQuestions) return (theirs.ts || 0) > (mine.ts || 0) ? theirs : mine;
+    const votes = { ...mine.votesByParticipant };
+    Object.entries(theirs.votesByParticipant).forEach(([pid, vote]) => {
+      if (!votes[pid] || (vote.ts || 0) > (votes[pid].ts || 0)) votes[pid] = vote;
+    });
+    const newer = (theirs.ts || 0) > (mine.ts || 0) ? theirs : mine;
+    return { ...newer, options: mine.options, votesByParticipant: votes };
+  }
   function setFlag(mapName, key, on) {
     state[mapName] = { ...(state[mapName] || {}) };
     state[mapName][key] = { on, ts: Date.now() };
@@ -346,6 +384,24 @@
       // Sent even when `locked` is null: that combination is how a link says
       // "the plan was unlocked", which the old payload simply could not express.
       lts: state.lockTs || 0,
+      // The ballot travels. Everything else the group shares was deliberately
+      // made to round-trip; the vote was missed, which left the whole feature
+      // inert in the only mode that matters — recipients saw a blank vote area,
+      // their votes could never come back, and the organiser's card read
+      // "1 of 9 voted" forever while offering to lock a tally of one.
+      b: state.ballot
+        ? {
+            o: state.ballot.open ? 1 : 0,
+            by: state.ballot.openedBy || "",
+            ts: state.ballot.ts || 0,
+            opts: (state.ballot.options || []).slice(0, 8).map((x) => [
+              x.id, x.destination, x.dateStart, x.dateEnd, x.dateLabel,
+            ]),
+            v: Object.entries(state.ballot.votesByParticipant || {})
+              .slice(0, MAX_PEOPLE)
+              .map(([pid, vote]) => [pid, vote.optionId, vote.ts || 0]),
+          }
+        : null,
       // Prep progress travels too: "who has booked?" is only useful as one
       // shared answer, not a private note on each person's phone. Sent as
       // [key, on, ts] triples — sending only the keys that were true made an
@@ -495,6 +551,33 @@
             return acc;
           }, {})
         : {};
+    if (data.b && typeof data.b === "object" && Array.isArray(data.b.opts)) {
+      const opts = data.b.opts
+        .slice(0, 8)
+        .filter((o) => Array.isArray(o) && str(o[0], 60))
+        .map((o) => ({
+          id: str(o[0], 60),
+          destination: str(o[1], 120),
+          dateStart: isoOrEmpty(o[2]),
+          dateEnd: isoOrEmpty(o[3]),
+          dateLabel: str(o[4], 60),
+        }))
+        .filter((o) => o.destination && o.dateStart && o.dateEnd);
+      if (opts.length) {
+        const known = new Set(opts.map((o) => o.id));
+        clean.b = {
+          open: data.b.o === 1,
+          openedBy: str(data.b.by, 40),
+          ts: clampTs(data.b.ts),
+          options: opts,
+          // Drop votes for options this ballot doesn't contain.
+          votes: (Array.isArray(data.b.v) ? data.b.v : [])
+            .slice(0, MAX_PEOPLE)
+            .filter((v) => Array.isArray(v) && str(v[0], 40) && known.has(str(v[1], 60)))
+            .map((v) => [str(v[0], 40), str(v[1], 60), clampTs(v[2])]),
+        };
+      }
+    }
     clean.pd = flags(data.pd, 40);
     clean.bk = flags(data.bk, MAX_PEOPLE);
     if (data.locked && typeof data.locked === "object") {
@@ -544,6 +627,7 @@
     state.participants = data.p.map(participantFromPayload);
     if (data.locked) state.lockedPlan = data.locked;
     state.lockTs = data.lts || 0;
+    state.ballot = ballotFromPayload(data.b);
     state.prepDone = normalizeFlags(data.pd);
     state.booked = normalizeFlags(data.bk);
     // A first-time joiner previously arrived with an EMPTY ledger while the
@@ -582,6 +666,7 @@
     // had already opened the first link stayed pinned to the dead plan, with
     // their countdown, .ics and Trip Pack all quoting it. Newest write wins,
     // exactly as participant answers already do.
+    state.ballot = mergeBallot(state.ballot, ballotFromPayload(data.b));
     // Newest write per key wins, so an untick propagates like a tick does.
     state.prepDone = mergeFlags(state.prepDone, normalizeFlags(data.pd));
     state.booked = mergeFlags(state.booked, normalizeFlags(data.bk));
@@ -1931,7 +2016,7 @@
     }
   }
 
-  function confirmSubmit(p, top, draft) {
+  function confirmSubmit(p, top, draft, isAgreed) {
     if (draft.dateOk) {
       p.dates = [{ start: top.dateRange.start, end: top.dateRange.end }];
     }
@@ -1942,17 +2027,36 @@
     }
     p.dateConfirmed = draft.dateOk;
     p.destConfirmed = draft.destOk;
-    // Answering this step is the RSVP. Nothing in the decide -> confirm -> lock
-    // flow ever set it, so a group where everyone had confirmed still showed
-    // "0 in · 12 invited" in the header and produced a Trip Pack headed
-    // "Who's going (0)" with an empty cost table.
-    if (p.rsvp !== "out") p.rsvp = "in";
+    // Only a yes to BOTH questions is an RSVP. Round 8 set "in" unconditionally
+    // to fix a roster that always read "0 in", and overshot: saying the agreed
+    // dates don't work recorded the person as confirmed going. They were then
+    // counted in the head count, printed in the Trip Pack with no "not yet
+    // confirmed" mark, and — because splitBaseFor takes rsvp === "in" — pinned
+    // as a default sharer on every expense logged afterwards, so they were
+    // billed for a villa on a week they had just said they couldn't make.
+    if (p.rsvp !== "out") {
+      if (draft.dateOk && draft.destOk) {
+        p.rsvp = "in";
+      } else if (isAgreed) {
+        // The plan is settled and they can't make it. Proposing an alternative
+        // to a locked trip isn't an option, so this is a decline.
+        p.rsvp = "out";
+      } else {
+        // Still deciding: they've proposed something else, which is an answer
+        // but not an acceptance. Leave them undecided rather than guessing.
+        p.rsvp = "no_response";
+      }
+    }
     // These answers ARE this person's response — losing the stamp meant the
     // organiser's copy silently ignored the whole confirm step on merge.
     touchParticipant(p);
     saveState();
     notifyOrganiser(p, top, draft);
-    toast("Thanks! Just a few more details…");
+    toast(
+      p.rsvp === "out"
+        ? "Thanks — the organiser will see you can't make these dates"
+        : "Thanks! Just a few more details…"
+    );
     goEditMine();
   }
 
@@ -1994,7 +2098,7 @@
       class: "btn",
       style: "width:100%;margin-top:16px",
       text: "Continue →",
-      onClick: () => confirmSubmit(p, top, draft),
+      onClick: () => confirmSubmit(p, top, draft, isAgreed),
     });
     const hint = el("div", { class: "confirm-sub" });
     body.appendChild(continueBtn);
@@ -3807,16 +3911,26 @@
         seedTotal: c.total,
       })),
       votesByParticipant: {},
+      // Stamped so the ballot can travel and merge like everything else: a
+      // vote is one person's answer (newest per voter wins) and open/closed is
+      // the organiser's (newest wins outright).
+      ts: Date.now(),
     };
     renderAll();
     toast("Voting opened — cast your vote!");
   }
   function closeBallot() {
-    if (state.ballot) state.ballot.open = false;
+    if (state.ballot) {
+      state.ballot.open = false;
+      state.ballot.ts = Date.now();
+    }
     renderAll();
   }
   function reopenBallot() {
-    if (state.ballot) state.ballot.open = true;
+    if (state.ballot) {
+      state.ballot.open = true;
+      state.ballot.ts = Date.now();
+    }
     renderAll();
   }
   function clearBallot() {
@@ -3829,7 +3943,7 @@
       toast("Register to vote");
       return;
     }
-    state.ballot.votesByParticipant[state.me] = { optionId: id };
+    state.ballot.votesByParticipant[state.me] = { optionId: id, ts: Date.now() };
     saveState();
     renderVote();
   }
@@ -3848,7 +3962,7 @@
     state.participants.forEach((p) => {
       if (isMe(p)) return; // leave the user's own vote intact
       const idx = weightedPick(opts.map((o) => Math.max(0.05, o.seedTotal)));
-      state.ballot.votesByParticipant[p.id] = { optionId: opts[idx].id };
+      state.ballot.votesByParticipant[p.id] = { optionId: opts[idx].id, ts: Date.now() };
     });
     saveState();
     renderVote();
@@ -3892,6 +4006,14 @@
           el("button", { class: "btn", style: "width:100%;margin-top:12px", text: "Open a vote", onClick: openBallot })
         );
         panel.appendChild(card);
+      } else if (state.role !== "organizer" && combos.length >= 2) {
+        // A guest used to get a completely blank vote area with no explanation.
+        panel.appendChild(
+          el("div", {
+            class: "card vote-cta",
+            text: "🗳️ No vote open. If the group can't agree, the organiser can start one.",
+          })
+        );
       }
       return;
     }
@@ -3912,7 +4034,12 @@
     const card = el("div", { class: "card vote-card" });
     const head = el("div", { class: "vote-head" });
     head.appendChild(el("h3", { class: "vote-title", text: b.open ? "🗳️ Vote for the plan" : "🏁 Vote results" }));
-    head.appendChild(el("span", { class: "hint", text: `${totalVotes} of ${state.participants.length} voted` }));
+    // People who've said they can't come aren't waiting to vote, so counting
+    // them made the tally permanently incomplete.
+    const eligible = state.participants.filter((p) => p.rsvp !== "out").length;
+    head.appendChild(
+      el("span", { class: "hint", text: `${totalVotes} of ${eligible} voted` })
+    );
     card.appendChild(head);
 
     ordered.forEach((o, i) => {

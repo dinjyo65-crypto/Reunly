@@ -191,16 +191,19 @@ test("viability doesn't punish a short trip that needs no flying", () => {
 test("cost ranks on the all-in figure, not airfare alone", () => {
   // Cheap to reach but expensive to sleep in must not read as the bargain.
   const dates = [{ start: "2026-08-01", end: "2026-08-08" }];
+  // Everyone travels to BOTH candidates — nobody lives in either. A resident
+  // here would (correctly) pay no lodging at home, which would prove nothing
+  // about whether lodging is counted for the people who do travel.
   const people = [
     person({ city: "Paris, France", destinations: ["London, UK", "Goa, India"], dates }),
-    person({ city: "London, UK", destinations: ["Goa, India", "London, UK"], dates }),
+    person({ city: "Manchester, UK", destinations: ["Goa, India", "London, UK"], dates }),
   ];
   // Nearby London has the cheaper flight; far Goa is far cheaper to stay in.
   const fares = fixedFares({
     "Paris, France|London, UK": { min: 100, max: 100, source: "estimated" },
-    "London, UK|London, UK": { min: 0, max: 0, source: "estimated" },
+    "Manchester, UK|London, UK": { min: 100, max: 100, source: "estimated" },
     "Paris, France|Goa, India": { min: 600, max: 600, source: "estimated" },
-    "London, UK|Goa, India": { min: 600, max: 600, source: "estimated" },
+    "Manchester, UK|Goa, India": { min: 600, max: 600, source: "estimated" },
   });
   const combos = E.rankCombinations(people, undefined, fares);
   const london = combos.find((c) => c.destination === "London, UK");
@@ -1222,4 +1225,55 @@ test("a departed member's balance can still be corrected", () => {
   assert.ok(settled === undefined || Math.abs(settled) < 0.005, "and it can be settled");
   assert.strictEqual(after.transfers.length, 0, "nothing left outstanding");
   assert.ok(Math.abs(after.balances.get("a")) < 0.005, "the payer is made whole");
+});
+
+test("nobody pays for a hotel in the town they live in", () => {
+  // chooseTravel already knew the trip was local; the lodging branch wasn't
+  // asking. Six Londoners planning a London weekend were each billed for a
+  // hotel in their own city, and then all six were flagged as priced out of it.
+  const win = { start: "2026-12-19", end: "2026-12-26" };
+  const home = E.tripCostFor("London, UK", "London, UK", win, E.getFare,
+    { kids: 0, accommodation: true }, { canShare: true });
+  assert.strictEqual(home.travel, 0, "no journey");
+  assert.strictEqual(home.lodging, 0, "and no bed to book");
+  assert.strictEqual(home.sharing, "home");
+  // Someone travelling to the same place still pays for both.
+  const away = E.tripCostFor("Paris, France", "London, UK", win, E.getFare,
+    { kids: 0, accommodation: true }, { canShare: true });
+  assert.ok(away.travel > 0 && away.lodging > 0);
+});
+
+test("recording a repayment doesn't change what the trip cost", () => {
+  // A settlement's sharedWith is its recipient, so folding those ids into the
+  // divisor let money moving between people alter the reported spend.
+  const people = goers("ana", "bo", "cy");
+  const base = [{ id: "x1", payerId: "ana", amount: 300, sharedWith: ["bo", "cy"] }];
+  const before = E.computeSettlement(people, base);
+  const after = E.computeSettlement(people, [
+    ...base,
+    { id: "s1", payerId: "bo", amount: 150, sharedWith: ["ana"], settlement: true },
+  ]);
+  assert.strictEqual(before.share, 150);
+  assert.strictEqual(after.share, 150, "the same $300 of spend, split the same way");
+  assert.strictEqual(after.total, 300);
+  assert.deepStrictEqual(after.chargedIds.sort(), ["bo", "cy"], "only spend charges people");
+});
+
+test("a destination we couldn't price can't outrank one we could", () => {
+  // relCostScore 0.5 was meant to be neutral, but the scale is normalised
+  // min-to-max within the window, so it landed on the median of the reachable
+  // options and beat a real, reachable destination.
+  const dates = [{ start: "2026-12-19", end: "2026-12-26" }];
+  const dests = ["Atlantis, Nowhere", "Paris, France", "Bali, Indonesia"];
+  const people = [
+    person({ id: "a", city: "London, UK", destinations: dests, dates, rsvp: "in" }),
+    person({ id: "b", city: "London, UK", destinations: dests, dates, rsvp: "in" }),
+  ];
+  const ranked = E.rankCombinations(people);
+  const unknown = ranked.find((c) => c.destination === "Atlantis, Nowhere");
+  const cheapest = ranked.find((c) => c.destination === "Paris, France");
+  assert.strictEqual(unknown.avgTripCost, null, "we really can't price it");
+  assert.strictEqual(unknown.costUnknown, true, "and it says so");
+  assert.ok(unknown.total < cheapest.total,
+    "an unpriced option must not tie the cheapest real one");
 });
