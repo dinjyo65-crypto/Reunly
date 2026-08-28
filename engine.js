@@ -747,7 +747,16 @@
    *   [{ destination, dateRange, dateLabel, dateScore, destScore, costScore,
    *      avgFare, budgetFit, overBudgetCount, overBudgetNames, total }]
    */
-  function rankCombinations(participants, weights = WEIGHTS, fareProvider = getFare) {
+  function rankCombinations(allParticipants, weights = WEIGHTS, fareProvider = getFare) {
+    // Someone who has said they aren't coming must not shape the trip. They
+    // were still pulling the dates, the destination tally, the average cost and
+    // the budget warning: on the shipped seed group one decliner pushed "avg
+    // per person" from $873 to $1,071, put THEIR fare at the top of the "across
+    // the group" range the card calls the deciding traveller, named them in the
+    // over-budget warning for a trip they had declined, and reordered the
+    // runners-up. splitBaseFor was fixed for this; the ranking was not.
+    // "no_response" still counts — they may yet come.
+    const participants = (allParticipants || []).filter((p) => p.rsvp !== "out");
     // Includes windows where people's availability overlaps, not just the
     // ranges they typed — see dateCandidatesFor().
     const dateCandidates = dateCandidatesFor(participants);

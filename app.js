@@ -36,9 +36,12 @@
     // so an invite link can carry "the plan moved" and "the plan was called
     // off" as distinct, orderable facts rather than only "there is a plan".
     lockTs: 0,
-    // Prep checklist: { [stepId]: true } once done, and per-person booking
-    // status. Travels with the invite link so the group sees one shared answer
-    // to "who has actually booked?".
+    // Prep checklist and per-person booking status, each stored as
+    // { [key]: { on: bool, ts: ms } }. A bare boolean unioned on merge, which
+    // meant a mis-tap could never be undone: the person unticked it, then the
+    // next link from any device still holding the tick put it back — and the
+    // organiser went on believing someone had booked a flight they hadn't.
+    // Stamping each key lets the most recent decision win in both directions.
     prepDone: {},
     booked: {},
     ballot: null, // { open, openedBy, options:[...], votesByParticipant:{ id:{optionId} } }
@@ -59,6 +62,36 @@
   const isMe = (p) => p.id === state.me;
   const canEdit = (p) => state.role === "organizer" || isMe(p);
   const SVG_NS = "http://www.w3.org/2000/svg";
+
+  // Timestamped on/off flags, used for the prep checklist and booking status.
+  // Accepts the old bare-boolean shape so existing saves and older links still
+  // load — an untimestamped tick is treated as very old, so any real decision
+  // beats it.
+  function normalizeFlags(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object") return out;
+    for (const [k, v] of Object.entries(raw)) {
+      if (v && typeof v === "object") {
+        if (Number.isFinite(v.ts)) out[k] = { on: !!v.on, ts: v.ts };
+      } else if (v) {
+        out[k] = { on: true, ts: 1 };
+      }
+    }
+    return out;
+  }
+  const flagOn = (map, key) => !!(map && map[key] && map[key].on);
+  function setFlag(mapName, key, on) {
+    state[mapName] = { ...(state[mapName] || {}) };
+    state[mapName][key] = { on, ts: Date.now() };
+  }
+  /** Newest write per key wins, in both directions. */
+  function mergeFlags(mine, theirs) {
+    const out = { ...(mine || {}) };
+    for (const [k, v] of Object.entries(theirs || {})) {
+      if (!out[k] || (v.ts || 0) > (out[k].ts || 0)) out[k] = v;
+    }
+    return out;
+  }
 
   // Fare provider injected into the engine: prefer a fetched (live/searched)
   // fare from the proxy cache, fall back to the synchronous engine estimate.
@@ -190,8 +223,8 @@
     state.demoMode = !!s.demoMode;
     state.lockedPlan = s.lockedPlan || null;
     state.lockTs = s.lockTs || 0;
-    state.prepDone = s.prepDone && typeof s.prepDone === "object" ? s.prepDone : {};
-    state.booked = s.booked && typeof s.booked === "object" ? s.booked : {};
+    state.prepDone = normalizeFlags(s.prepDone);
+    state.booked = normalizeFlags(s.booked);
     state.ballot = s.ballot || null;
     state.memories = Array.isArray(s.memories) ? s.memories : [];
     state.expenses = Array.isArray(s.expenses) ? s.expenses : [];
@@ -285,9 +318,13 @@
       // "the plan was unlocked", which the old payload simply could not express.
       lts: state.lockTs || 0,
       // Prep progress travels too: "who has booked?" is only useful as one
-      // shared answer, not a private note on each person's phone.
-      pd: Object.keys(state.prepDone || {}).slice(0, 40),
-      bk: Object.keys(state.booked || {}).slice(0, MAX_PEOPLE),
+      // shared answer, not a private note on each person's phone. Sent as
+      // [key, on, ts] triples — sending only the keys that were true made an
+      // untick unrepresentable, so it could never propagate.
+      pd: Object.entries(state.prepDone || {}).slice(0, 40)
+        .map(([k, v]) => [k, v.on ? 1 : 0, v.ts || 0]),
+      bk: Object.entries(state.booked || {}).slice(0, MAX_PEOPLE)
+        .map(([k, v]) => [k, v.on ? 1 : 0, v.ts || 0]),
       // Privacy: the invite link does NOT carry anyone's email address. The
       // participant id IS included — it's a random local token, not PII, and
       // without it the same person re-appears as a duplicate on every merge.
@@ -415,12 +452,22 @@
     // Carried even when there is no lock: `locked: null` with a newer stamp is
     // how a link says the organiser called the plan off.
     clean.lts = Number.isFinite(data.lts) ? data.lts : 0;
-    clean.pd = Array.isArray(data.pd)
-      ? data.pd.slice(0, 40).map((i) => str(i, 40)).filter(Boolean)
-      : [];
-    clean.bk = Array.isArray(data.bk)
-      ? data.bk.slice(0, MAX_PEOPLE).map((i) => str(i, 40)).filter(Boolean)
-      : [];
+    // Accepts both the [key, on, ts] triples and the older bare-key arrays.
+    const flags = (arr, cap) =>
+      Array.isArray(arr)
+        ? arr.slice(0, cap).reduce((acc, row) => {
+            if (Array.isArray(row)) {
+              const k = str(row[0], 40);
+              if (k) acc[k] = { on: row[1] === 1, ts: clampTs(row[2]) };
+            } else {
+              const k = str(row, 40);
+              if (k) acc[k] = { on: true, ts: 1 };
+            }
+            return acc;
+          }, {})
+        : {};
+    clean.pd = flags(data.pd, 40);
+    clean.bk = flags(data.bk, MAX_PEOPLE);
     if (data.locked && typeof data.locked === "object") {
       const l = data.locked;
       const start = isoOrEmpty(l.dateStart);
@@ -468,10 +515,8 @@
     state.participants = data.p.map(participantFromPayload);
     if (data.locked) state.lockedPlan = data.locked;
     state.lockTs = data.lts || 0;
-    state.prepDone = {};
-    (data.pd || []).forEach((id) => (state.prepDone[id] = true));
-    state.booked = {};
-    (data.bk || []).forEach((id) => (state.booked[id] = true));
+    state.prepDone = normalizeFlags(data.pd);
+    state.booked = normalizeFlags(data.bk);
     // A first-time joiner previously arrived with an EMPTY ledger while the
     // UI called settle-up the group's shared record.
     state.expenses = Array.isArray(data.x)
@@ -508,12 +553,9 @@
     // had already opened the first link stayed pinned to the dead plan, with
     // their countdown, .ics and Trip Pack all quoting it. Newest write wins,
     // exactly as participant answers already do.
-    // Union, not replace: a tick records something someone actually did, and
-    // an older link simply hasn't seen it yet. Unticking is rare and local.
-    state.prepDone = { ...(state.prepDone || {}) };
-    (data.pd || []).forEach((id) => (state.prepDone[id] = true));
-    state.booked = { ...(state.booked || {}) };
-    (data.bk || []).forEach((id) => (state.booked[id] = true));
+    // Newest write per key wins, so an untick propagates like a tick does.
+    state.prepDone = mergeFlags(state.prepDone, normalizeFlags(data.pd));
+    state.booked = mergeFlags(state.booked, normalizeFlags(data.bk));
     let lockChanged = null;
     const incomingLockTs = data.lts || 0;
     if (incomingLockTs > (state.lockTs || 0)) {
@@ -1572,11 +1614,24 @@
   }
   function toggleLock(c) {
     const locked = lockState(c);
-    if (!locked && state.role !== "organizer") {
-      toast("Only the organiser can lock the plan");
+    // The role check only guarded LOCKING, and the button renders for everyone
+    // as "✓ Locked — tap to unlock" (plus a second trigger on every runner-up
+    // row). So any guest could cancel the group's agreed plan — and because the
+    // unlock stamps lockTs and the merge takes the newest write, their next
+    // shared link wiped the lock from the organiser's device too, announced as
+    // though the organiser had done it.
+    if (state.role !== "organizer") {
+      toast(locked ? "Only the organiser can unlock the plan" : "Only the organiser can lock the plan");
       return;
     }
-    if (!locked && state.lockedPlan) {
+    if (locked) {
+      if (!window.confirm(
+        `Unlock ${c.destination} on ${c.dateLabel}?
+
+` +
+          "Everyone who opens the link after this will be told the plan is off."
+      )) return;
+    } else if (state.lockedPlan) {
       if (!window.confirm(`Lock ${c.destination} on ${c.dateLabel} for everyone?`)) return;
     }
     state.lockedPlan = locked
@@ -1769,6 +1824,11 @@
     }
     p.dateConfirmed = draft.dateOk;
     p.destConfirmed = draft.destOk;
+    // Answering this step is the RSVP. Nothing in the decide -> confirm -> lock
+    // flow ever set it, so a group where everyone had confirmed still showed
+    // "0 in · 12 invited" in the header and produced a Trip Pack headed
+    // "Who's going (0)" with an empty cost table.
+    if (p.rsvp !== "out") p.rsvp = "in";
     // These answers ARE this person's response — losing the stamp meant the
     // organiser's copy silently ignored the whole confirm step on merge.
     touchParticipant(p);
@@ -1780,7 +1840,7 @@
 
   // The Yes/No confirm card itself: reuses the photo banner + the existing
   // flexible date/destination editors for the "No, here's my alternative" path.
-  function renderConfirmStep(hero, p, top) {
+  function renderConfirmStep(hero, p, top, isAgreed) {
     const draft = getConfirmDraft(p.id);
     const card = el("div", { class: "card confirm-card stagger" });
     addRecPhoto(card, top.destination);
@@ -1790,7 +1850,11 @@
     body.appendChild(
       el("div", {
         class: "confirm-sub",
-        text: `The group's leaning towards ${top.destination}, ${top.dateLabel}.`,
+        // "Leaning towards" understates a decision that has been made, and
+        // invites an alternative nobody is going to act on.
+        text: isAgreed
+          ? `The group has agreed on ${top.destination}, ${top.dateLabel}.`
+          : `The group's leaning towards ${top.destination}, ${top.dateLabel}.`,
       })
     );
 
@@ -1816,6 +1880,26 @@
     });
     const hint = el("div", { class: "confirm-sub" });
     body.appendChild(continueBtn);
+    // Yes-or-propose-something-else was the only way through. Someone who
+    // simply can't come was forced to invent alternative dates for a trip that
+    // was already settled — and until they did, they counted as undecided.
+    body.appendChild(
+      el("button", {
+        class: "btn ghost",
+        style: "width:100%;margin-top:8px",
+        text: "I can't make it",
+        onClick: () => {
+          p.rsvp = "out";
+          p.dateConfirmed = false;
+          p.destConfirmed = false;
+          touchParticipant(p);
+          saveState();
+          invalidateCombos();
+          toast("Thanks for letting the group know");
+          renderAll();
+        },
+      })
+    );
     body.appendChild(hint);
 
     // Both questions must be answered, and any "No" needs a real alternative.
@@ -1844,6 +1928,17 @@
     hero.appendChild(card);
   }
 
+  // A combo-shaped object for a locked plan that no longer appears in the
+  // ranking (its destination dropped out of the tally, say). Enough for the
+  // confirm card to ask about the right trip.
+  function syntheticCombo(plan) {
+    return {
+      destination: plan.destination,
+      dateLabel: plan.dateLabel || `${plan.dateStart} – ${plan.dateEnd}`,
+      dateRange: { start: plan.dateStart, end: plan.dateEnd },
+    };
+  }
+
   // The #1 option as a hero: photo, name+date, why-it-won, scores, primary Lock.
   function renderWinner() {
     const hero = $("#winnerHero");
@@ -1854,7 +1949,17 @@
     // even if combos briefly become empty (e.g. clearing demo data while
     // mid-confirm), and combos[0] would otherwise be undefined.
     if (needsConfirmStep(me) && combos.length > 0) {
-      renderConfirmStep(hero, me, combos[0]);
+      // The same drift the hero was fixed for, on the ONE card a fresh invitee
+      // actually sees. Showing combos[0] meant a guest opening the link could
+      // be asked to confirm a different city and week from the one the group
+      // had locked — and answering "Yes" overwrote their answers with it, so
+      // someone who agreed to the trip was recorded as preferring somewhere
+      // else. Their own arrival can reorder the ranking before they have said
+      // a word, so this is not a rare case.
+      const agreed = state.lockedPlan
+        ? combos.find(lockState) || syntheticCombo(state.lockedPlan)
+        : combos[0];
+      renderConfirmStep(hero, me, agreed, !!state.lockedPlan);
       return;
     }
     if (!combos.length) {
@@ -2789,7 +2894,12 @@
     if (!plan) return;
     const days = E.daysUntil(plan.dateStart);
     const it = buildItinerary(plan);
-    const goers = state.participants.filter((p) => p.rsvp === "in");
+    // Anyone who hasn't declined. Filtering to rsvp === "in" printed a pack
+    // headed "Who's going (0)" with an empty cost table and no group total
+    // whenever people hadn't used the People tab's RSVP pills — which was
+    // everyone, since nothing else set them. Unconfirmed people are listed and
+    // marked rather than silently dropped.
+    const goers = state.participants.filter((p) => p.rsvp !== "out");
     // This is the document people actually budget from, so it must show the
     // same all-in figure as the app — printing airfare alone here contradicted
     // both the winner card and the Costs tab.
@@ -2811,8 +2921,11 @@
           allIn = est(trip.total);
           if (trip.party > 1) allIn += ` (${trip.party} people)`;
         }
+        // Say who has actually confirmed. Listing an unconfirmed guest without
+        // a mark reads as a headcount the organiser can book against.
+        const unconfirmed = p.rsvp !== "in" ? " <i>(not yet confirmed)</i>" : "";
         return (
-          `<tr><td>${escapeHtml(p.name || "Guest")}</td><td>${escapeHtml(p.city)}</td>` +
+          `<tr><td>${escapeHtml(p.name || "Guest")}${unconfirmed}</td><td>${escapeHtml(p.city)}</td>` +
           `<td>${fare}</td><td><b>${allIn}</b></td></tr>`
         );
       })
@@ -2846,7 +2959,8 @@
       `<h1>${escapeHtml(state.reunion.name || "Our get-together")}</h1>` +
       `<div class="big">📍 ${escapeHtml(plan.destination)}</div>` +
       `<div>${escapeHtml(plan.dateLabel)}${days > 0 ? ` · ${days} days to go` : ""}</div></div>` +
-      `<h2>Who's going (${goers.length})</h2><table><tr><th>Name</th><th>From</th>` +
+      `<h2>Who's going (${goers.filter((p) => p.rsvp === "in").length} confirmed of ${goers.length})</h2>` +
+      `<table><tr><th>Name</th><th>From</th>` +
       `<th>Travel</th><th>Travel + stay</th></tr>${rows}${packFooter}</table>` +
       `<h2>Suggested itinerary</h2>${itHtml}` +
       `<div class="foot">Generated by Reunly · estimates only. "Travel + stay" covers return ` +
@@ -2879,8 +2993,7 @@
     if (days == null || days < 0) return; // the trip has been and gone
     const international = E.isInternationalTrip(state.participants, plan.destination);
     const steps = E.prepStepsFor(days, international);
-    const done = state.prepDone || {};
-    const outstanding = steps.filter((st) => !done[st.id]);
+    const outstanding = steps.filter((st) => !flagOn(state.prepDone, st.id));
 
     const card = el("div", { class: "card toolkit stagger" });
     const head = el("div", { class: "itin-head" });
@@ -2901,7 +3014,7 @@
     );
 
     steps.forEach((st) => {
-      const isDone = !!done[st.id];
+      const isDone = flagOn(state.prepDone, st.id);
       const row = el("div", { class: `prep-row${isDone ? " done" : ""}` });
       const box = el("button", {
         type: "button",
@@ -2910,9 +3023,7 @@
         "aria-label": `${isDone ? "Undo" : "Mark done"}: ${st.title}`,
         text: isDone ? "✓" : "",
         onClick: () => {
-          state.prepDone = { ...(state.prepDone || {}) };
-          if (state.prepDone[st.id]) delete state.prepDone[st.id];
-          else state.prepDone[st.id] = true;
+          setFlag("prepDone", st.id, !isDone);
           saveState();
           renderPlan();
         },
@@ -2945,7 +3056,7 @@
       card.appendChild(el("div", { class: "prep-sub", text: "Who's booked" }));
       const chips = el("div", { class: "chip-select" });
       goers.forEach((p) => {
-        const on = !!(state.booked || {})[p.id];
+        const on = flagOn(state.booked, p.id);
         chips.appendChild(
           el("button", {
             type: "button",
@@ -2957,9 +3068,7 @@
                 toast("Only you or the organiser can change this");
                 return;
               }
-              state.booked = { ...(state.booked || {}) };
-              if (state.booked[p.id]) delete state.booked[p.id];
-              else state.booked[p.id] = true;
+              setFlag("booked", p.id, !on);
               saveState();
               renderPlan();
             },
@@ -2967,7 +3076,7 @@
         );
       });
       card.appendChild(chips);
-      const bookedCount = goers.filter((p) => (state.booked || {})[p.id]).length;
+      const bookedCount = goers.filter((p) => flagOn(state.booked, p.id)).length;
       card.appendChild(
         el("div", {
           class: "itin-sub",

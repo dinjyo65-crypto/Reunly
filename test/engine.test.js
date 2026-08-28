@@ -948,3 +948,42 @@ test("prep urgency reflects how close the trip is", () => {
   const insurance = close.find((s) => s.id === "insurance");
   assert.strictEqual(insurance.urgency, "soon", "30-day insurance step is due about now");
 });
+
+// ---- People who declined must not shape the trip ---------------------------
+test("someone who said no doesn't drive the ranking, the costs or the warnings", () => {
+  // splitBaseFor was fixed for this in round 7; the ranking was not. On the
+  // shipped seed group one decliner pushed "avg per person" from $873 to
+  // $1,071, put their own fare at the top of the "across the group" range the
+  // card calls the deciding traveller, named them in the over-budget warning
+  // for a trip they had declined, and reordered the runners-up.
+  const all = D.SEED_PARTICIPANTS.map(D.normalizeParticipant);
+  const declined = all.filter((p) => p.rsvp === "out");
+  assert.ok(declined.length, "seed data should contain a decliner for this test");
+  const withThem = E.rankCombinations(all);
+  const withoutThem = E.rankCombinations(all.filter((p) => p.rsvp !== "out"));
+  assert.strictEqual(withThem.length, withoutThem.length);
+  assert.strictEqual(
+    Math.round(withThem[0].avgTripCost), Math.round(withoutThem[0].avgTripCost),
+    "the average must not move when a decliner is dropped — they were never in it"
+  );
+  assert.deepStrictEqual(
+    withThem.slice(0, 3).map((c) => c.destination + c.dateLabel),
+    withoutThem.slice(0, 3).map((c) => c.destination + c.dateLabel),
+    "and the ordering must not depend on them"
+  );
+  for (const name of declined.map((p) => p.name)) {
+    assert.ok(!withThem[0].overBudgetNames.includes(name),
+      `${name} declined — don't warn the group about their budget`);
+  }
+});
+
+test("someone who hasn't replied yet still counts", () => {
+  // "no_response" is not "no": they may well come, and excluding them would
+  // hide the person whose fare decides whether the trip is affordable.
+  const base = D.SEED_PARTICIPANTS.map(D.normalizeParticipant).filter((p) => p.rsvp !== "out");
+  const quiet = base.map((p, i) => (i === 0 ? { ...p, rsvp: "no_response" } : p));
+  assert.strictEqual(
+    Math.round(E.rankCombinations(base)[0].avgTripCost),
+    Math.round(E.rankCombinations(quiet)[0].avgTripCost)
+  );
+});
