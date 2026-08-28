@@ -1124,12 +1124,42 @@
      "MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA " +
      "WV WI WY PR").split(" ")
   );
+  // The curated city table says "London, UK" and "New York, NY"; the live
+  // autocomplete (Nominatim) says "Bath, United Kingdom" and "Chicago, United
+  // States". Comparing the raw tails meant any group mixing the two vocabularies
+  // read as crossing a border — so an all-UK weekend was told its passport check
+  // and visa appointment were overdue. Crying wolf there is worse than saying
+  // nothing, because it trains people to ignore the prompt on the trip where it
+  // matters.
+  const COUNTRY_ALIASES = {
+    uk: "gb", "united kingdom": "gb", "great britain": "gb", england: "gb",
+    scotland: "gb", wales: "gb", "northern ireland": "gb",
+    usa: "us", "united states": "us", "united states of america": "us", america: "us",
+    uae: "ae", "united arab emirates": "ae",
+    india: "in", singapore: "sg", france: "fr", germany: "de", spain: "es",
+    italy: "it", netherlands: "nl", ireland: "ie", portugal: "pt",
+    australia: "au", "new zealand": "nz", canada: "ca", japan: "jp",
+    china: "cn", "hong kong": "hk", thailand: "th", indonesia: "id",
+    malaysia: "my", vietnam: "vn", philippines: "ph", "south korea": "kr",
+    turkey: "tr", "türkiye": "tr", egypt: "eg", "south africa": "za",
+    brazil: "br", mexico: "mx", switzerland: "ch", austria: "at",
+    belgium: "be", greece: "gr", "sri lanka": "lk", nepal: "np",
+    qatar: "qa", "saudi arabia": "sa", oman: "om", bahrain: "bh", kuwait: "kw",
+  };
+  function normalizeCountry(raw) {
+    const key = String(raw || "").trim().toLowerCase();
+    if (!key) return "";
+    if (COUNTRY_ALIASES[key]) return COUNTRY_ALIASES[key];
+    // A bare ISO code from the geocoder ("gb", "in") is already canonical.
+    if (/^[a-z]{2}$/.test(key)) return key;
+    return key;
+  }
   function countryOf(city) {
     const parts = String(city || "").split(",");
-    if (parts.length < 2) return (parts[0] || "").trim().toLowerCase();
+    if (parts.length < 2) return normalizeCountry(parts[0]);
     const tail = parts[parts.length - 1].trim();
-    if (US_STATES.has(tail.toUpperCase())) return "usa";
-    return tail.toLowerCase();
+    if (US_STATES.has(tail.toUpperCase())) return "us";
+    return normalizeCountry(tail);
   }
 
   /** True when anyone on the trip is crossing a border to get there. */
@@ -1308,6 +1338,7 @@
     PREP_STEPS,
     prepStepsFor,
     countryOf,
+    normalizeCountry,
     isInternationalTrip,
     convertFromUSD,
     toUSD,

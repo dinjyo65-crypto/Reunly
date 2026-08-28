@@ -117,6 +117,9 @@ def resolve_city(name):
 # client, so on the public deployment they would otherwise grow without bound
 # while amplifying requests to Nominatim/Wikipedia from the server's IP.
 CACHE_LIMIT = 5000
+# Largest request body we're willing to read and throw away; beyond this the
+# connection is closed rather than left half-drained.
+MAX_DRAIN = 1 << 20
 
 
 def _cache_put(cache, key, value):
@@ -552,6 +555,11 @@ def wiki_photo(place):
 # ~15 min idle, or on redeploy). Fine for a live testing session; a real
 # product would put this in a database.
 _notify_lock = threading.Lock()
+# Entries are capped per code, but nothing capped the number of CODES or aged
+# them out, so unauthenticated traffic could grow this without bound on the
+# public deployment.
+_NOTIFY_MAX_CODES = 2000
+_NOTIFY_TTL_SECONDS = 24 * 3600
 _notify_store = {}  # code -> [ {name, destination, dateLabel, dateOk, destOk, ts}, ... ]
 _NOTIFY_MAX_PER_CODE = 200
 
@@ -563,6 +571,22 @@ def add_notification(code, entry):
     entry = dict(entry)
     entry["ts"] = time.time()
     with _notify_lock:
+        # Age out stale codes, then bound the number of them. Without this the
+        # dict grew forever: only the entries WITHIN a code were capped.
+        if len(_notify_store) >= _NOTIFY_MAX_CODES:
+            cutoff = time.time() - _NOTIFY_TTL_SECONDS
+            for k in [
+                k for k, v in _notify_store.items()
+                if not v or v[-1].get("ts", 0) < cutoff
+            ]:
+                _notify_store.pop(k, None)
+            # Still full of live codes: drop the oldest quarter by last write.
+            if len(_notify_store) >= _NOTIFY_MAX_CODES:
+                oldest = sorted(
+                    _notify_store, key=lambda k: _notify_store[k][-1].get("ts", 0)
+                )[: _NOTIFY_MAX_CODES // 4]
+                for k in oldest:
+                    _notify_store.pop(k, None)
         bucket = _notify_store.setdefault(key, [])
         bucket.append(entry)
         if len(bucket) > _NOTIFY_MAX_PER_CODE:
@@ -720,7 +744,14 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _drain_body(self, length):
         """Read and discard a request body so the connection stays in sync."""
-        remaining = min(max(0, length), 1 << 20)
+        length = max(0, length)
+        # Anything past the cap can't be drained, so the leftover bytes would be
+        # parsed as the next request on a keep-alive connection -- the exact
+        # desync draining exists to prevent. Close instead of pretending.
+        if length > MAX_DRAIN:
+            self.close_connection = True
+            return
+        remaining = length
         try:
             while remaining > 0:
                 chunk = self.rfile.read(min(remaining, 65536))
@@ -728,7 +759,7 @@ class Handler(SimpleHTTPRequestHandler):
                     break
                 remaining -= len(chunk)
         except OSError:
-            pass
+            self.close_connection = True
 
 
 if __name__ == "__main__":

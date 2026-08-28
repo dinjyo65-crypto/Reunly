@@ -281,7 +281,7 @@
   // Only a version mismatch between cached files justifies wiping the cache.
   // Reloading on ANY error hid real bugs behind a mystery refresh and threw
   // away offline capability as a side effect.
-  const STALE_ASSET = /(ReunlyEngine|ReunlyData|ReunlyFares)[^]{0,40}(is not defined|undefined)/i;
+  const STALE_ASSET = /(ReunlyEngine|ReunlyData|ReunlyFares)\b[^]{0,40}(is not defined|undefined)/i;
   function looksLikeStaleAssets(evt) {
     const msg =
       (evt && evt.message) ||
@@ -990,9 +990,36 @@
   // Ensure the current user exists in the roster and return them. Sets state.me.
   function addCurrentUserAsParticipant() {
     if (!state.user) return null;
-    let mine = state.participants.find(
-      (p) => p.email.toLowerCase() === state.user.email.toLowerCase()
-    );
+    const myEmail = (state.user.email || "").trim().toLowerCase();
+    let mine = myEmail
+      ? state.participants.find((p) => (p.email || "").toLowerCase() === myEmail)
+      : null;
+    // Invite links deliberately carry no email, so every row that arrives from
+    // one has email "" and can never match. A guest the organiser pre-added by
+    // name therefore got a SECOND row on their own device — and stayed
+    // duplicated there, double-counting in the destination vote, in the average
+    // cost, and in every expense split they were part of. The engine already
+    // has the rule for this (name matches an unclaimed placeholder); the app
+    // simply never applied it on the joiner's side.
+    if (!mine) {
+      const myName = (state.user.name || "").trim().toLowerCase();
+      const placeholder = myName
+        ? state.participants.find(
+            (p) =>
+              !(p.email || "").trim() &&
+              (p.name || "").trim().toLowerCase() === myName &&
+              E.isUnclaimedParticipant(p)
+          )
+        : null;
+      if (placeholder) {
+        // Claim it in place: expenses, RSVPs and booking chips already point
+        // at this id on other devices.
+        placeholder.email = state.user.email;
+        if (!placeholder.city) placeholder.city = state.user.city;
+        touchParticipant(placeholder);
+        mine = placeholder;
+      }
+    }
     if (!mine) {
       mine = D.makeParticipant({
         name: state.user.name,
@@ -3230,6 +3257,22 @@
   function money(n) {
     return E.formatExact(n, displayCode());
   }
+  /**
+   * Parse a hand-typed money amount, tolerating the thousands separators our
+   * own prompts display. Returns NaN for anything that isn't a clean number,
+   * so the caller can reject it rather than silently coercing a wrong value.
+   */
+  function parseAmount(raw) {
+    const cleaned = String(raw == null ? "" : raw)
+      .trim()
+      .replace(/[\s ]/g, "")
+      // Grouping separators only. The lookahead requires exactly three digits
+      // followed by a non-digit, so "1,2345" stays malformed and is rejected
+      // below rather than silently becoming 12345.
+      .replace(/,(?=\d{3}(\D|$))/g, "");
+    if (!/^-?\d*\.?\d+$/.test(cleaned)) return NaN;
+    return parseFloat(cleaned);
+  }
   // Record "A paid B back": a transfer that settles part of a balance rather
   // than a shared cost. Modelled as an expense that only the recipient shares,
   // so the existing balance maths handles it without a special case.
@@ -3510,7 +3553,11 @@
                   String(full)
                 );
                 if (typed === null) return;
-                const amt = E.toUSD(parseFloat(typed), displayCode());
+                // The prompt shows the balance grouped ("83,000.00"), so people
+                // type it back the same way — and bare parseFloat stops at the
+                // first comma, recording 83 instead of 83,000. It passed both
+                // guards and reported success.
+                const amt = E.toUSD(parseAmount(typed), displayCode());
                 if (!Number.isFinite(amt) || amt <= 0) {
                   toast("Enter an amount greater than zero");
                   return;

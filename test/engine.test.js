@@ -929,10 +929,12 @@ test("one person crossing a border makes it an international trip", () => {
 test("US state suffixes aren't mistaken for countries", () => {
   // "New York, NY" is a state, but "London, UK" is not — matching any
   // two-letter tail as a state made London American.
-  assert.strictEqual(E.countryOf("New York, NY"), "usa");
-  assert.strictEqual(E.countryOf("Boston, MA"), "usa");
-  assert.strictEqual(E.countryOf("London, UK"), "uk");
-  assert.strictEqual(E.countryOf("Dubai, UAE"), "uae");
+  // Countries normalise to ISO codes so the curated table ("London, UK") and
+  // the live autocomplete ("Bath, United Kingdom") can be compared at all.
+  assert.strictEqual(E.countryOf("New York, NY"), "us");
+  assert.strictEqual(E.countryOf("Boston, MA"), "us");
+  assert.strictEqual(E.countryOf("London, UK"), "gb");
+  assert.strictEqual(E.countryOf("Dubai, UAE"), "ae");
   assert.strictEqual(
     E.isInternationalTrip([person({ city: "Boston, MA", rsvp: "in" })], "New York, NY"),
     false, "a US domestic trip needs no passport prompt"
@@ -986,4 +988,16 @@ test("someone who hasn't replied yet still counts", () => {
     Math.round(E.rankCombinations(base)[0].avgTripCost),
     Math.round(E.rankCombinations(quiet)[0].avgTripCost)
   );
+});
+
+test("country names from the two vocabularies compare equal", () => {
+  // The curated table says "London, UK"; the live autocomplete says
+  // "Bath, United Kingdom". Comparing raw tails made an all-UK weekend read as
+  // international, so its prep card declared passport and visa steps overdue —
+  // and crying wolf there trains people to ignore the prompt when it matters.
+  const P = (city) => person({ city, rsvp: "in" });
+  assert.strictEqual(E.isInternationalTrip([P("London, UK")], "Bath, United Kingdom"), false);
+  assert.strictEqual(E.isInternationalTrip([P("New York, NY")], "Chicago, United States"), false);
+  assert.strictEqual(E.isInternationalTrip([P("London, UK")], "Goa, India"), true);
+  assert.strictEqual(E.normalizeCountry("gb"), "gb", "an ISO code is already canonical");
 });
