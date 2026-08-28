@@ -58,6 +58,7 @@
 
   const isMe = (p) => p.id === state.me;
   const canEdit = (p) => state.role === "organizer" || isMe(p);
+  const SVG_NS = "http://www.w3.org/2000/svg";
 
   // Fare provider injected into the engine: prefer a fetched (live/searched)
   // fare from the proxy cache, fall back to the synchronous engine estimate.
@@ -2021,6 +2022,10 @@
       onClick: () => toggleLock(c),
     });
     body.appendChild(lockBtn);
+    // Who is coming from where, and how. Placed after the numbers rather than
+    // before them: it's the human summary of everything above, and on a real
+    // group it's the first thing that makes the spread of origins obvious.
+    renderJourneyMap(body, { destination: c.destination });
     card.appendChild(body);
     hero.appendChild(card);
   }
@@ -4282,27 +4287,161 @@
     }, 2200);
   }
 
-  // Ambient flight animation: pick a fresh random route each time the plane
-  // completes its arc (on the CSS animation's iteration boundary).
-  function startFlight() {
-    const plane = document.querySelector(".flight-plane");
-    const fromEl = $("#flightFrom");
-    const toEl = $("#flightTo");
-    if (!plane || !fromEl || !toEl) return;
-    const cities = [
-      "London", "Delhi", "New York", "Dubai", "Singapore", "Tokyo", "Paris",
-      "Sydney", "Bangkok", "Mumbai", "Toronto", "Cape Town", "Rome", "Istanbul",
-      "Bali", "Hong Kong", "Los Angeles", "Barcelona", "Goa",
-    ];
-    const roll = () => {
-      const a = Math.floor(Math.random() * cities.length);
-      let b = Math.floor(Math.random() * cities.length);
-      while (b === a) b = Math.floor(Math.random() * cities.length);
-      fromEl.textContent = cities[a];
-      toEl.textContent = cities[b];
+  // ---------------------------------------------------------------------------
+  // Journey map: everyone converging on one destination
+  // ---------------------------------------------------------------------------
+
+  // How each traveller gets there. Deliberately derived from the SAME rule the
+  // cost model uses (engine estimateFare's drive/flight threshold), so the
+  // picture can never contradict the price beside it — showing a train for a
+  // journey costed as a flight would be exactly the kind of confident-but-
+  // unfounded claim the rest of the app works hard to avoid.
+  const TRAVEL_MODES = {
+    walk: { glyph: "\u{1F6B6}", label: "already there", arc: 0.12 },
+    drive: { glyph: "\u{1F697}", label: "driving", arc: 0.3 },
+    flight: { glyph: "\u{2708}\u{FE0F}", label: "flying", arc: 1 },
+  };
+  // Fixed order so the caption reads the same way on every render.
+  const MODE_ORDER = ["flight", "drive", "walk"];
+
+  function travelModeFor(fromCity, toCity) {
+    if (!fromCity || !toCity) return "flight";
+    const miles = E.distanceMiles(fromCity, toCity);
+    if (miles == null) return "flight"; // unknown city — don't invent a road
+    if (miles < 25) return "walk";
+    const est = E.estimateFare(miles);
+    return est && est.mode === "drive" ? "drive" : "flight";
+  }
+
+  /**
+   * Build the convergence animation: several origins, one destination, each
+   * traveller moving by the mode their distance implies.
+   *
+   * `travellers` is [{ name, city }]. Returns an SVG element, or null if there
+   * is nothing worth drawing.
+   */
+  function buildJourneyMap(travellers, destination) {
+    const people = (travellers || []).filter((t) => t.city).slice(0, 6);
+    if (!people.length || !destination) return null;
+
+    const W = 400;
+    const H = 190;
+    const HUB = { x: 316, y: H / 2 };
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    svg.setAttribute("aria-hidden", "true");
+
+    const mk = (tag, attrs) => {
+      const n = document.createElementNS(SVG_NS, tag);
+      for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+      return n;
     };
-    roll();
-    plane.addEventListener("animationiteration", roll);
+
+    // Origins fan out down the left, curving so the ones furthest from the
+    // middle also sit furthest left — it reads as converging rather than as a
+    // list of parallel flights.
+    const n = people.length;
+    const gap = n === 1 ? 0 : Math.min(34, (H - 56) / (n - 1));
+    people.forEach((person, i) => {
+      const offset = i - (n - 1) / 2;
+      const y = H / 2 + offset * gap;
+      const x = 46 + Math.abs(offset) * 9;
+      const mode = TRAVEL_MODES[travelModeFor(person.city, destination)];
+      // Lift the control point for a flight and keep a road route low, so the
+      // shape of the line already says how they're getting there.
+      const midX = (x + HUB.x) / 2;
+      const lift = 26 + Math.abs(offset) * 6;
+      const cy = y + (HUB.y - y) / 2 - lift * mode.arc;
+      const d = `M ${x} ${y} Q ${midX} ${cy.toFixed(1)} ${HUB.x} ${HUB.y}`;
+
+      svg.appendChild(mk("path", { class: "jm-arc", d, fill: "none" }));
+      svg.appendChild(mk("circle", { class: "jm-origin", cx: x, cy: y, r: 3.4 }));
+
+      const label = mk("text", {
+        class: "jm-label", x: x - 8, y: y + 3.5, "text-anchor": "end",
+      });
+      label.textContent = shortPlace(person.city);
+      svg.appendChild(label);
+
+      const glyph = mk("text", { class: "jm-mover", x: 0, y: 0 });
+      glyph.textContent = mode.glyph;
+      // offset-path takes the same path string, so the glyph tracks the line
+      // exactly rather than approximating it.
+      glyph.style.offsetPath = `path("${d}")`;
+      glyph.style.animationDelay = `${(i * 0.55).toFixed(2)}s`;
+      svg.appendChild(glyph);
+    });
+
+    // The destination last, so it sits above every arrival.
+    svg.appendChild(mk("circle", { class: "jm-hub-ring", cx: HUB.x, cy: HUB.y, r: 15 }));
+    svg.appendChild(mk("circle", { class: "jm-hub", cx: HUB.x, cy: HUB.y, r: 7 }));
+    const destLabel = mk("text", {
+      class: "jm-dest", x: HUB.x, y: HUB.y + 32, "text-anchor": "middle",
+    });
+    destLabel.textContent = `${D.cityEmoji(destination)} ${shortPlace(destination)}`;
+    svg.appendChild(destLabel);
+    return svg;
+  }
+
+  /** "Goa, India" -> "Goa". Labels have very little room. */
+  function shortPlace(name) {
+    return String(name || "").split(",")[0].trim();
+  }
+
+  // The registration screen has no group yet, so it borrows a plausible one and
+  // rotates it. Same component, so what a visitor sees before signing up is the
+  // same thing they'll see with their own friends in it.
+  const SAMPLE_TRIPS = [
+    { dest: "Goa, India", from: ["London, UK", "Dubai, UAE", "Mumbai, India", "Pune, India", "Singapore"] },
+    { dest: "Bali, Indonesia", from: ["Sydney, Australia", "Singapore", "Hong Kong", "Bangkok, Thailand"] },
+    { dest: "Paris, France", from: ["London, UK", "New York, NY", "Dubai, UAE", "Manchester, UK"] },
+    { dest: "New York, NY", from: ["Boston, MA", "Chicago, IL", "London, UK", "Washington, DC"] },
+  ];
+  let sampleIdx = Math.floor(Math.random() * SAMPLE_TRIPS.length);
+  function startFlight() {
+    const host = document.querySelector(".flight-anim");
+    if (!host) return;
+    const draw = () => {
+      const trip = SAMPLE_TRIPS[sampleIdx % SAMPLE_TRIPS.length];
+      sampleIdx += 1;
+      const map = buildJourneyMap(trip.from.map((c) => ({ city: c })), trip.dest);
+      host.textContent = "";
+      if (map) host.appendChild(map);
+    };
+    draw();
+    // Rotate only while the tab is visible and motion is welcome; a background
+    // tab firing a timer forever is the kind of thing that drains a phone.
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    setInterval(() => {
+      if (document.visibilityState === "visible" && host.isConnected) draw();
+    }, 9000);
+  }
+
+  // The real thing: this group, their actual cities, converging on the plan.
+  function renderJourneyMap(container, plan) {
+    if (!container || !plan) return;
+    const goers = state.participants.filter((p) => p.rsvp !== "out" && p.city);
+    const map = buildJourneyMap(goers, plan.destination);
+    if (!map) return;
+    const wrap = el("div", { class: "journey-map" });
+    wrap.appendChild(map);
+    // Count by mode rather than listing them. "3 flying · 1 driving" says
+    // something about the group; "flying and by road and on foot" was clumsy
+    // and told you nothing about how many people face each journey.
+    const tally = {};
+    goers.forEach((p) => {
+      const m = travelModeFor(p.city, plan.destination);
+      tally[m] = (tally[m] || 0) + 1;
+    });
+    const parts = MODE_ORDER.filter((m) => tally[m]).map(
+      (m) => `${tally[m]} ${TRAVEL_MODES[m].label}`
+    );
+    // The tally covers everyone, but only six fit on the map — say which is
+    // which, or "9 flying" reads as nine planes on a picture showing six.
+    if (goers.length > 6) parts.push(`showing 6 of ${goers.length}`);
+    wrap.appendChild(el("div", { class: "jm-caption", text: parts.join(" · ") }));
+    container.appendChild(wrap);
   }
 
   // Register the PWA service worker. Guarded: it only works over http(s), so it

@@ -109,6 +109,17 @@ body::after {
 }
 .topbar .sub { font-size: 0.72rem; color: var(--text-dim); }
 .topbar .spacer { flex: 1; }
+/* The title block must be allowed to shrink, or the four action buttons are
+   pushed past the right edge and the WHOLE PAGE scrolls sideways on a phone —
+   at 375px the Restart button sat 56px outside the viewport. */
+.topbar > div:not(.spacer):not(.bell-wrap) { min-width: 0; }
+.topbar h1, .topbar .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar .btn { flex: 0 0 auto; }
+@media (max-width: 430px) {
+  .topbar { gap: 7px; padding: 12px 11px; }
+  /* The tagline is the one thing here nobody needs on a small screen. */
+  .topbar .sub { display: none; }
+}
 
 /* ---- Screens ---- */
 .screen { display: none; padding-top: 18px; }
@@ -929,32 +940,56 @@ a:focus-visible {
 }
 #phoneUrl { font-size: 0.82rem; color: var(--text); text-align: center; font-weight: 650; }
 
-/* ---- Ambient flight animation (registration) ---- */
-.flight-anim { position: relative; height: 116px; margin: 8px 0 -6px; }
-.flight-anim svg { width: 100%; height: 100%; overflow: visible; }
-.flight-arc { stroke: var(--border-strong); stroke-width: 2; stroke-dasharray: 3 7; stroke-linecap: round; }
-.flight-dot { fill: var(--accent); }
-.flight-plane {
-  color: var(--accent);
-  offset-path: path("M 40 120 Q 200 -10 360 120");
-  offset-rotate: auto;
-  animation: fly 7s ease-in-out infinite;
-  filter: drop-shadow(0 4px 7px rgba(99,102,241,0.55));
+/* ---- Journey map: everyone converging on one destination ---- */
+.flight-anim { position: relative; height: 150px; margin: 8px 0 -6px; }
+.journey-map { margin: 14px 0 2px; }
+.flight-anim svg, .journey-map svg { width: 100%; height: 100%; overflow: visible; display: block; }
+.journey-map svg { height: 168px; }
+
+.jm-arc { stroke: var(--border-strong); stroke-width: 1.6; stroke-dasharray: 3 6;
+  stroke-linecap: round; opacity: 0.75; }
+.jm-origin { fill: var(--text-dim); }
+.jm-label { fill: var(--text-dim); font-size: 9.5px; font-weight: 650;
+  font-family: inherit; letter-spacing: 0.01em; }
+.jm-dest { fill: var(--text); font-size: 11px; font-weight: 750; font-family: inherit; }
+
+/* The destination: a steady point with one slow ring, so it reads as the place
+   everyone is heading for rather than as another moving part. */
+.jm-hub { fill: var(--accent); }
+.jm-hub-ring { fill: none; stroke: var(--accent); stroke-width: 1.4;
+  transform-box: fill-box; transform-origin: center;
+  animation: jm-pulse 3.4s ease-out infinite; }
+@keyframes jm-pulse {
+  0%   { transform: scale(0.55); opacity: 0.85; }
+  70%  { transform: scale(1.25); opacity: 0; }
+  100% { transform: scale(1.25); opacity: 0; }
 }
-.plane-window { fill: rgba(255, 255, 255, 0.9); }
-@keyframes fly {
-  0% { offset-distance: 0%; opacity: 0; }
-  10% { opacity: 1; }
-  90% { opacity: 1; }
+
+/* Travellers stay upright: a rotated car or an upside-down walker reads as a
+   glitch, and the arc itself already carries the direction. */
+.jm-mover {
+  font-size: 13px;
+  offset-rotate: 0deg;
+  offset-distance: 0%;
+  animation: jm-travel 7s ease-in-out infinite;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+@keyframes jm-travel {
+  0%   { offset-distance: 0%;   opacity: 0; }
+  6%   { opacity: 1; }
+  82%  { opacity: 1; }
+  92%  { offset-distance: 100%; opacity: 0; }
   100% { offset-distance: 100%; opacity: 0; }
 }
-.flight-labels { position: absolute; inset: 0; pointer-events: none; }
-.flight-from, .flight-to {
-  position: absolute; bottom: -2px; font-size: 0.74rem; font-weight: 650; color: var(--text-dim);
+.jm-caption { font-size: 0.76rem; color: var(--text-dim); text-align: center; margin-top: 4px; }
+
+/* Motion is decoration here — the arcs, labels and destination still say
+   everything the animation does. */
+@media (prefers-reduced-motion: reduce) {
+  .jm-mover { animation: none; offset-distance: 62%; opacity: 1; }
+  .jm-hub-ring { animation: none; opacity: 0.4; }
 }
-.flight-from { left: 4%; }
-.flight-to { right: 4%; }
-.flight-from::before, .flight-to::before { content: "📍 "; }
 
 /* ---- Live place autocomplete ---- */
 .ac-menu {
