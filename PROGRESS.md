@@ -1,6 +1,6 @@
 # PROGRESS — Reunly
 
-_Last updated: 2026-10-21 — home-city lookup works like a maps app (pick required, currency from country); 54/54 click-through, 9/9 city checks, 103/103 engine tests_
+_Last updated: 2026-10-21 — code frozen for real-device testing; `ff2be8d` pushed to v0.7-dev and master. No more changes until test feedback is in._
 
 ## Goal
 Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla HTML/CSS/JS + a stdlib-only Python server, deployable as a Render Blueprint. Full target spec is in `REBUILD_PROMPT.md`. Done = a real group can plan, vote, lock, cost, settle up and remember a trip end to end on separate devices, with every estimate honestly labelled.
@@ -15,15 +15,26 @@ Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla 
 - 2026-10-21: home city now works like a maps app — prefix suggestions via Photon (`/api/geosuggest?kind=city`), "City, State, Country" labels, pick required at registration, currency from the picked country; roster city fields hint when no country. Tests: `.qa/city.js` (9/9)
 
 ## In progress
-- Nothing mid-flight
+- **Real-device testing phase (user-led).** No code changes until feedback comes back. Testing steps below.
 
-## Next up
-1. Confirm the Render service redeployed from GitHub (dashboard → reunly → Events) and smoke-test the public URL on two phones
-2. Add an `npm run qa` script for the click-through so UI regressions like the vote crash are caught before commit (needs Chrome + `.qa/node_modules`)
-3. Destination photos: server prefers Wikipedia `originalimage` (~3840px) — switch to the thumbnail or a sized variant for mobile data
+## Testing steps (as an app)
+1. Render dashboard → service `reunly` → Events: confirm a deploy of `ff2be8d` finished (check which branch the service tracks; both branches are now identical). Open the `https://…onrender.com` URL. First load after idle can take ~30–60 s (free tier spins down).
+2. On each phone, open that HTTPS URL and install it: Android Chrome → ⋮ → *Install app* / *Add to Home screen*; iPhone Safari → Share → *Add to Home Screen*. (Installing needs HTTPS, so use the Render URL, not the LAN one.)
+3. Organiser phone: register (pick the city from the list) → *Set up a get-together* → People → add own dates + places → *📨 Invite people* → send the link (WhatsApp/SMS).
+4. Each friend: open the link → register → answer the confirm step (try a mix of Yes/No) → fill in their card → **send their link back** (the prompt on Decide). Their answers only reach the organiser when the organiser opens that return link.
+5. Organiser: open each return link → check the roster/ranking update → open a vote → friends vote and send links back → close & lock → check Costs (each person's own currency), Before-you-go, Trip Pack, Memories.
+6. Note anything odd with: phone model, which step, what you expected vs saw (a screenshot helps).
+- Local alternative (same Wi-Fi only, no install): `python server.py` in the Reunly folder → open http://localhost:4175 → header 📱 button shows a QR for phones.
+- Known limits during the test: the 🔔 bell resets on every Render redeploy/spin-down; data lives in each phone's browser (clearing site data wipes it).
+
+## Next up (after testing feedback)
+1. Triage test feedback into fixes; run `node .qa/walk2.js` + `node .qa/city.js` + `npm test` before each commit
+2. Add an `npm run qa` script for the click-through (needs Chrome + `.qa/node_modules`)
+3. Destination photos: server prefers Wikipedia `originalimage` (~3840px) — switch to a smaller variant for mobile data
+
+## Decisions
+- 2026-10-21: keep the 15 mapped currencies for now (other countries show USD)
+- 2026-10-21: free public Photon is fine for now (fair-use limits accepted)
 
 ## Open questions / blockers
-- Any new review findings / feature list for the next round?
 - Notifications store is in-memory only (resets on Render redeploy) — still acceptable?
-- Only 15 currencies are mapped; a picked city in any other country (e.g. Nigeria, Brazil) still shows USD. Add more currencies + rates?
-- Photon is a free public service with fair-use limits — fine for testing; a busy launch would want a self-hosted instance or a paid geocoder
