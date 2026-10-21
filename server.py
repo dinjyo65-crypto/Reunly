@@ -160,10 +160,21 @@ _nominatim_lock = threading.Lock()
 _nominatim_next = [0.0]
 
 
+NOMINATIM_MAX_WAIT = 5.0
+
+
 def _nominatim_wait():
+    """Take the next 1-per-second slot, or raise if the queue is too long.
+
+    Unbounded, a scripted flood made every real user's lookup wait minutes.
+    Callers run this inside their try block, so a refusal is just a failed
+    lookup — and failed lookups are never cached.
+    """
     with _nominatim_lock:
         now = time.monotonic()
         wait = _nominatim_next[0] - now
+        if wait > NOMINATIM_MAX_WAIT:
+            raise RuntimeError("nominatim queue full")
         _nominatim_next[0] = max(now, _nominatim_next[0]) + 1.0
     if wait > 0:
         time.sleep(wait)
@@ -266,7 +277,7 @@ def suggest_places(q):
                 "cc": (item.get("address", {}).get("country_code") or "").lower(),
             })
     except Exception:
-        results = []
+        return []  # a failure isn't "no such place" — don't cache it
     with _suggest_lock:
         _cache_put(_suggest_cache, key, results)
     return results
@@ -390,10 +401,12 @@ def estimate_fare(miles):
     near = min(miles, 600) * per_mile
     far = max(0, miles - 600) * 0.11
     mid = base + near + far
+    # Always "flight": this is a seat price. Whether the party drives instead
+    # is decided by the client's engine, which knows the road and the party.
     return (
         round(mid * 0.82 / 5) * 5,
         round(mid * 1.28 / 5) * 5,
-        "drive" if driving else "flight",
+        "flight",
     )
 
 
@@ -494,11 +507,11 @@ def resolve_fare(frm_raw, to_raw, date, nights=5):
     frm = resolve_city(frm_raw)
     to = resolve_city(to_raw)
 
-    # Every return below carries `mode`. The client's cost model branches on it
-    # to decide per-vehicle vs per-seat pricing, and a response without it is
-    # read as a flight — so omitting it on any path silently reintroduces
-    # per-head pricing for road trips.
-    mode = "local" if miles == 0 else ("drive" if miles <= DRIVE_MILES else "flight")
+    # Every fare here is a SEAT price, so `mode` is "flight" (or "local" for the
+    # same city). Drive-vs-fly is decided by the client engine (chooseTravel),
+    # which knows the party size and the regional road profile; labelling a
+    # short hop "drive" here contradicted it (Pune→Goa is a 10-hour road trip).
+    mode = "local" if miles == 0 else "flight"
 
     # Live (only for canonical cities with known IATA codes).
     if os.environ.get("AMADEUS_CLIENT_ID") and frm in CITY_IATA and to in CITY_IATA:
@@ -731,7 +744,10 @@ class Handler(SimpleHTTPRequestHandler):
         # load fresh (the service worker handles real offline caching). Media
         # is the exception: re-downloading a 0.6 MB video on every visit was
         # pure waste, so _send_media sets its own policy.
-        self.send_header("Cache-Control", getattr(self, "_cache_control", None)
+        # Popped, not read: keep-alive reuses this handler for the next request
+        # on the connection, and a lingering media policy made app.js and API
+        # JSON cacheable for a day after any video request.
+        self.send_header("Cache-Control", self.__dict__.pop("_cache_control", None)
                          or "no-store, must-revalidate")
         # Clickjacking + MIME sniffing. frame-ancestors can't be set from a
         # <meta> CSP, so these have to be real headers.
@@ -741,9 +757,10 @@ class Handler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def _client_ip(self):
-        # Render terminates TLS in front of us; the caller is the first hop.
+        # Render's proxy appends the address it saw, so the LAST hop is the one
+        # we can trust; the first is whatever the client chose to send.
         fwd = self.headers.get("X-Forwarded-For", "")
-        return (fwd.split(",")[0].strip() if fwd else "") or self.client_address[0]
+        return (fwd.split(",")[-1].strip() if fwd else "") or self.client_address[0]
 
     def _send_static(self, path, head=False):
         """Serve only the app's own files.

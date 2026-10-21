@@ -1,43 +1,44 @@
 # PROGRESS — Reunly
 
-_Last updated: 2026-10-21 — code frozen for real-device testing; `ff2be8d` pushed to v0.7-dev and master. No more changes until test feedback is in._
+_Last updated: 2026-10-21 — **v8 agreed by all 5 reviewers** (security, travel expert, travel planner, developer, user: SHIP for testing with friends after round-2 fixes, all applied and verified). Branch `v8`, not pushed yet._
 
 ## Goal
-Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla HTML/CSS/JS + a stdlib-only Python server, deployable as a Render Blueprint. Full target spec is in `REBUILD_PROMPT.md`. Done = a real group can plan, vote, lock, cost, settle up and remember a trip end to end on separate devices, with every estimate honestly labelled.
+Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla HTML/CSS/JS + a stdlib-only Python server, deployable as a Render Blueprint. Full target spec is in `REBUILD_PROMPT.md`. Done = a real group can plan, vote, lock, cost, settle up and remember a trip end to end on separate devices, with every estimate honestly labelled. v8 goal: a working app that a security expert, travel expert, travel planner, app developer and app user all broadly agree on, with Reunly Pro (monetisation) in mind.
 
 ## Done
-- v0.6–v0.9.1 feature build (Jun–Jul): registration hero, lifecycle tabs, identity + roles, ranked prefs, engine scoring, voting, RSVP, memory wall, trip toolkit, live geosuggest, currency-by-location, Reunly Pro, Decide confirm step, notify bell, Render deploy
-- Review-fix rounds (Aug 26–28, ~45 commits): sync/merge hardening, settle-up in `engine.js` with tests, overlap windows, lodging/season/hemisphere pricing, treasurer ledger, ballot sync, Before-you-go checklist, convergence map
-- 2026-10-21: pushed 38 commits; added browser click-through `.qa/walk2.js` (git-ignored; organiser + 4-way guest confirm matrix + bell)
-- 2026-10-21: fixed `renderVote` crash ("Assignment to constant variable") — with any ballot open, `renderAll` threw before People/Costs/Expenses/Memories rendered and before `saveState()`. Regression from `18f8268`
-- 2026-10-21: CSP now allows `thumb.wikimedia.org` (Wikipedia moved photo URLs there, so destination banners were blank); SW cache → v31
-- 2026-10-21: `REBUILD_PROMPT.md` brought up to date with the August rounds
-- 2026-10-21: home city now works like a maps app — prefix suggestions via Photon (`/api/geosuggest?kind=city`), "City, State, Country" labels, pick required at registration, currency from the picked country; roster city fields hint when no country. Tests: `.qa/city.js` (9/9)
+- v0.6–v0.9.1 feature build (Jun–Jul) and Aug 26–28 review-fix rounds — see git log / `REBUILD_PROMPT.md`
+- 2026-10-21 (v0.7-dev, pushed + merged to master `c5c514c`): vote-panel crash fix, thumb.wikimedia CSP, maps-style home-city lookup (Photon, pick required, currency from country)
+- **v8** (branch `v8`):
+  - `59c65ad` Globe hero: Remotion project `hero-animation/` (Globe.tsx, palette "Brand-Glow" + pace 1.0 agreed by a motion designer and a brand/UX designer). 4 MP4 loops in `media/` (~0.6 MB each; WebM dropped — VP9 render failed to decode in Chrome) + finale poster. Locked plan shows the group's real trips on a dot-matrix globe (`globe-land.js`, `/api/geocode`). `/media/*` served with byte ranges (iOS).
+  - `9886b25` Review round 1 fixes (security, travel, planner, developer, user) — full list in the commit message: static allowlist + rate limits + headers; hero only for sign-up visitors; regional road model + per-destination seasons + season-aware booking lead times + entry permits + dated booking links; cost tolerance (no trivial-saving override); decline notifications; re-confirm after lock; kitty view; organiser "in"; guest send-back window, invite banner, guest-hidden organiser controls; honest organiser-only Pro copy
+- Tests: `npm test` 106/106; `.qa/walk2.js` 54/54; `.qa/city.js` 9/9; `.qa/hero.js` 8/8; `.qa/v8fixes.js` 6/6 (all git-ignored except engine tests)
 
 ## In progress
-- **Real-device testing phase (user-led).** Testing steps below.
-- **New registration hero animation** (Remotion project in `hero-animation/`, not yet committed or embedded). Two variants, 4 sample trips each, 1200×570, 9 s loops: flat convergence (`Convergence.tsx`) and rotating 3D globe (`Globe.tsx`, d3-geo + world-atlas, real coordinates, great-circle arcs, push-in finale). Preview: `cd hero-animation && npx remotion studio` (port 3001 here; port 3000 is taken by another local site, so `remotion still` needs `--port=3055`).
-  - Agreed plan: home screen = **looping videos** rendered from the chosen variant; once a destination is locked, the plan's journey map should show the group's actual trips (rebuild that one in the app's own JS, same look).
-  - Waiting on: user picks flat vs globe (or both), then render → embed.
+- Nothing mid-flight. v8 is ready to push (waiting on the user's go-ahead), then real-device testing.
+
+- Round 2 (all 5 re-verified): travel SHIP, security SHIP, developer/planner/user SHIP after one fix each — fixed: keep-alive leaking the media Cache-Control onto app.js/API; notify token not saved until a later edit (every guest reply lost after the organiser reloaded); guest never prompted to send after Done (send bar now above the tabs + send window opens on Done); bell refreshes when opened; XFF last hop + 5 s cap on the Nominatim queue; passport/visa before a 150-day peak booking; Malaysia off the slow-roads list; Dubai Christmas ×1.6; server fare mode always "flight". Tests: engine 106, walk2 54, city 9, hero 8, v8fixes 9.
+
+## Next up
+1. Push `v8` and merge to master when the user says so (Render redeploy)
+3. Real-device test (steps below) — **first check on iPhone that a home-screen-installed app and Safari share data when opening return links** (planner's risk #9)
+4. v9 backlog from the reviews: deposit tracker with due dates + nudges and live shared sync (the two things organisers said they'd pay Pro for); reply-by dates; re-broadcast prompt after merges; join-by-code without a link; multiple events; shorter post-confirm form; hide vote/confirm after lock; passport country + visa hints; long-haul fare levels, nonstop table, home-country holidays; real Pro entitlements (server-signed, Stripe, persistent storage); invite-link auth; split app.js; Python tests for server.py
 
 ## Testing steps (as an app)
-1. Render dashboard → service `reunly` → Events: confirm a deploy of `ff2be8d` finished (check which branch the service tracks; both branches are now identical). Open the `https://…onrender.com` URL. First load after idle can take ~30–60 s (free tier spins down).
-2. On each phone, open that HTTPS URL and install it: Android Chrome → ⋮ → *Install app* / *Add to Home screen*; iPhone Safari → Share → *Add to Home Screen*. (Installing needs HTTPS, so use the Render URL, not the LAN one.)
-3. Organiser phone: register (pick the city from the list) → *Set up a get-together* → People → add own dates + places → *📨 Invite people* → send the link (WhatsApp/SMS).
-4. Each friend: open the link → register → answer the confirm step (try a mix of Yes/No) → fill in their card → **send their link back** (the prompt on Decide). Their answers only reach the organiser when the organiser opens that return link.
-5. Organiser: open each return link → check the roster/ranking update → open a vote → friends vote and send links back → close & lock → check Costs (each person's own currency), Before-you-go, Trip Pack, Memories.
-6. Note anything odd with: phone model, which step, what you expected vs saw (a screenshot helps).
-- Local alternative (same Wi-Fi only, no install): `python server.py` in the Reunly folder → open http://localhost:4175 → header 📱 button shows a QR for phones.
-- Known limits during the test: the 🔔 bell resets on every Render redeploy/spin-down; data lives in each phone's browser (clearing site data wipes it).
-
-## Next up (after testing feedback)
-1. Triage test feedback into fixes; run `node .qa/walk2.js` + `node .qa/city.js` + `npm test` before each commit
-2. Add an `npm run qa` script for the click-through (needs Chrome + `.qa/node_modules`)
-3. Destination photos: server prefers Wikipedia `originalimage` (~3840px) — switch to a smaller variant for mobile data
+1. Render dashboard → service `reunly` → Events: confirm the deploy finished for the pushed commit. Open the `https://…onrender.com` URL (first load after idle ~30–60 s).
+2. Install on each phone from that HTTPS URL: Android Chrome → ⋮ → *Install app*; iPhone Safari → Share → *Add to Home Screen*.
+3. Organiser: register (pick city from the list) → *Set up a get-together* → add own dates + places → *📨 Invite people* → send the link.
+4. Each friend: open the link (banner says who invited them) → register → answer "Does this work for you?" (mix Yes/No, try "I can't make it") → **📤 Send my answers** back to the organiser.
+5. Organiser: open each return link → check roster/ranking → vote → lock → Costs (own currency), Before you go, Trip Pack, plan globe, Memories.
+6. Note phone model, step, expected vs seen (+ screenshot).
+- Local alternative: `python server.py` → http://localhost:4175 (📱 button shows a QR for phones on the same Wi-Fi).
+- Known limits: 🔔 resets on redeploy/spin-down; data lives in each phone's browser.
 
 ## Decisions
 - 2026-10-21: keep the 15 mapped currencies for now (other countries show USD)
 - 2026-10-21: free public Photon is fine for now (fair-use limits accepted)
+- 2026-10-21: globe (not flat) hero; looping video on sign-up, live JS globe once a plan is locked
+- 2026-10-21: palette "Brand-Glow", pace 1.0, 4 travellers per sample trip (motion + brand experts)
 
 ## Open questions / blockers
 - Notifications store is in-memory only (resets on Render redeploy) — still acceptable?
+- Hero video tooling: `cd hero-animation && npx remotion studio` (port 3001 here; port 3000 is another local site, so `remotion still/render` need `--port=3055`)

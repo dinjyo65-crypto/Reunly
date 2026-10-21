@@ -119,6 +119,12 @@
       <!-- Countdown (pinned once a plan is locked) -->
       <div class="countdown" id="countdown" hidden></div>
 
+      <!-- Standing prompt for participants: their answers live on their own
+           device until they send a link back. Above the tabs, so it shows on
+           every tab — on Decide alone, a guest who finished on People never
+           saw it and closed the app thinking they were done. -->
+      <div id="sendBackBar" hidden></div>
+
       <!-- Lifecycle tabs -->
       <nav class="phasebar" id="phasebar" role="tablist" aria-label="Sections">
         <button class="phase-tab active" role="tab" aria-selected="true" data-phase="decide" id="tab-decide">Decide</button>
@@ -130,9 +136,6 @@
       <!-- ===== Decide ===== -->
       <div class="phase" data-phase="decide" role="tabpanel" aria-labelledby="tab-decide">
         <div id="planPanel"></div>
-        <!-- Standing prompt for participants: their answers live on their own
-             device until they send a link back. -->
-        <div id="sendBackBar" hidden></div>
         <div id="winnerHero" aria-live="polite"></div>
         <div id="votePanel"></div>
         <div class="section">

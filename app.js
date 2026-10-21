@@ -1117,12 +1117,15 @@
     banner.hidden = !state.fromInvite;
     $("#regSubmit").textContent = state.fromInvite ? "Add my dates →" : "Get started →";
     if (!state.fromInvite) return;
+    // The default name reads badly in an invitation.
+    const named = state.reunion.name && state.reunion.name !== "Untitled get-together";
+    const what = named ? state.reunion.name : "a get-together";
     banner.appendChild(
       el("div", {
         class: "invite-banner-title",
         text: state.reunion.organizer
-          ? `✉️ ${state.reunion.organizer} invited you to ${state.reunion.name}`
-          : `✉️ You're invited to ${state.reunion.name}`,
+          ? `✉️ ${state.reunion.organizer} invited you to ${what}`
+          : `✉️ You're invited to ${what}`,
       })
     );
     const plan = state.lockedPlan;
@@ -1172,7 +1175,14 @@
     return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   }
   function notifyToken() {
-    if (!state.reunion.notifyToken) state.reunion.notifyToken = generateNotifyToken();
+    if (!state.reunion.notifyToken) {
+      state.reunion.notifyToken = generateNotifyToken();
+      // Persist NOW. It was minted on the first share but only saved by some
+      // later edit — and an organiser always leaves the app to share on
+      // WhatsApp, so a reload minted a new one and every guest reply, posted to
+      // the token in the link they'd been sent, never reached the bell.
+      saveState();
+    }
     return state.reunion.notifyToken;
   }
 
@@ -1348,6 +1358,7 @@
       if (mode === "setup") {
         state.reunion.name = state.reunion.name || "Untitled get-together";
         state.reunion.organizer = (state.user.name || "").trim().split(/\s+/)[0];
+        notifyToken(); // fix the bell's address before any link goes out
         // Whoever sets it up is coming. Leaving them at "no reply" dropped the
         // organiser from the head count and from every new expense split.
         if (mine && mine.rsvp === "no_response") {
@@ -1494,6 +1505,9 @@
         onClick: () => {
           state.editingId = null;
           renderAll();
+          // A guest finishing their own card is the moment to send it — their
+          // answers are on this phone only until the organiser opens the link.
+          if (state.role !== "organizer" && isMe(p)) openInviteModal();
         },
       })
     );
@@ -2309,7 +2323,9 @@
     toast(
       p.rsvp === "out"
         ? "Thanks — the organiser will see you can't make these dates"
-        : "Thanks! Just a few more details…"
+        : state.role === "organizer"
+          ? "Thanks! Just a few more details…"
+          : `Thanks! Add any details, then tap Done to send them to ${state.reunion.organizer || "the organiser"}`
     );
     goEditMine();
   }
@@ -4750,6 +4766,11 @@
       panel.hidden = !panel.hidden;
       if (!panel.hidden) {
         renderNotifPanel();
+        // The list was up to 20 s stale (the poll interval), so it read "No
+        // responses yet" right after someone answered. Refresh on open.
+        pollNotifications().then(() => {
+          if (!panel.hidden) renderNotifPanel();
+        });
         const newest = notifItems.reduce((m, n) => Math.max(m, n.ts), 0);
         if (newest > state.notifSeen) {
           state.notifSeen = newest;

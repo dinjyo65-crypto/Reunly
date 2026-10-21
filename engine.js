@@ -161,7 +161,8 @@
    * fare for a family with a child. Coarse on purpose: two profiles, chosen by
    * whether either end is somewhere with slow roads.
    */
-  const SLOW_ROADS = new Set(["in", "id", "th", "vn", "ph", "my", "lk", "np", "bd", "kh"]);
+  // Malaysia is left out: its expressways run at near-European speeds.
+  const SLOW_ROADS = new Set(["in", "id", "th", "vn", "ph", "lk", "np", "bd", "kh"]);
   const DEFAULT_ROAD = { factor: 1.3, mph: 50 };
   const SLOW_ROAD = { factor: 1.45, mph: 30 };
   // One way. Beyond this a group flies if it can — nobody plans a reunion
@@ -354,7 +355,7 @@
     bali: { months: { 7: 1.3, 8: 1.3 }, high: "Bali peak season", low: null },
     dubai: {
       months: { 6: 0.7, 7: 0.7, 8: 0.7, 11: 1.2, 12: 1.2, 1: 1.2, 2: 1.2, 3: 1.2 },
-      high: "winter high season", low: "summer low season", xmasLodging: 2.2,
+      high: "winter high season", low: "summer low season", xmasLodging: 1.6,
     },
     thailand: {
       months: { 11: 1.2, 12: 1.2, 1: 1.2, 2: 1.2, 5: 0.85, 6: 0.85, 7: 0.85, 8: 0.85, 9: 0.85, 10: 0.85 },
@@ -1622,10 +1623,16 @@
   function prepStepsFor(daysToGo, isInternational, opts = {}) {
     // Booking lead time isn't one number. 60 days is late for long-haul at
     // Christmas or in summer peak, and early for a domestic trip.
-    const bookBy = isInternational === true && opts.peak ? 150 : isInternational === false ? 45 : 60;
+    // "unknown" may well be international, so it gets the longer lead too.
+    const bookBy = isInternational !== false && opts.peak ? 150 : isInternational === false ? 45 : 60;
     // "unknown" is truthy, so border steps are shown — the caller says why.
     return PREP_STEPS.filter((step) => isInternational || !step.international).map((raw) => {
-      const step = raw.booking ? { ...raw, byDays: bookBy } : raw;
+      let step = raw.booking ? { ...raw, byDays: bookBy } : raw;
+      // Check passports and visas BEFORE paying for flights: with a 150-day
+      // peak booking, the 90/75-day checks would otherwise come after it.
+      if (step.id === "passport" || step.id === "visa") {
+        step = { ...step, byDays: Math.max(step.byDays, bookBy + (step.id === "passport" ? 15 : 7)) };
+      }
       const slack = daysToGo == null ? null : daysToGo - step.byDays;
       let urgency = "later";
       if (slack != null) {
