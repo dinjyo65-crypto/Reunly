@@ -242,6 +242,18 @@ they were actually built, so a rebuild can follow the same path.
 >   Nominatim `search`, cached, debounced client-side ~200ms) wired to
 >   **every** city/destination input in the app (registration, home city,
 >   ranked destination rows) — replacing any static fixed city list.
+> - **Home city works like a maps app**: `GET /api/geosuggest?q=&kind=city`
+>   uses Photon (keyless, OpenStreetMap, built for prefix search — "Lond"
+>   must find London) restricted to cities/towns, labelled "City, State,
+>   Country" so same-name places stay distinct (every US Springfield; London
+>   UK vs London, Ontario), with the ISO country code. Fall back to Nominatim
+>   if Photon is down. Registration **requires picking** a suggestion (or
+>   "Use my location"); editing after a pick clears it; currency comes from
+>   the picked country and is confirmed under the field ("prices will show in
+>   GBP"). If the lookup service is unreachable, accept the typed city rather
+>   than lock someone out. Roster home-city fields use the same list and show
+>   a hint when a city has no country. Destination fields keep the broader
+>   search (destinations can be regions like Goa).
 > - `GET /api/reverse?lat=&lng=` — reverse-geocode for "Use my location".
 > - Currency is derived from the resolved country (a country-name map AND an
 >   ISO country-code map, since the two geocoding paths return different

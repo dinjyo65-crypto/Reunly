@@ -957,12 +957,17 @@
   // ---- Live place autocomplete (proxy /api/geosuggest) ----
   // Attaches a type-ahead dropdown to any text input. onPick(label, suggestion)
   // fires on selection; the input's own "input" event is also re-dispatched so
-  // existing handlers (which write into state) run.
-  function attachAutocomplete(input, onPick) {
+  // existing handlers (which write into state) run. opts.kind === "city" asks
+  // for cities/towns only, labelled "City, State, Country". Returns a handle
+  // whose serviceDown() says the last lookup failed outright (as opposed to
+  // finding nothing), so a caller can avoid insisting on a pick it can't offer.
+  function attachAutocomplete(input, onPick, opts = {}) {
     let menu = null;
     let items = [];
     let active = -1;
     let timer = null;
+    let failed = false;
+    const kindParam = opts.kind ? `&kind=${encodeURIComponent(opts.kind)}` : "";
     const close = () => {
       if (menu) menu.remove();
       menu = null;
@@ -1000,16 +1005,18 @@
     };
     const query = async (q) => {
       try {
-        const res = await fetch(`/api/geosuggest?q=${encodeURIComponent(q)}`, {
+        const res = await fetch(`/api/geosuggest?q=${encodeURIComponent(q)}${kindParam}`, {
           headers: { Accept: "application/json" },
         });
         const data = await res.json();
+        failed = false;
         if (input.value.trim() !== q) return; // stale response
         items = (data.results || []).slice(0, 6);
         active = -1;
         if (items.length) render();
         else close();
       } catch (e) {
+        failed = true;
         close();
       }
     };
@@ -1036,7 +1043,14 @@
         close();
       }
     });
-    input.addEventListener("blur", () => setTimeout(close, 150));
+    // Re-check focus when the timer fires: a caller that refocuses the field
+    // and re-offers the list (registration's "choose from the list") would
+    // otherwise have it snatched away by the blur that preceded it.
+    input.addEventListener("blur", () =>
+      setTimeout(() => {
+        if (document.activeElement !== input) close();
+      }, 150)
+    );
     // Only track position while the menu is actually open, and always detach.
     // Attaching on every render leaked a listener per input, each holding a
     // detached node and firing on every scroll frame.
@@ -1051,6 +1065,14 @@
     };
     input.addEventListener("focus", startTracking);
     input.addEventListener("blur", () => setTimeout(stopTracking, 200));
+    return {
+      serviceDown: () => failed,
+      // Re-run the lookup for whatever is in the box (used to re-offer the list).
+      suggest: () => {
+        const q = input.value.trim();
+        if (q.length >= 2) query(q);
+      },
+    };
   }
 
   let toastTimer = null;
@@ -1114,12 +1136,34 @@
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   }
 
-  let regCurrency = null; // currency captured from location detect / suggestion pick
+  // The place chosen from the list (or found by "Use my location"): {label, cc}.
+  // Typing a bare "London" used to be accepted as-is, which left the app not
+  // knowing the country — so the person got USD and the domestic/international
+  // check couldn't place them. Now, like a maps app, you pick a real place.
+  let regPick = null;
+
+  function regCurrencyFor(pick) {
+    return (pick.cc && D.CC_CURRENCY[pick.cc]) || D.currencyForCity(pick.label);
+  }
+
+  function setRegPick(pick) {
+    regPick = pick;
+    if (pick) $("#regError").textContent = ""; // the "choose from the list" nudge is answered
+    $("#regLocNote").textContent = pick
+      ? `📍 ${pick.label} · prices will show in ${regCurrencyFor(pick)}`
+      : "";
+  }
 
   function wireRegister() {
-    // Live suggestions on the home-city field; capture currency from the country.
-    attachAutocomplete($("#regCity"), (label, s) => {
-      if (s && s.cc && D.CC_CURRENCY[s.cc]) regCurrency = D.CC_CURRENCY[s.cc];
+    const cityInput = $("#regCity");
+    const ac = attachAutocomplete(
+      cityInput,
+      (label, s) => setRegPick({ label, cc: (s && s.cc) || "" }),
+      { kind: "city" }
+    );
+    // Editing the text after picking means it no longer names that place.
+    cityInput.addEventListener("input", () => {
+      if (regPick && cityInput.value.trim() !== regPick.label) setRegPick(null);
     });
 
     // "Use my location" — browser geolocation → reverse geocode → fill city.
@@ -1139,10 +1183,8 @@
               const r = await fetch(`/api/reverse?lat=${latitude}&lng=${longitude}`);
               const data = await r.json();
               if (data.label) {
-                $("#regCity").value = data.label;
-                if (data.cc && D.CC_CURRENCY[data.cc]) regCurrency = D.CC_CURRENCY[data.cc];
-                const cur = regCurrency || D.currencyForCity(data.label);
-                $("#regLocNote").textContent = `📍 ${data.label} · prices will show in ${cur}`;
+                cityInput.value = data.label;
+                setRegPick({ label: data.label, cc: data.cc || "" });
               } else {
                 toast("Couldn't find your city — type it in");
               }
@@ -1171,8 +1213,18 @@
       if (!name) return (err.textContent = "Please enter your name.");
       if (!isValidEmail(email)) return (err.textContent = "Please enter a valid email.");
       if (!city) return (err.textContent = "Please enter your home city.");
+      const picked = regPick && regPick.label === city;
+      // Only insist on a pick when we can actually offer one: if the lookup
+      // service is unreachable, a typed city beats locking someone out.
+      if (!picked && !ac.serviceDown()) {
+        err.textContent = "Choose your city from the list so we know which country it's in.";
+        cityInput.focus();
+        ac.suggest();
+        return;
+      }
       err.textContent = "";
-      state.user = { name, email, city, currency: regCurrency || D.currencyForCity(city) };
+      const currency = picked ? regCurrencyFor(regPick) : D.currencyForCity(city);
+      state.user = { name, email, city, currency };
       // Arrived via a shared invite link → skip the chooser, join straight in.
       if (state.fromInvite) {
         enterDashboard("join", state.reunion.code);
@@ -1639,6 +1691,13 @@
   function cityInput(p) {
     const wrap = el("div", { class: "field-group" });
     wrap.appendChild(el("label", { text: "Home city", for: `city-${p.id}` }));
+    // Every label from the list ends in its country; a bare "London" doesn't,
+    // and then neither the currency nor the border check can place them.
+    const note = el("div", { class: "field-hint" });
+    const updateNote = () => {
+      const v = (p.city || "").trim();
+      note.textContent = v && !v.includes(",") ? "Choose from the list so we know which country this is." : "";
+    };
     const input = el("input", {
       id: `city-${p.id}`,
       type: "text",
@@ -1648,17 +1707,24 @@
       onInput: (e) => {
         p.city = e.target.value;
         updateCardHeader(p);
+        updateNote();
         scheduleRecompute(p);
       },
     });
-    attachAutocomplete(input, (label, s) => {
-      p.city = label;
-      // A member's own currency follows their home city's country.
-      if (s && s.cc && D.CC_CURRENCY[s.cc] && isMe(p) && state.user) {
-        state.user.currency = D.CC_CURRENCY[s.cc];
-      }
-    });
+    attachAutocomplete(
+      input,
+      (label, s) => {
+        p.city = label;
+        // A member's own currency follows their home city's country.
+        if (s && s.cc && D.CC_CURRENCY[s.cc] && isMe(p) && state.user) {
+          state.user.currency = D.CC_CURRENCY[s.cc];
+        }
+      },
+      { kind: "city" }
+    );
+    updateNote();
     wrap.appendChild(input);
+    wrap.appendChild(note);
     return wrap;
   }
   function dateInput(p, idx, end) {

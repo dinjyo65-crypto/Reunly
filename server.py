@@ -219,6 +219,59 @@ def suggest_places(q):
     return results
 
 
+def suggest_cities(q):
+    """Type-ahead for a HOME city, the way a maps app does it.
+
+    Nominatim matches whole words, so "Lond" or "Springf" found nothing, and
+    its labels dropped the region, so five US Springfields collapsed into one
+    "Springfield, United States" entry. Photon (keyless, OpenStreetMap-based)
+    is built for prefix search and returns state + country for each match.
+    Restricted to cities and towns: a home is never a state or a borough.
+    Falls back to the Nominatim path if Photon is unreachable.
+    """
+    key = q.strip().lower()
+    if len(key) < 2:
+        return []
+    ckey = "city:" + key
+    with _suggest_lock:
+        if ckey in _suggest_cache:
+            return _suggest_cache[ckey]
+    results = []
+    try:
+        params = urllib.parse.urlencode(
+            [("q", q), ("limit", 8), ("lang", "en"),
+             ("osm_tag", "place:city"), ("osm_tag", "place:town")])
+        req = urllib.request.Request(
+            "https://photon.komoot.io/api/?" + params,
+            headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            feats = json.loads(r.read()).get("features", [])
+        seen = set()
+        for f in feats:
+            p = f.get("properties", {})
+            name, country = p.get("name"), p.get("country")
+            if not name or not country:
+                continue
+            state = p.get("state")
+            parts = [name] + ([state] if state and state not in (name, country) else []) + [country]
+            label = ", ".join(parts)
+            if label.lower() in seen:
+                continue
+            seen.add(label.lower())
+            lon, lat = f["geometry"]["coordinates"]
+            results.append({
+                "label": label, "lat": float(lat), "lon": float(lon),
+                "cc": (p.get("countrycode") or "").lower(),
+            })
+            if len(results) == 6:
+                break
+    except Exception:
+        return suggest_places(q)
+    with _suggest_lock:
+        _cache_put(_suggest_cache, ckey, results)
+    return results
+
+
 def reverse_geocode(lat, lng):
     try:
         params = urllib.parse.urlencode({
@@ -664,7 +717,8 @@ class Handler(SimpleHTTPRequestHandler):
             })
         if parsed.path == "/api/geosuggest":
             q = urllib.parse.parse_qs(parsed.query)
-            return self._send_json({"results": suggest_places(q.get("q", [""])[0])})
+            fn = suggest_cities if q.get("kind", [""])[0] == "city" else suggest_places
+            return self._send_json({"results": fn(q.get("q", [""])[0])})
         if parsed.path == "/api/reverse":
             q = urllib.parse.parse_qs(parsed.query)
             return self._send_json(
