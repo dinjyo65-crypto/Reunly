@@ -27,6 +27,10 @@ they were actually built, so a rebuild can follow the same path.
 >   both locally and on a cloud host. Run via `.claude/launch.json` locally.
 > - PWA: `manifest.json`, `icon.svg`, and a **network-first** `service-worker.js`
 >   (falls back to cache offline; never caches `/api/*`).
+> - All money/ranking maths lives in `engine.js` as pure functions so it can be
+>   tested without a browser: `package.json` with `"test": "node --test
+>   test/engine.test.js"` (Node's built-in runner, no dependencies). Every bug
+>   found in the maths gets a test that pins it.
 > - No paid APIs required anywhere. Be honest in the UI: never claim a price or
 >   forecast is "live/guaranteed" unless it actually came from a live source —
 >   label every fare/weather value with its provenance. Open the app directly
@@ -94,10 +98,24 @@ they were actually built, so a rebuild can follow the same path.
 >   3 → 2 → 1 → 1 → 1…** (a floor of 1, never 0) so a long list of options never
 >   produces an ignored (zero-weight) preference. Date matching uses **range
 >   overlap**, not exact equality.
+> - **Only people who are coming count**: anyone who has declined is left out
+>   of the tallies, averages, budget checks, vote denominators and cost splits.
+> - **Propose overlap windows**, not just the ranges people typed: add pairwise
+>   intersections (Ann free 19–26, Bob 22–29 → suggest 22–26), skip slivers
+>   under 2 days, flag them "overlap" in the UI. Date score is weighted by
+>   *how much* of the window each person can make, not "any overlap = full
+>   match". A window nobody can sensibly travel for (1 night in Bali from
+>   London) is discounted; a short window someone actually typed, or a local
+>   day trip, is not.
 > - Rank every (date range × destination) combination with a **cost-conscious**
 >   weighting: `total = 0.30*dateScore + 0.30*destScore + 0.40*costScore`
 >   (named constants, sub-scores normalized 0..1; cost normalized across
->   candidate destinations, cheapest = 1). This can intentionally rank a
+>   candidate destinations, cheapest = 1). Cost = return travel **plus
+>   lodging**. costScore blends relative cheapness with each person's own
+>   fare vs their own stated budget (fall back to relative-only when nobody
+>   gave a budget, and only say "easiest on budgets" when budgets were really
+>   checked); the winner card names anyone priced out *before* locking. A
+>   destination that can't be priced stays visible but can never win on cost. This can intentionally rank a
 >   cheaper-but-less-popular place above the most-voted one — that's correct,
 >   not a bug, given the weighting; show a one-line "why this won" reason
 >   (e.g. "wins on cost" / "wins on date fit") so it never reads as an error.
@@ -132,7 +150,10 @@ they were actually built, so a rebuild can follow the same path.
 > add-date/add-place row editor **inline**, right there, and Continue stays
 > disabled until at least one valid alternative is entered for every "No".
 > Answering **Yes** writes the group's top pick straight into that person's own
-> `dates[0]`/`destinations[0]`. On Continue: persist the two answers
+> `dates[0]`/`destinations[0]`. **Answering the confirm step is the RSVP**:
+> Yes to both = "in"; on a locked plan a No is a decline; before a lock a No
+> leaves them undecided (proposing another week isn't confirming
+> attendance). On Continue: persist the two answers
 > (`dateConfirmed`/`destConfirmed`, tri-state — `null` = not asked,
 > `true`/`false` = answered) so **this is a one-time step per person** — it must
 > never re-interrupt someone who has already answered, and must never trigger
@@ -150,6 +171,12 @@ they were actually built, so a rebuild can follow the same path.
 >   option, tie-broken by the engine score) and **Lock** it, or **Reopen**/
 >   **Clear**. A demo-only **"Seed demo votes"** button fills plausible votes
 >   for the sample group so the tally feels alive while testing solo.
+> - The ballot (options, open/closed, each vote) is stamped and **travels in
+>   the invite/return link** like the rest of the shared state (see Sync
+>   below) — a vote that never leaves the device is inert. Reopening with
+>   different options replaces the ballot instead of carrying old answers.
+>   Guests with no open vote see an explanation, not a blank panel. Locking
+>   from the ballot must stamp `lockTs` exactly like the Lock button does.
 >
 > ### Travel costs
 > - Per person: fare to the agreed/locked destination (or the current top
@@ -160,9 +187,27 @@ they were actually built, so a rebuild can follow the same path.
 >   everything to USD. If someone's preferred destination is the same as the
 >   group's best, show a "🎯 Same as group best" note instead of a duplicate
 >   card.
-> - Distance/time (flight + drive, drive hidden beyond ~800mi so overseas
->   routes don't show a nonsensical multi-day "drive"), and deep links to
->   Google Flights, Rome2Rio, and Google Maps built with `encodeURIComponent`.
+> - **Drive vs fly is priced, not thresholded**: price both for the actual
+>   party (a car holds a family; seats are per head) and take the cheaper —
+>   a hard distance cutoff creates a cost cliff where one extra mile triples
+>   a family's cost and reorders the ranking. Nobody drives 3,000 miles, and
+>   locals don't travel at all (and don't pay for a hotel in their own town).
+>   Show distance/time and deep links to Google Flights, Rome2Rio, and Google
+>   Maps built with `encodeURIComponent`. Resolve distance through ONE helper
+>   (`milesBetween`, local table then geocoded coordinates) everywhere.
+> - **Lodging**: nightly bands per person *sharing a twin*, by city with a
+>   per-country fallback for unknown cities. Occupancy is an input: two or
+>   more people needing their own bed pair up; only a genuinely solo traveller
+>   pays the single supplement; parents share with kids; decliners and people
+>   staying with family need no bed. Say on the winner card which case applied.
+> - **Season**: scale *our estimates only* (never a searched/live fare, which
+>   already reflects its date) for Christmas/New Year, Easter and summer —
+>   with summer by **hemisphere** (coordinates, else country), so July in
+>   Sydney is low season. Name the peak on the winner card. State that
+>   estimates are return travel + lodging only.
+> - Fare lookups send the group's real window (locked plan, else the most-
+>   wanted submitted window) and trip length; the server refuses to invent a
+>   departure date, and returns no live quote for a missing/past date.
 > - Fare resolution, in order: **live** (a real flight-offers API, only if
 >   credentials are configured) → **searched** (a small curated table of real
 >   captured round-trip ranges) → **estimated** (a diminishing-per-mile
@@ -174,10 +219,22 @@ they were actually built, so a rebuild can follow the same path.
 >   → OpenStreetMap Nominatim, keyless, cached + lock-serialized) so fares
 >   generate for literally anywhere, with an "Estimating…" skeleton state
 >   while the geocoded fare is in flight.
-> - **Expense splitter**: log who paid what (USD), split equally across
->   everyone RSVP'd "in" (falling back to everyone if fewer than 2 are marked
->   in), compute balances (paid − share) and a **greedy minimal-transfer
->   settle-up** ("Aisha → Dinesh $184"). Delete your own entries (or any, if
+> - **Expense ledger** (the maths — `computeSettlement`, largest-remainder
+>   allocation — lives in `engine.js` with tests): log who paid what (USD),
+>   split across everyone RSVP'd "in" by default, or a per-expense subset.
+>   Negative amounts are **refunds** (shown green, "refund $50"); zero is
+>   rejected. Two kinds of line: a **shared cost** that splits, and a
+>   **transfer** between two people ("Money in" to a treasurer before any
+>   expense exists; "Mark paid" on a settle-up row). Show costs and transfers
+>   as separate sections so the costs column sums to the printed Total, and
+>   transfers never change what the trip cost. Then: a **greedy minimal-
+>   transfer settle-up** ("Aisha → Dinesh $184"), a **"Where everyone
+>   stands"** table (paid, share, net — calling out "paid in nothing" and
+>   "left") because netting hides who carried the trip, an "all square"
+>   banner that's distinct from "no expenses yet", and a way to **write off**
+>   a departed member's debt as a labelled settlement spread across whoever
+>   is owed, never by deleting the original expenses. Roster edits must not
+>   rewrite money that's already settled. Delete your own entries (or any, if
 >   organiser).
 >
 > ### Live location & currency intelligence
@@ -207,6 +264,41 @@ they were actually built, so a rebuild can follow the same path.
 >   time-of-day slots it's valid for (e.g. "sunset walk" only fits evening) —
 >   **slot-aware**, don't let a nightlife idea land in the morning. Every idea
 >   deep-links to a Maps search for it. A **Shuffle** button rerolls the seed.
+>
+> ### Before you go (the phase between "we locked it" and the airport)
+> On a locked plan, a "Before you go" checklist driven by days remaining:
+> passport validity at 90 days, visas at 75, booking at 60, insurance at 30,
+> final balance at 14, arrival details at 7 — each step says how far past
+> its usual point it is rather than just going red, with "who's booked"
+> chips per person. Passport/visa/insurance steps are skipped only for a
+> trip that is **known** to be domestic (compare countries; "Boston, MA" →
+> "New York, NY" is domestic, "London, UK" isn't). If anyone's home city is
+> unknown it's tri-state: show the border steps and name who can't be placed
+> — "we don't know" must never be treated as "domestic". When the plan
+> changes, clear the checklist ticks so a rescheduled trip doesn't read
+> "Everyone's booked." The smart itinerary inserts arrival/departure
+> bookends sized by the group's longest journey.
+>
+> ### Sync between devices (there is no shared database)
+> The invite link is the transport: its payload carries the event, the
+> roster (no emails), the locked plan, the ballot, the ledger and the
+> checklist flags. Participants send a **return link** back, and the app
+> must prompt them to ("Your answers are only on this device", opening the
+> share modal with participant-side wording). Merge rules, each of which was
+> a real data-loss bug:
+> - Per-record/per-key **newest-wins**, with incoming timestamps clamped to
+>   now + 5 min so one phone with a wrong clock can't freeze a row forever.
+> - Never let a merge clear a field the payload can't carry (emails), and
+>   never let an invite link wipe local progress.
+> - Match people by **id**. Fall back to name only to claim a row that was
+>   typed for someone and never filled in, or for old id-less links; keep the
+>   local id and record the incoming id as an alias. Two guests called Sam
+>   must stay two people.
+> - Bound everything a crafted link can make expensive (candidate
+>   generation once froze a tab for ~105 s), and escape everything that goes
+>   into the `.ics`.
+> - A notify ping (below) only says someone answered — the panel must say
+>   their answers arrive when they send their link back.
 >
 > ### Memory wall (post-event, gated)
 > - Hidden until a plan is locked; before the event start date shows a teaser
@@ -254,12 +346,13 @@ they were actually built, so a rebuild can follow the same path.
 >   `box-shadow`). An animated, subtle aurora background gradient behind the
 >   whole app.
 > - **Registration is a hero, not a form**: a gradient headline, a rotating
->   word in the tagline, and an **ambient flight animation** — a plane
->   following an SVG arc between two cities that **change randomly every
->   loop**. Draw a real **top-down airliner silhouette** (pointed nose, swept
->   delta wings, tail cone + rear stabilisers, a small cockpit-window accent) —
->   a generic arrow/chevron shape does not read as a plane; check this
->   visually before shipping it. The card containing the actual form pops in
+>   word in the tagline, and an ambient **convergence map** — several origins
+>   fanning into one destination hub, each traveller moving by the mode the
+>   cost model's own drive-or-fly function picks (on foot / road / flight;
+>   flights arc high, roads stay low), so the picture can never contradict a
+>   price. Travellers stay upright (a rotated car reads as a glitch). The
+>   plane is a real **top-down airliner silhouette**, not an arrow/chevron —
+>   check this visually before shipping it. The card containing the actual form pops in
 >   with a spring-ish entrance.
 > - Motion budget: screen fade-ups, staggered list-item entrances, score bars
 >   animating from 0 to their value (double-`requestAnimationFrame` so the
@@ -299,6 +392,18 @@ they were actually built, so a rebuild can follow the same path.
 >   `activate`, delete old-version caches. Cache-first during active
 >   development silently serves stale JS and wastes hours chasing phantom
 >   bugs — get this right from the very first commit, not as a later fix.
+>   Cache only `res.ok` responses (a cached 502 becomes the offline page);
+>   offline navigations fall back to the cached shell, other misses get a
+>   real 503; don't use atomic `addAll` for the shell.
+> - **Say "we don't know" instead of guessing.** Wherever a missing input
+>   (unknown city, unpriced place, unknown country) would otherwise default
+>   to a confident answer that decides something, make it tri-state and say
+>   who or what is unknown.
+> - **One rule, one copy.** The recurring bug across the review rounds was
+>   the same rule (who's coming, drive-or-fly, distance, is-it-local)
+>   implemented twice with one copy going stale. Put each rule in one engine
+>   function and call it from every site.
+> - Server: drain request bodies, release locks on every path, bound caches.
 >
 > ### Deliverables
 > Working files (`index.html`, `styles.css`, `data.js`, `engine.js`, `fares.js`,
@@ -318,7 +423,10 @@ they were actually built, so a rebuild can follow the same path.
   memory wall → RSVP/privacy → phone/LAN testing → weather/toolkit/itinerary/
   expenses → live geosuggest/flexible options/currency/Pro → flight-plane
   polish → Decide-landing UX fix → deployment-aware host/Render → the
-  confirm-step + cross-device notifications). A single mega-prompt like the
+  confirm-step + cross-device notifications), followed by ~45 commits of
+  multi-reviewer fix rounds (Aug 26–28 2026: engine tests, overlap windows,
+  lodging/season/occupancy, sync/merge hardening, treasurer ledger, ballot
+  sync, Before-you-go, convergence map). A single mega-prompt like the
   one above will very likely need the same kind of iteration in practice —
   treat it as a target to steer toward, not a one-shot spec.
 - The two gotchas called out explicitly above (`[hidden]` vs `display`, and
