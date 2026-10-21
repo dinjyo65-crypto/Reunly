@@ -15,7 +15,10 @@ Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla 
 - 2026-10-21: home city now works like a maps app — prefix suggestions via Photon (`/api/geosuggest?kind=city`), "City, State, Country" labels, pick required at registration, currency from the picked country; roster city fields hint when no country. Tests: `.qa/city.js` (9/9)
 
 ## In progress
-- **Real-device testing phase (user-led).** No code changes until feedback comes back. Testing steps below.
+- **Real-device testing phase (user-led).** Testing steps below.
+- **New registration hero animation** (Remotion project in `hero-animation/`, not yet committed or embedded). Two variants, 4 sample trips each, 1200×570, 9 s loops: flat convergence (`Convergence.tsx`) and rotating 3D globe (`Globe.tsx`, d3-geo + world-atlas, real coordinates, great-circle arcs, push-in finale). Preview: `cd hero-animation && npx remotion studio` (port 3001 here; port 3000 is taken by another local site, so `remotion still` needs `--port=3055`).
+  - Agreed plan: home screen = **looping videos** rendered from the chosen variant; once a destination is locked, the plan's journey map should show the group's actual trips (rebuild that one in the app's own JS, same look).
+  - Waiting on: user picks flat vs globe (or both), then render → embed.
 
 ## Testing steps (as an app)
 1. Render dashboard → service `reunly` → Events: confirm a deploy of `ff2be8d` finished (check which branch the service tracks; both branches are now identical). Open the `https://…onrender.com` URL. First load after idle can take ~30–60 s (free tier spins down).

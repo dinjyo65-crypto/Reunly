@@ -38,11 +38,14 @@
   <main class="app">
     <!-- ============ Screen: Register ============ -->
     <section class="screen active" id="screen-register">
-      <!-- Journey map: several travellers converging on one destination, each
-           moving by the mode their distance implies. Built by app.js
-           (buildJourneyMap) so the registration screen and the agreed plan use
-           exactly the same component. Purely decorative here. -->
-      <div class="flight-anim" aria-hidden="true"></div>
+      <!-- Hero: a group converging on one destination across a turning globe.
+           Pre-rendered loops (hero-animation/, Remotion) that app.js plays in
+           turn; the poster is the finale, shown as first paint and to anyone
+           who prefers reduced motion. Purely decorative. -->
+      <div class="hero-video" aria-hidden="true">
+        <video id="heroVideo" muted playsinline preload="none"
+               poster="media/hero-poster.jpg" disablepictureinpicture></video>
+      </div>
       <div class="hero">
         <div class="hero-badge">✦ When · where · how, sorted</div>
         <h1 class="hero-title">Get the group<br /><span class="grad">together.</span></h1>
@@ -185,7 +188,7 @@
       </div>
 
       <footer class="app-footer">
-        Reunly · making get-togethers effortless · prototype v0.7
+        Reunly · making get-togethers effortless · v8
       </footer>
     </section>
   </main>
@@ -281,6 +284,7 @@
   <script src="data.js"></script>
   <script src="engine.js"></script>
   <script src="fares.js"></script>
+  <script src="globe-land.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

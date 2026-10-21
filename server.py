@@ -26,6 +26,7 @@ import datetime
 import json
 import math
 import os
+import re
 import socket
 import threading
 import time
@@ -682,8 +683,67 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_media(self, path):
+        """Serve /media/* with byte-range support.
+
+        iOS Safari won't play a <video> unless the server answers Range
+        requests with 206, and SimpleHTTPRequestHandler ignores Range. Only
+        plain filenames inside media/ are served — no traversal.
+        """
+        name = os.path.basename(path)
+        full = os.path.join(DIRECTORY, "media", name)
+        if not name or name.startswith(".") or not os.path.isfile(full):
+            return self.send_error(404)
+        size = os.path.getsize(full)
+        ctype = {".mp4": "video/mp4", ".webm": "video/webm", ".jpg": "image/jpeg",
+                 ".png": "image/png"}.get(os.path.splitext(name)[1].lower())
+        if not ctype:
+            return self.send_error(404)
+        start, end = 0, size - 1
+        m = re.match(r"bytes=(\d*)-(\d*)$", self.headers.get("Range", "").strip())
+        partial = bool(m) and (m.group(1) or m.group(2))
+        if partial:
+            if m.group(1):
+                start = int(m.group(1))
+                if m.group(2):
+                    end = min(int(m.group(2)), size - 1)
+            else:  # suffix range: the last N bytes
+                start = max(0, size - int(m.group(2)))
+            if start > end or start >= size:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        length = end - start + 1
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(length))
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        with open(full, "rb") as f:
+            f.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(65536, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+
+    def do_HEAD(self):
+        if urllib.parse.urlparse(self.path).path.startswith("/media/"):
+            return self._send_media(urllib.parse.urlparse(self.path).path)
+        return super().do_HEAD()
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path.startswith("/media/"):
+            return self._send_media(parsed.path)
         if parsed.path == "/api/health":
             return self._send_json({
                 "ok": True,
@@ -700,6 +760,15 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 nights = 5
             return self._send_json(resolve_fare(frm, to, date, nights))
+        if parsed.path == "/api/geocode":
+            # Coordinates for the plan's journey globe. Same cached geocoder the
+            # fare path uses, so it adds no new upstream traffic pattern.
+            q = urllib.parse.parse_qs(parsed.query)
+            place = q.get("q", [""])[0][:120]
+            coord = coords_for(place) if place.strip() else None
+            if not coord:
+                return self._send_json({"lat": None, "lng": None})
+            return self._send_json({"lat": coord[0], "lng": coord[1]})
         if parsed.path == "/api/photo":
             q = urllib.parse.parse_qs(parsed.query)
             place = q.get("place", [""])[0]

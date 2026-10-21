@@ -1092,6 +1092,12 @@
     document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"));
     $(`#screen-${id}`).classList.add("active");
     $("#restartBtn").hidden = id === "register";
+    // The hero video only belongs to the registration screen.
+    const hero = $("#heroVideo");
+    if (hero && hero.src) {
+      if (id === "register") hero.play().catch(() => {});
+      else hero.pause();
+    }
     window.scrollTo(0, 0);
   }
 
@@ -5095,7 +5101,7 @@
     registerServiceWorker();
     updateCurrencyToggle();
     startRotator();
-    startFlight();
+    startHeroVideo();
     initTheme();
 
     // Boot precedence: peek at BOTH a shared invite link and any saved local
@@ -5376,33 +5382,228 @@
     return String(name || "").split(",")[0].trim();
   }
 
-  // The registration screen has no group yet, so it borrows a plausible one and
-  // rotates it. Same component, so what a visitor sees before signing up is the
-  // same thing they'll see with their own friends in it.
-  const SAMPLE_TRIPS = [
-    { dest: "Goa, India", from: ["London, UK", "Dubai, UAE", "Mumbai, India", "Pune, India", "Singapore"] },
-    { dest: "Bali, Indonesia", from: ["Sydney, Australia", "Singapore", "Hong Kong", "Bangkok, Thailand"] },
-    { dest: "Paris, France", from: ["London, UK", "New York, NY", "Dubai, UAE", "Manchester, UK"] },
-    { dest: "New York, NY", from: ["Boston, MA", "Chicago, IL", "London, UK", "Washington, DC"] },
-  ];
-  let sampleIdx = Math.floor(Math.random() * SAMPLE_TRIPS.length);
-  function startFlight() {
-    const host = document.querySelector(".flight-anim");
-    if (!host) return;
-    const draw = () => {
-      const trip = SAMPLE_TRIPS[sampleIdx % SAMPLE_TRIPS.length];
-      sampleIdx += 1;
-      const map = buildJourneyMap(trip.from.map((c) => ({ city: c })), trip.dest);
-      host.textContent = "";
-      if (map) host.appendChild(map);
-    };
-    draw();
-    // Rotate only while the tab is visible and motion is welcome; a background
-    // tab firing a timer forever is the kind of thing that drains a phone.
+  // Registration hero: four pre-rendered globe loops (hero-animation/), played
+  // one after another. Bali first, because the poster is Bali's finale.
+  const HERO_TRIPS = ["bali", "goa", "paris", "newyork"];
+  function startHeroVideo() {
+    const video = $("#heroVideo");
+    if (!video) return;
+    // Reduced motion: the poster — everyone arrived — tells the story still.
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    setInterval(() => {
-      if (document.visibilityState === "visible" && host.isConnected) draw();
-    }, 9000);
+    // H.264 MP4 only: it decodes everywhere (iOS included) at ~0.6 MB a loop.
+    // The VP9 WebM render failed to decode in Chrome, so it isn't shipped.
+    const ext = "mp4";
+    const onRegister = () => $("#screen-register").classList.contains("active");
+    let i = 0;
+    const load = () => {
+      video.src = `media/hero-${HERO_TRIPS[i % HERO_TRIPS.length]}.${ext}`;
+      video.play().catch(() => {}); // autoplay refused: the poster stays up
+    };
+    // Fetch the next clip only when this one ends, so a visitor downloads one
+    // ~0.5 MB loop up front rather than all four.
+    video.addEventListener("ended", () => {
+      i += 1;
+      if (onRegister() && document.visibilityState === "visible") load();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") video.pause();
+      else if (onRegister() && video.src) video.play().catch(() => {});
+    });
+    if (onRegister()) load();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Journey globe: the group's actual trips on a dot-matrix Earth (locked plan)
+  // ---------------------------------------------------------------------------
+  // Same look as the hero video, drawn live from the group's real cities. Land
+  // is pre-sampled points (globe-land.js) projected with plain maths: the app
+  // has no build step and a script-src 'self' CSP, so no mapping library.
+
+  const RAD = Math.PI / 180;
+  const geoCache = new Map(); // lowercased city -> [lon, lat] | null
+
+  function knownCoords(city) {
+    const key = String(city || "").trim().toLowerCase();
+    if (geoCache.has(key)) return geoCache.get(key);
+    const c = D.CITY_COORDS[E.resolveCity(city)];
+    if (c) {
+      geoCache.set(key, [c.lng, c.lat]);
+      return geoCache.get(key);
+    }
+    return undefined; // not known yet (null would mean "looked up, not found")
+  }
+
+  async function coordsFor(city) {
+    const known = knownCoords(city);
+    if (known !== undefined) return known;
+    const key = String(city || "").trim().toLowerCase();
+    try {
+      const r = await fetch(`/api/geocode?q=${encodeURIComponent(city)}`);
+      const d = await r.json();
+      geoCache.set(key, Number.isFinite(d.lat) && Number.isFinite(d.lng) ? [d.lng, d.lat] : null);
+    } catch (e) {
+      return null; // offline: don't cache the failure, try again next render
+    }
+    return geoCache.get(key);
+  }
+
+  const toVec = ([lon, lat]) => [
+    Math.cos(lat * RAD) * Math.cos(lon * RAD),
+    Math.cos(lat * RAD) * Math.sin(lon * RAD),
+    Math.sin(lat * RAD),
+  ];
+  const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+  // Point at fraction t along the great circle from a to b (unit vectors).
+  function slerp(a, b, t) {
+    const omega = Math.acos(Math.min(1, Math.max(-1, dot3(a, b))));
+    if (omega < 1e-6) return a;
+    const s = Math.sin(omega);
+    const k1 = Math.sin((1 - t) * omega) / s;
+    const k2 = Math.sin(t * omega) / s;
+    return [a[0] * k1 + b[0] * k2, a[1] * k1 + b[1] * k2, a[2] * k1 + b[2] * k2];
+  }
+
+  /**
+   * Build the journey globe. `trips` is [{ name, city, coord, mode }], `dest`
+   * is { name, coord }. Returns an SVG element.
+   */
+  function buildJourneyGlobe(trips, dest) {
+    const W = 400;
+    const H = 210;
+    const R = 92;
+    const C = { x: 178, y: H / 2 };
+
+    // Look at the group: the destination counts double so it sits near the middle.
+    const dv = toVec(dest.coord);
+    const sum = trips.reduce((s, t) => {
+      const v = toVec(t.coord);
+      return [s[0] + v[0], s[1] + v[1], s[2] + v[2]];
+    }, [dv[0] * 2, dv[1] * 2, dv[2] * 2]);
+    const len = Math.hypot(...sum) || 1;
+    const centre = sum.map((x) => x / len);
+    const lon0 = Math.atan2(centre[1], centre[0]);
+    const lat0 = Math.asin(centre[2]) * 0.8; // tilt a little less than fully
+    const east = [-Math.sin(lon0), Math.cos(lon0), 0];
+    const north = [-Math.sin(lat0) * Math.cos(lon0), -Math.sin(lat0) * Math.sin(lon0), Math.cos(lat0)];
+    const view = [Math.cos(lat0) * Math.cos(lon0), Math.cos(lat0) * Math.sin(lon0), Math.sin(lat0)];
+    const project = (v, h = 0) => {
+      const x = C.x + R * (1 + h) * dot3(v, east);
+      const y = C.y - R * (1 + h) * dot3(v, north);
+      const z = dot3(v, view);
+      return { x, y, z, visible: z > 0 || Math.hypot(x - C.x, y - C.y) > R };
+    };
+
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    svg.setAttribute("aria-hidden", "true");
+    svg.classList.add("jg");
+    const mk = (tag, attrs, parent = svg) => {
+      const n = document.createElementNS(SVG_NS, tag);
+      for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+      parent.appendChild(n);
+      return n;
+    };
+    const uid = `jg${Math.random().toString(36).slice(2, 8)}`; // ids must be unique per page
+    const defs = mk("defs", {});
+    const ocean = mk("radialGradient", { id: `${uid}o`, cx: "38%", cy: "32%", r: "75%" }, defs);
+    [["0%", "#17204a"], ["55%", "#0b1130"], ["100%", "#050812"]].forEach(([o, c]) =>
+      mk("stop", { offset: o, "stop-color": c }, ocean)
+    );
+
+    mk("circle", { class: "jg-atmo", cx: C.x, cy: C.y, r: R + 7 });
+    mk("circle", { cx: C.x, cy: C.y, r: R, fill: `url(#${uid}o)` });
+
+    // Land dots in three depth bands, so the limb fades like a lit sphere.
+    const bands = ["", "", ""];
+    (window.ReunlyLand || []).forEach((ll) => {
+      const p = project(toVec(ll));
+      if (p.z <= 0.04) return;
+      const b = p.z > 0.6 ? 2 : p.z > 0.3 ? 1 : 0;
+      bands[b] += `M${p.x.toFixed(1)} ${p.y.toFixed(1)}h0`;
+    });
+    bands.forEach((d, b) => {
+      if (d) mk("path", { class: `jg-land jg-land-${b}`, d });
+    });
+
+    const hub = project(dv);
+    const labelled = new Set(); // two people from one city share one label
+    trips.forEach((t, i) => {
+      const a = toVec(t.coord);
+      const arc = Math.acos(Math.min(1, Math.max(-1, dot3(a, dv)))); // angle in radians
+      const alt = t.mode === "flight" ? Math.min(0.28, 0.05 + arc * 0.2) : 0.01;
+      // Sample the arc; break it where it passes behind the globe.
+      let seen = "";
+      let full = "";
+      let pen = false;
+      for (let k = 0; k <= 40; k++) {
+        const s = k / 40;
+        const p = project(slerp(a, dv, s), alt * Math.sin(Math.PI * s));
+        full += `${k ? "L" : "M"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
+        if (!p.visible) {
+          pen = false;
+          continue;
+        }
+        seen += `${pen ? "L" : "M"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`;
+        pen = true;
+      }
+      const o = project(a);
+      // Gold at home → pink on arrival, whichever way the route points.
+      const g = mk("linearGradient", {
+        id: `${uid}r${i}`, gradientUnits: "userSpaceOnUse",
+        x1: o.x, y1: o.y, x2: hub.x, y2: hub.y,
+      }, defs);
+      [["0%", "#fcd34d"], ["55%", "#a855f7"], ["100%", "#ec4899"]].forEach(([off, c]) =>
+        mk("stop", { offset: off, "stop-color": c }, g)
+      );
+      mk("path", { class: "jg-route", d: seen, stroke: `url(#${uid}r${i})` });
+
+      const place = shortPlace(t.city);
+      if (o.visible && !labelled.has(place)) {
+        labelled.add(place);
+        mk("circle", { class: "jg-origin", cx: o.x, cy: o.y, r: 2.8 });
+        const left = o.x <= hub.x;
+        const label = mk("text", {
+          class: "jg-label",
+          x: left ? o.x - 6 : o.x + 6,
+          y: o.y + 3.2,
+          "text-anchor": left ? "end" : "start",
+        });
+        label.textContent = place;
+      }
+
+      const glyph = mk("text", { class: "jm-mover", x: 0, y: 0 });
+      glyph.textContent = TRAVEL_MODES[t.mode].glyph;
+      glyph.style.offsetPath = `path("${full}")`;
+      glyph.style.animationDelay = `${(i * 0.55).toFixed(2)}s`;
+    });
+
+    mk("circle", { class: "jm-hub-ring", cx: hub.x, cy: hub.y, r: 11 });
+    mk("circle", { class: "jg-hub", cx: hub.x, cy: hub.y, r: 5 });
+    const destLabel = mk("text", { class: "jg-dest", x: 300, y: H / 2 - 4, "text-anchor": "middle" });
+    destLabel.textContent = `${D.cityEmoji(dest.name)} ${shortPlace(dest.name)}`;
+    return svg;
+  }
+
+  // Swap the flat map for the globe once every city has coordinates. The flat
+  // map renders instantly and stays as the fallback if a lookup fails.
+  async function upgradeToGlobe(flat, goers, destination) {
+    if (!window.ReunlyLand) return;
+    const people = goers.slice(0, 6);
+    const [destCoord, ...coords] = await Promise.all(
+      [destination, ...people.map((p) => p.city)].map(coordsFor)
+    );
+    if (!destCoord || !flat.isConnected) return;
+    const trips = people
+      .map((p, k) => ({
+        city: p.city,
+        coord: coords[k],
+        mode: travelModeFor(p.city, destination, p.prefs) === "drive" ? "drive" : "flight",
+      }))
+      .filter((t) => t.coord);
+    if (!trips.length) return;
+    flat.replaceWith(buildJourneyGlobe(trips, { name: destination, coord: destCoord }));
   }
 
   // The real thing: this group, their actual cities, converging on the plan.
@@ -5413,6 +5614,7 @@
     if (!map) return;
     const wrap = el("div", { class: "journey-map" });
     wrap.appendChild(map);
+    upgradeToGlobe(map, goers, plan.destination);
     // Count by mode rather than listing them. "3 flying · 1 driving" says
     // something about the group; "flying and by road and on foot" was clumsy
     // and told you nothing about how many people face each journey.

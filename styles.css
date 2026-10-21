@@ -975,11 +975,48 @@ a:focus-visible {
 }
 #phoneUrl { font-size: 0.82rem; color: var(--text); text-align: center; font-weight: 650; }
 
+/* ---- Registration hero: pre-rendered globe loops ---- */
+/* The video bakes in the dark #080b16 scene, so it sits in its own rounded
+   card: on the light theme it reads as a window onto the globe rather than a
+   dark slab floating on white. Aspect matches the 1200x570 render. */
+.hero-video {
+  margin: 8px 0 4px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  aspect-ratio: 1200 / 570;
+  background: #080b16 url("media/hero-poster.jpg") center / cover no-repeat;
+  box-shadow: var(--shadow);
+}
+.hero-video video { width: 100%; height: 100%; display: block; object-fit: cover; }
+
 /* ---- Journey map: everyone converging on one destination ---- */
-.flight-anim { position: relative; height: 150px; margin: 8px 0 -6px; }
 .journey-map { margin: 14px 0 2px; }
-.flight-anim svg, .journey-map svg { width: 100%; height: 100%; overflow: visible; display: block; }
-.journey-map svg { height: 168px; }
+.journey-map svg { width: 100%; height: 168px; overflow: visible; display: block; }
+
+/* The plan's globe: same dark scene as the hero, in both themes, so its light
+   labels always have contrast. */
+.journey-map svg.jg {
+  height: auto;
+  aspect-ratio: 400 / 210;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: radial-gradient(ellipse at 45% 50%, #0c1122 0%, #080b16 70%);
+}
+.jg-atmo { fill: rgba(99, 102, 241, 0.22); filter: blur(6px); }
+.jg-land { fill: none; stroke: #a5b4fc; stroke-width: 2.1; stroke-linecap: round; }
+.jg-land-0 { stroke-opacity: 0.18; }
+.jg-land-1 { stroke-opacity: 0.32; }
+.jg-land-2 { stroke-opacity: 0.5; }
+.jg-route { fill: none; stroke-width: 2; stroke-linecap: round; }
+.jg-origin { fill: #fcd34d; }
+.jg-hub { fill: #ec4899; }
+.jg .jm-hub-ring { stroke: #ec4899; }
+.jg-label, .jg-dest {
+  fill: #eef1f8; font-family: inherit; font-weight: 650;
+  paint-order: stroke fill; stroke: rgba(8, 11, 22, 0.85); stroke-width: 3px;
+}
+.jg-label { font-size: 11.5px; }
+.jg-dest { font-size: 15px; font-weight: 800; }
 
 .jm-arc { stroke: var(--border-strong); stroke-width: 1.6; stroke-dasharray: 3 6;
   stroke-linecap: round; opacity: 0.75; }

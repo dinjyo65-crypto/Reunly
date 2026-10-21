@@ -9,13 +9,14 @@
  * Bump CACHE_VERSION whenever shell files change.
  */
 
-const CACHE_VERSION = "reunly-v32";
+const CACHE_VERSION = "reunly-v34";
 const SHELL = [
   "index.html",
   "styles.css",
   "data.js",
   "engine.js",
   "fares.js",
+  "globe-land.js",
   "app.js",
   "manifest.json",
   "icon.svg",
@@ -56,6 +57,9 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== "GET" || url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api/")) return; // fares stay live
+  // Video is fetched in byte ranges (206), which the Cache API can't store;
+  // let the browser stream it straight from the network.
+  if (url.pathname.startsWith("/media/")) return;
 
   const isNavigation =
     event.request.mode === "navigate" || event.request.destination === "document";
