@@ -4335,9 +4335,7 @@
     }
 
     // Tally.
-    const counts = {};
-    let totalVotes = 0;
-    ({ counts, totalVotes } = E.tallyBallot(state.participants, b));
+    const { counts, totalVotes } = E.tallyBallot(state.participants, b);
     const myVote = state.me ? (b.votesByParticipant[state.me] || {}).optionId : null;
     const ordered = [...b.options].sort(
       (a, c) => (counts[c.id] || 0) - (counts[a.id] || 0) || c.seedTotal - a.seedTotal
