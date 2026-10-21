@@ -570,7 +570,7 @@ test("a parent with kids is costed for the whole party", () => {
   const family = E.tripCostFor("London, UK", "Goa, India", dates, fares, { kids: 2 });
   assert.strictEqual(solo.party, 1);
   assert.strictEqual(family.party, 3);
-  assert.strictEqual(family.travel, solo.travel * 3, "three seats, not one");
+  assert.ok(Math.abs(family.travel - solo.travel * 3) < 0.01, "three seats, not one");
   assert.ok(family.lodging > solo.lodging, "a bigger room costs more");
   assert.ok(family.total > solo.total * 2, "a family of three is not a rounding error");
 });
@@ -878,9 +878,36 @@ test("a long-haul journey counts more than time in the air", () => {
   assert.ok(E.journeyHours(goaBali) > E.flightTimeHours(goaBali) + 4,
     "airport time and a connection must be counted on a 3,000-mile route");
   assert.ok(E.journeyHours(goaBali) > 12, "Goa-Bali is a whole day, not 7 hours");
-  // Short hops stay short — the day-trip case must not be vetoed.
+  // Short hops stay short — the day-trip case must not be vetoed. Real road
+  // distance (~1.3x the straight line) puts Boston-NYC at 4-5 hours.
   const shortHop = E.distanceMiles("Boston, MA", "New York, NY");
-  assert.ok(E.journeyHours(shortHop) < 4, "a 190-mile drive is still a morning");
+  const bos = E.journeyHours(shortHop, E.roadProfile("Boston, MA", "New York, NY"));
+  assert.ok(bos > 4 && bos < 5.5, `a 190-mile drive is half a day, not 3 hours (got ${bos})`);
+});
+
+test("a long, slow road trip isn't passed off as a quick drive", () => {
+  // Straight-line miles at highway speed made Mumbai-Goa a 4h16m drive and
+  // threw away the real flight fare. It's ~365 road miles and 10-12 hours.
+  const from = "Mumbai, India", to = "Goa, India";
+  const miles = E.distanceMiles(from, to);
+  const road = E.roadProfile(from, to);
+  assert.ok(E.driveTimeHours(miles, road) > 10, "India's roads are slow");
+  const f = E.estimateFare(miles);
+  assert.strictEqual(E.chooseTravel(miles, (f.min + f.max) / 2, 2, road).mode, "flight");
+});
+
+test("a trivial saving doesn't beat what the group chose", () => {
+  // 8 of 9 picked Lisbon; one person's Porto won for being 2% cheaper,
+  // because cost was stretched min-to-max and carries 40% of the score.
+  const mk = (id, dest) => ({
+    id, name: id, email: "", city: "London, UK",
+    dates: [{ start: "2027-05-07", end: "2027-05-10" }],
+    destinations: [dest], prefs: {}, rsvp: "in",
+  });
+  const people = [...Array.from({ length: 8 }, (_, i) => mk("p" + i, "Lisbon, Portugal")), mk("g", "Porto, Portugal")];
+  const fares = (from, to) => (/Porto/.test(to) ? { min: 230, max: 250, source: "searched", miles: 900 } : { min: 236, max: 256, source: "searched", miles: 980 });
+  const ranked = E.rankCombinations(people, undefined, fares);
+  assert.match(ranked[0].destination, /Lisbon/);
 });
 
 test("a window straddling a peak is priced for the nights it actually covers", () => {
@@ -966,8 +993,20 @@ test("prep urgency reflects how close the trip is", () => {
   const close = E.prepStepsFor(43, true);
   const passport = close.find((s) => s.id === "passport");
   assert.strictEqual(passport.urgency, "overdue", "90-day passport check is past at 43 days");
+  // Insurance is due WITH the booking (cover starts the day you buy it).
   const insurance = close.find((s) => s.id === "insurance");
-  assert.strictEqual(insurance.urgency, "soon", "30-day insurance step is due about now");
+  assert.strictEqual(insurance.urgency, "overdue", "insurance goes with the 60-day booking");
+  const permit = close.find((s) => s.id === "entry-permit");
+  assert.strictEqual(permit.urgency, "soon", "30-day entry permit is due about now");
+});
+
+test("booking lead time follows the season and the border", () => {
+  // 60 days is late for long-haul at Christmas and early for a domestic trip.
+  const book = (intl, peak) => E.prepStepsFor(100, intl, { peak }).find((s) => s.id === "book-travel");
+  assert.strictEqual(book(true, true).byDays, 150);
+  assert.strictEqual(book(true, false).byDays, 60);
+  assert.strictEqual(book(false, false).byDays, 45);
+  assert.strictEqual(book(true, true).urgency, "overdue", "100 days out is too late for a peak long-haul booking");
 });
 
 // ---- People who declined must not shape the trip ---------------------------
@@ -1109,10 +1148,12 @@ test("one extra mile doesn't triple a family's travel cost", () => {
 test("a family drives where a lone traveller flies", () => {
   // The choice depends on how many people are in the car, which is why a single
   // distance threshold could never be right.
-  const f = E.estimateFare(500);
+  // 250 miles is ~6.5 h on the road: borderline, which is exactly where party
+  // size should decide it. (At 500 miles — 13 h — everyone flies.)
+  const f = E.estimateFare(250);
   const mid = (f.min + f.max) / 2;
-  assert.strictEqual(E.chooseTravel(500, mid, 1).mode, "flight", "one seat is cheaper than the fuel");
-  assert.strictEqual(E.chooseTravel(500, mid, 4).mode, "drive", "four seats are not");
+  assert.strictEqual(E.chooseTravel(250, mid, 1).mode, "flight", "one seat is cheaper than the fuel");
+  assert.strictEqual(E.chooseTravel(250, mid, 4).mode, "drive", "four seats are not");
   // Beyond road range nobody drives, however big the party.
   assert.strictEqual(E.chooseTravel(3000, mid, 6).mode, "flight");
 });

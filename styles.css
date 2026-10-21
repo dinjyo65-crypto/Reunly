@@ -984,7 +984,7 @@ a:focus-visible {
   border-radius: var(--radius);
   overflow: hidden;
   aspect-ratio: 1200 / 570;
-  background: #080b16 url("media/hero-poster.jpg") center / cover no-repeat;
+  background: #080b16; /* the video element shows the poster itself */
   box-shadow: var(--shadow);
 }
 .hero-video video { width: 100%; height: 100%; display: block; object-fit: cover; }
@@ -1129,3 +1129,14 @@ a:focus-visible {
 .settle-btn { flex: 0 0 auto; }
 /* Each person's all-in figure on the Costs tab */
 .cost-allin { margin-top: 6px; font-size: 0.85rem; font-weight: 650; color: var(--text); }
+
+/* ---- Invite landing: who asked, and to what ---- */
+.invite-banner {
+  margin: 10px 0 4px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--grad-soft);
+  border: 1px solid var(--border-strong);
+}
+.invite-banner-title { font-weight: 750; font-size: 0.95rem; color: var(--text); }
+.invite-banner-sub { margin-top: 3px; font-size: 0.8rem; color: var(--text-dim); }

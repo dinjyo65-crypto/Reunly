@@ -101,6 +101,9 @@
 
   /** Tunable weights. Kept as named constants so they're easy to retune. */
   const WEIGHTS = { date: 0.3, destination: 0.3, cost: 0.4 };
+  // Trip costs within this fraction of the cheapest option score as equally
+  // cheap, so a trivial saving can't override what the group asked for.
+  const COST_TOLERANCE = 0.1;
 
   /**
    * Points awarded by preference rank (index 0 = 1st choice). Now that people
@@ -151,9 +154,31 @@
   const ROAD_MAX = 700;
   const DRIVE_COST_PER_MILE = 0.34; // round-trip fuel and tolls, per vehicle
 
+  /**
+   * Roads are longer than the straight line, and much slower in some regions.
+   * Driving straight-line miles at highway speed made Mumbai→Goa a 4h16m drive
+   * (it's ~365 road miles and 10-12 h), which then displaced the real flight
+   * fare for a family with a child. Coarse on purpose: two profiles, chosen by
+   * whether either end is somewhere with slow roads.
+   */
+  const SLOW_ROADS = new Set(["in", "id", "th", "vn", "ph", "my", "lk", "np", "bd", "kh"]);
+  const DEFAULT_ROAD = { factor: 1.3, mph: 50 };
+  const SLOW_ROAD = { factor: 1.45, mph: 30 };
+  // One way. Beyond this a group flies if it can — nobody plans a reunion
+  // around a seven-hour drive each way just because it's cheaper.
+  const MAX_DRIVE_HOURS = 6;
+  // Past that limit each extra hour behind the wheel is costed per person,
+  // each way, rather than switching to flights at a hard line: a hard switch
+  // brings back the cost cliff where one extra mile can triple a family's
+  // fare and reorder the ranking.
+  const LONG_DRIVE_COST_PER_HOUR = 40;
+  function roadProfile(fromCity, toCity) {
+    return [fromCity, toCity].some((c) => SLOW_ROADS.has(countryOf(c))) ? SLOW_ROAD : DEFAULT_ROAD;
+  }
+
   /** What it costs to drive a party there and back. Per car, not per head. */
-  function driveCostFor(miles) {
-    return miles * DRIVE_COST_PER_MILE;
+  function driveCostFor(miles, road = DEFAULT_ROAD) {
+    return miles * road.factor * DRIVE_COST_PER_MILE;
   }
 
   /**
@@ -171,7 +196,7 @@
    * is what a real group does. A family of four still drives 500 miles; a lone
    * traveller flies it.
    */
-  function chooseTravel(miles, fareMid, party) {
+  function chooseTravel(miles, fareMid, party, road = DEFAULT_ROAD) {
     const heads = Math.max(1, party);
     const flying = { mode: "flight", cost: fareMid * heads };
     // Unknown distance must not become a free trip. Only a genuine zero — the
@@ -180,8 +205,13 @@
     if (miles === 0) return { mode: "local", cost: 0 };
     if (miles == null || !Number.isFinite(miles) || miles < 0) return flying;
     if (miles > ROAD_MAX) return flying;
-    const driving = { mode: "drive", cost: driveCostFor(miles) };
-    if (miles <= DRIVE_MILES) return driving;
+    const overHours = Math.max(0, driveTimeHours(miles, road) - MAX_DRIVE_HOURS);
+    const driving = {
+      mode: "drive",
+      cost: driveCostFor(miles, road) + overHours * LONG_DRIVE_COST_PER_HOUR * heads * 2,
+    };
+    // Cheaper wins at every distance. Forcing a drive under 300 miles kept
+    // Mumbai→Goa (256 straight-line miles, 10-12 h on the road) as a car trip.
     return driving.cost <= flying.cost ? driving : flying;
   }
 
@@ -189,10 +219,12 @@
     if (miles == null) return null;
     if (miles === 0) return { min: 0, max: 0, mode: "local" };
     const driving = miles <= DRIVE_MILES;
-    // Fuel and tolls for the round trip, per car — no booking or airport
-    // overhead, because a road trip doesn't have any.
-    const base = driving ? 0 : 60;
-    const perMile = driving ? 0.34 : 0.2; // round-trip fuel+tolls vs airfare
+    // Always the price of a seat (mirrors server.py estimate_fare).
+    // chooseTravel prices the car separately, per vehicle, on real road miles;
+    // returning fuel money here made a short flight cost a tank of petrol
+    // whenever the drive itself was ruled out as too long.
+    const base = 60;
+    const perMile = 0.2;
     const near = Math.min(miles, 600) * perMile;
     const far = Math.max(0, miles - 600) * 0.11; // beyond: ~$0.11/mi
     const mid = base + near + far;
@@ -307,13 +339,60 @@
   ]);
 
   /** Which pricing band a single calendar day falls in, at a destination. */
-  function seasonBandFor(iso, southern = false) {
+  /**
+   * Places whose seasons don't follow a temperate summer. The generic model
+   * gave Goa's monsoon — its cheapest months — a "summer peak", missed Bali's
+   * July-August peak and Goa's Nov-Feb high season, and called July in Dubai
+   * (cheapest hotels of the year) peak. Lodging multipliers by month; fares
+   * move less than rooms, so they take 60% of the swing.
+   */
+  const DEST_SEASONS = {
+    goa: {
+      months: { 11: 1.3, 12: 1.3, 1: 1.3, 2: 1.3, 6: 0.7, 7: 0.7, 8: 0.7, 9: 0.7 },
+      high: "Goa high season", low: "monsoon low season", xmasLodging: 2.2,
+    },
+    bali: { months: { 7: 1.3, 8: 1.3 }, high: "Bali peak season", low: null },
+    dubai: {
+      months: { 6: 0.7, 7: 0.7, 8: 0.7, 11: 1.2, 12: 1.2, 1: 1.2, 2: 1.2, 3: 1.2 },
+      high: "winter high season", low: "summer low season", xmasLodging: 2.2,
+    },
+    thailand: {
+      months: { 11: 1.2, 12: 1.2, 1: 1.2, 2: 1.2, 5: 0.85, 6: 0.85, 7: 0.85, 8: 0.85, 9: 0.85, 10: 0.85 },
+      high: "cool-season peak", low: "rainy low season",
+    },
+  };
+  function seasonProfileFor(destination) {
+    const name = String(destination || "").toLowerCase();
+    const country = countryOf(destination);
+    if (/\bgoa\b/.test(name)) return "goa";
+    if (/\bbali\b/.test(name)) return "bali";
+    if (country === "ae" || /\bdubai\b/.test(name)) return "dubai";
+    if (country === "th") return "thailand";
+    return null;
+  }
+
+  function seasonBandFor(iso, southern = false, profile = null) {
     const md = iso.slice(5); // "MM-DD"
     const month = Number(iso.slice(5, 7));
     const day = Number(iso.slice(8, 10));
-    // Christmas / New Year: the sharpest, most reliable spike worldwide.
+    const local = profile ? DEST_SEASONS[profile] : null;
+    // Christmas / New Year: the sharpest, most reliable spike worldwide —
+    // and 2-3x on rooms in the winter-sun destinations.
     if ((month === 12 && day >= 18) || (month === 1 && day <= 5)) {
-      return { fare: 1.35, lodging: 1.5, label: "Christmas & New Year peak" };
+      return {
+        fare: 1.35,
+        lodging: (local && local.xmasLodging) || 1.5,
+        label: "Christmas & New Year peak",
+      };
+    }
+    if (local) {
+      const m = local.months[month] || 1;
+      if (m === 1) return { fare: 1, lodging: 1, label: null };
+      return {
+        fare: 1 + (m - 1) * 0.6,
+        lodging: m,
+        label: m > 1 ? local.high : local.low,
+      };
     }
     // Summer holidays. July in Sydney, Cape Town or Buenos Aires is LOW season,
     // and asserting a peak there inflated the absolute figure the budget check
@@ -361,7 +440,8 @@
     const southern = coords
       ? coords.lat < 0
       : SOUTHERN_COUNTRIES.has(countryOf(destination));
-    const cacheKey = `${dateRange.start}|${dateRange.end}|${southern ? "s" : "n"}`;
+    const profile = destination ? seasonProfileFor(destination) : null;
+    const cacheKey = `${dateRange.start}|${dateRange.end}|${southern ? "s" : "n"}|${profile || ""}`;
     const hit = seasonCache.get(cacheKey);
     if (hit) return hit;
     const start = Date.parse(dateRange.start + "T00:00:00Z");
@@ -375,7 +455,7 @@
     let peakDays = 0;
     const labels = new Map();
     for (let t = start; t <= end && days < 400; t += 86400000) {
-      const band = seasonBandFor(new Date(t).toISOString().slice(0, 10), southern);
+      const band = seasonBandFor(new Date(t).toISOString().slice(0, 10), southern, profile);
       fare += band.fare;
       lodging += band.lodging;
       days += 1;
@@ -423,12 +503,14 @@
    * is 14-17 hours. It is not only a label — the same number gates trip
    * viability and decides how much of the first and last day to write off.
    */
-  function journeyHours(miles) {
+  function journeyHours(miles, road = DEFAULT_ROAD) {
     if (miles == null || miles <= 0) return 0;
-    if (miles <= DRIVE_MILES) return driveTimeHours(miles);
     const byAir = flightTimeHours(miles);
-    // Below ~600mi driving is usually still quicker door to door.
-    if (miles <= 600) return Math.min(driveTimeHours(miles), byAir + GROUND_HOURS);
+    const byRoad = driveTimeHours(miles, road);
+    // A drive within the one-way limit is the journey; past it, people fly.
+    if (miles <= DRIVE_MILES) return byRoad <= MAX_DRIVE_HOURS ? byRoad : byAir + GROUND_HOURS;
+    // Below ~600mi driving is sometimes still quicker door to door.
+    if (miles <= 600) return Math.min(byRoad, byAir + GROUND_HOURS);
     // Getting to the airport, checking in, security, and the same at the far
     // end. Beyond ~2,000mi assume a connection too: most such city pairs have
     // no nonstop, and the ones that do are the exception we'd rather
@@ -548,7 +630,7 @@
     // ended up silently dead in normal operation once before.
     const miles = f.miles != null ? f.miles : distanceMiles(fromCity, destination);
     // (Same resolution as milesBetween, with the fare already in hand.)
-    const chosen = chooseTravel(miles, (f.min + f.max) / 2, party);
+    const chosen = chooseTravel(miles, (f.min + f.max) / 2, party, roadProfile(fromCity, destination));
     const driving = chosen.mode === "drive";
     const travel = chosen.cost * fareSeason;
     // Nights = nights slept, so one fewer than the inclusive day count.
@@ -632,10 +714,10 @@
     return 0.75 + miles / 500;
   }
 
-  /** Rough drive time (hrs) at ~60 mph average. */
-  function driveTimeHours(miles) {
+  /** Rough drive time (hrs): road distance at the region's average speed. */
+  function driveTimeHours(miles, road = DEFAULT_ROAD) {
     if (miles == null) return null;
-    return miles / 60;
+    return (miles * road.factor) / road.mph;
   }
 
   /** Format an hours value as "2h 15m". */
@@ -1111,7 +1193,10 @@
           // is actually asked to find.
           maxBookingCost: perBooking.length ? Math.max(...perBooking) : null,
           viability, minNights: required,
-          season: seasonFactorFor(dateRange).label,
+          // With the destination, so a place's own seasons apply (Goa's
+          // monsoon is low season, not a temperate "summer peak").
+          season: seasonFactorFor(dateRange, dest).label,
+          seasonCheaper: seasonFactorFor(dateRange, dest).lodging < 1,
         });
       }
     }
@@ -1146,8 +1231,16 @@
           c.relCostScore = 0.5;
           c.costUnknown = true;
         }
-        else if (costSpread === 0) c.relCostScore = 1; // nothing to compare against
-        else c.relCostScore = 1 - (c.avgTripCost - minCost) / costSpread;
+        else if (costSpread === 0 || minCost <= 0) c.relCostScore = 1; // nothing to compare against
+        // Relative to the cheapest, with a tolerance — not stretched min-to-max.
+        // Stretching made any gap, however small, the full 0..1 range: with 8
+        // of 9 people choosing Lisbon, one person's Porto won because it was
+        // £12 (2%) cheaper and cost carries 40% of the score. Within 10% of the
+        // cheapest counts as equally cheap; the score reaches 0 at +70%.
+        else {
+          const over = c.avgTripCost / minCost - 1;
+          c.relCostScore = Math.max(0, Math.min(1, 1 - (over - COST_TOLERANCE) / 0.6));
+        }
       }
     }
     for (const c of draft) {
@@ -1363,29 +1456,45 @@
     {
       id: "book-travel",
       byDays: 60,
+      booking: true, // moves with the season and distance — see prepStepsFor
       title: "Book flights or transport",
       detail: "Prices climb closer in, and the group loses the option of sitting together.",
     },
     {
       id: "book-stay",
       byDays: 60,
+      booking: true,
       title: "Book the accommodation",
       detail: "Confirm who is paying the deposit and how they get repaid.",
     },
     {
+      // Due WITH the booking, not 30 days out: cancellation cover only
+      // protects you from the day it starts, which this step's own text said.
       id: "insurance",
-      byDays: 30,
-      title: "Sort travel insurance",
+      byDays: 60,
+      booking: true,
+      title: "Buy travel insurance when you book",
       detail:
-        "Cover for cancellation usually has to be in place well before the trip " +
-        "to pay out — buying it the week before is often too late.",
+        "Cancellation cover only protects you from the day it starts — buy it " +
+        "the day you pay for flights or a deposit, not the week before you go.",
       international: true,
     },
     {
+      id: "entry-permit",
+      byDays: 30,
+      title: "Apply for online entry permits",
+      detail:
+        "Many trips need one even without a visa — e.g. US ESTA, UK ETA, EU " +
+        "ETIAS, India e-Visa. It depends on each person's passport, not where " +
+        "they live. Most come through in days; some take longer.",
+      international: true,
+    },
+    {
+      // Villas and group bookings typically want the balance 6-8 weeks out.
       id: "balance",
-      byDays: 14,
+      byDays: 42,
       title: "Settle the outstanding balance",
-      detail: "Final payments are usually due before arrival, not on the day.",
+      detail: "Group villas and holiday rentals usually want the balance about six weeks before arrival.",
     },
     {
       id: "details",
@@ -1510,9 +1619,13 @@
    * Which prep steps apply, and how urgent each is now.
    * `international` steps are dropped for a domestic trip.
    */
-  function prepStepsFor(daysToGo, isInternational) {
+  function prepStepsFor(daysToGo, isInternational, opts = {}) {
+    // Booking lead time isn't one number. 60 days is late for long-haul at
+    // Christmas or in summer peak, and early for a domestic trip.
+    const bookBy = isInternational === true && opts.peak ? 150 : isInternational === false ? 45 : 60;
     // "unknown" is truthy, so border steps are shown — the caller says why.
-    return PREP_STEPS.filter((step) => isInternational || !step.international).map((step) => {
+    return PREP_STEPS.filter((step) => isInternational || !step.international).map((raw) => {
+      const step = raw.booking ? { ...raw, byDays: bookBy } : raw;
       const slack = daysToGo == null ? null : daysToGo - step.byDays;
       let urgency = "later";
       if (slack != null) {
@@ -1687,9 +1800,12 @@
 
   // External deep-link builders (verification, not integration).
   // encodeURIComponent guards against query-string injection.
-  function googleFlightsLink(from, to) {
+  // With the trip's dates when we have them: a dateless link makes everyone
+  // re-enter the dates by hand and loses the booking (and any affiliate credit).
+  function googleFlightsLink(from, to, start = null, end = null) {
+    const when = start && end ? ` on ${start} returning ${end}` : "";
     return `https://www.google.com/travel/flights?q=${encodeURIComponent(
-      `Flights from ${from} to ${to}`
+      `Flights from ${from} to ${to}${when}`
     )}`;
   }
   function rome2rioLink(from, to) {
@@ -1725,6 +1841,7 @@
     formatRange,
     // geo/cost
     resolveCity,
+    roadProfile,
     distanceMiles,
     milesBetween,
     estimateFare,

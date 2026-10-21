@@ -38,6 +38,8 @@
   <main class="app">
     <!-- ============ Screen: Register ============ -->
     <section class="screen active" id="screen-register">
+      <!-- Shown when someone arrives from an invite link: who asked, and to what. -->
+      <div class="invite-banner" id="inviteBanner" role="status" hidden></div>
       <!-- Hero: a group converging on one destination across a turning globe.
            Pre-rendered loops (hero-animation/, Remotion) that app.js plays in
            turn; the poster is the finale, shown as first paint and to anyone
@@ -49,8 +51,8 @@
       <div class="hero">
         <div class="hero-badge">✦ When · where · how, sorted</div>
         <h1 class="hero-title">Get the group<br /><span class="grad">together.</span></h1>
-        <p class="hero-tag">The easiest way to agree on a
-          <span class="rot" id="rotator">reunion 🎉</span></p>
+        <p class="hero-tag">The easiest way to plan
+          <span class="rot" id="rotator">a reunion 🎉</span></p>
       </div>
       <div class="card center-card reg-card">
         <label for="regName">Full name</label>
@@ -225,12 +227,11 @@
   <div id="inviteModal" class="modal" role="dialog" aria-modal="true" aria-label="Invite people" hidden>
     <div class="modal-card">
       <div class="modal-head">
-        <h2>Invite people</h2>
+        <h2 id="inviteTitle">Invite people</h2>
         <button class="icon-btn" id="inviteClose" aria-label="Close">✕</button>
       </div>
-      <p class="muted" style="font-size:.8rem;margin:0 0 12px">
-        Share one link — invitees add their availability &amp; preferences, no app install.
-        This prototype has no server, so the link carries a snapshot of the event.
+      <p class="muted" id="inviteIntro" style="font-size:.8rem;margin:0 0 12px">
+        Share one link — everyone adds their dates &amp; preferences. Nothing to install.
       </p>
       <div class="invite-grid">
         <a class="invite-opt" id="inviteWhatsApp" target="_blank" rel="noopener noreferrer"><span>💬</span>WhatsApp</a>
@@ -238,7 +239,7 @@
         <a class="invite-opt" id="inviteEmail"><span>✉️</span>Email</a>
         <button class="invite-opt" id="inviteCopy"><span>🔗</span>Copy link</button>
       </div>
-      <label for="inviteLink" style="margin-top:14px">Your invite link</label>
+      <label for="inviteLink" id="inviteLinkLabel" style="margin-top:14px">Your invite link</label>
       <input id="inviteLink" type="text" readonly />
     </div>
   </div>
@@ -277,7 +278,7 @@
       <p class="muted" style="font-size:.84rem;margin:0 0 4px">Make the trip unforgettable — and effortless to run.</p>
       <ul class="pro-feats" id="proFeatures"></ul>
       <button class="btn" id="proUnlock" style="width:100%">Unlock Pro (demo)</button>
-      <p class="pro-price">£7.99 per event · or Reunly+ £2.99/mo for unlimited events. Demo unlock is free & local.</p>
+      <p class="pro-price">£7.99 per event. This is a test version: “Unlock” is free and only applies on this device — nothing is charged.</p>
     </div>
   </div>
 

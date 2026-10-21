@@ -414,6 +414,9 @@
       nt: notifyToken(),
       name: state.reunion.name,
       type: state.reunion.type,
+      // Who's asking: a guest landing on the link sees "Sam invited you" and
+      // sends their answers back "to Sam", not to a faceless "organiser".
+      on: state.reunion.organizer || "",
       // The agreed plan travels with the link, so a joiner sees what was
       // decided rather than an apparently-undecided event.
       locked: state.lockedPlan || null,
@@ -510,6 +513,7 @@
       nt: str(data.nt, 64),
       name: str(data.name, 120),
       type: str(data.type, 60),
+      on: str(data.on, 60),
       p: data.p.slice(0, MAX_PEOPLE).map((x) => {
         const src = x && typeof x === "object" ? x : {};
         const dates = Array.isArray(src.d) ? src.d.slice(0, MAX_ROWS) : [];
@@ -563,7 +567,9 @@
             id: str(src.id, 60),
             by: str(src.by, 40),
             d: str(src.d, 120),
-            a: Number.isFinite(amount) ? amount : NaN,
+            // Capped: a crafted link could otherwise plant a 1e308 expense
+            // that swamps every balance and prints as "Infinity".
+            a: Number.isFinite(amount) && Math.abs(amount) <= 1e7 ? amount : NaN,
             w: Array.isArray(src.w) ? src.w.slice(0, MAX_PEOPLE).map((i) => str(i, 40)).filter(Boolean) : [],
             s: src.s === 1,
             ts: clampTs(src.ts),
@@ -583,7 +589,9 @@
     }
     // Carried even when there is no lock: `locked: null` with a newer stamp is
     // how a link says the organiser called the plan off.
-    clean.lts = Number.isFinite(data.lts) ? data.lts : 0;
+    // Clamped like every other stamp: an unclamped far-future lts let anyone
+    // holding a link freeze the plan, since newest-wins could never beat it.
+    clean.lts = clampTs(data.lts);
     clean.pts = clampTs(data.pts);
     clean.pk = Array.isArray(data.pk)
       ? data.pk.slice(0, 8).map((i) => str(i, 40)).filter(Boolean)
@@ -680,6 +688,7 @@
       // Inherited from the link — without it a joiner can't see or post
       // notifications for this group.
       notifyToken: data.nt || "",
+      organizer: data.on || "",
     };
     state.participants = data.p.map(participantFromPayload);
     if (data.locked) state.lockedPlan = data.locked;
@@ -839,11 +848,22 @@
     inviteOpener = document.activeElement;
     const url = buildShareUrl();
     const msg = inviteMessage();
+    const eventName = state.reunion.name || "Reunly get-together";
+    // A guest opening this is sending answers BACK. The organiser-worded
+    // "Invite people" window made them think they'd pressed the wrong thing.
+    const guest = state.role !== "organizer";
+    const to = state.reunion.organizer || "the organiser";
+    $("#inviteTitle").textContent = guest ? `Send your answers to ${to}` : "Invite people";
+    $("#inviteModal").setAttribute("aria-label", $("#inviteTitle").textContent);
+    $("#inviteIntro").textContent = guest
+      ? `Send ${to} this link. When they open it, your dates and choices are added to the group plan.`
+      : "Share one link — everyone adds their dates & preferences. Nothing to install.";
+    $("#inviteLinkLabel").textContent = guest ? "Your answers link" : "Your invite link";
     $("#inviteLink").value = url;
     $("#inviteWhatsApp").href = `https://wa.me/?text=${encodeURIComponent(msg)}`;
     $("#inviteSms").href = `sms:?&body=${encodeURIComponent(msg)}`;
     $("#inviteEmail").href =
-      `mailto:?subject=${encodeURIComponent("You're invited: " + (state.reunion.name || "Reunly get-together"))}` +
+      `mailto:?subject=${encodeURIComponent((guest ? "My answers: " : "You're invited: ") + eventName)}` +
       `&body=${encodeURIComponent(msg)}`;
     $("#inviteModal").hidden = false;
     $("#inviteClose").focus();
@@ -870,7 +890,7 @@
       const url = $("#inviteLink").value;
       try {
         await navigator.clipboard.writeText(url);
-        toast("Invite link copied");
+        toast(state.role === "organizer" ? "Invite link copied" : "Link copied — paste it to the organiser");
       } catch (e) {
         $("#inviteLink").select();
         window.prompt("Copy this invite link:", url);
@@ -1088,15 +1108,46 @@
     toastTimer = setTimeout(() => t.classList.remove("show"), 2400);
   }
 
+  // Someone arriving from an invite link landed on a generic sign-up page with
+  // nothing saying who had asked them, or to what.
+  function renderInviteBanner() {
+    const banner = $("#inviteBanner");
+    if (!banner) return;
+    banner.textContent = "";
+    banner.hidden = !state.fromInvite;
+    $("#regSubmit").textContent = state.fromInvite ? "Add my dates →" : "Get started →";
+    if (!state.fromInvite) return;
+    banner.appendChild(
+      el("div", {
+        class: "invite-banner-title",
+        text: state.reunion.organizer
+          ? `✉️ ${state.reunion.organizer} invited you to ${state.reunion.name}`
+          : `✉️ You're invited to ${state.reunion.name}`,
+      })
+    );
+    const plan = state.lockedPlan;
+    banner.appendChild(
+      el("div", {
+        class: "invite-banner-sub",
+        text: plan
+          ? `${plan.destination} · ${plan.dateLabel} — add your details below to say if you're in.`
+          : "Add your details below, then say which dates and places work for you.",
+      })
+    );
+  }
+
   function showScreen(id) {
     document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"));
     $(`#screen-${id}`).classList.add("active");
     $("#restartBtn").hidden = id === "register";
+    if (id === "register") renderInviteBanner();
     // The hero video only belongs to the registration screen.
     const hero = $("#heroVideo");
     if (hero && hero.src) {
       if (id === "register") hero.play().catch(() => {});
       else hero.pause();
+    } else if (id === "register" && heroLoad) {
+      heroLoad();
     }
     window.scrollTo(0, 0);
   }
@@ -1296,6 +1347,13 @@
       state.reunion.code = code || generateInviteCode(state.reunion.type);
       if (mode === "setup") {
         state.reunion.name = state.reunion.name || "Untitled get-together";
+        state.reunion.organizer = (state.user.name || "").trim().split(/\s+/)[0];
+        // Whoever sets it up is coming. Leaving them at "no reply" dropped the
+        // organiser from the head count and from every new expense split.
+        if (mine && mine.rsvp === "no_response") {
+          mine.rsvp = "in";
+          touchParticipant(mine);
+        }
       }
       // Open the current user's card so they can fill in their own answers.
       state.editingId = mine ? mine.id : null;
@@ -2135,6 +2193,11 @@
   }
   function needsConfirmStep(p) {
     if (!p) return false;
+    // Someone who proposed other dates/places before the lock is still
+    // undecided once the plan is fixed — and nothing ever asked them again, so
+    // they sat at "no reply" for good. On a locked plan, ask "are you in?".
+    // Their answer here sets the RSVP either way, so this asks once.
+    if (state.lockedPlan && p.rsvp === "no_response" && hasAnsweredConfirm(p)) return true;
     if (hasAnsweredConfirm(p)) return false; // already submitted the confirm step
     // Once they've started answering (clicked Yes/No on either question), stay
     // in the flow even if typing an alternative date/place makes hasResponded()
@@ -2187,13 +2250,14 @@
   // Fire-and-forget: tell the server this person answered, so the organiser's
   // app can show a notification. Best-effort only — if the request fails
   // (offline, server asleep, etc.) the local confirmation still goes through.
-  function notifyOrganiser(p, top, draft) {
+  function notifyOrganiser(p, top, draft, kind = "reply") {
     try {
       fetch("/api/notify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           code: notifyToken(),
+          kind,
           name: p.name || "Someone",
           destination: top.destination,
           dateLabel: top.dateLabel,
@@ -2307,7 +2371,10 @@
           touchParticipant(p);
           saveState();
           invalidateCombos();
-          toast("Thanks for letting the group know");
+          // A "no" used to stay on this phone: no ping, and no send-back
+          // prompt (that only appeared once you'd entered dates or places).
+          notifyOrganiser(p, top, { dateOk: false, destOk: false }, "declined");
+          toast("Thanks — now send your answer to the organiser");
           renderAll();
         },
       })
@@ -2489,7 +2556,7 @@
             `) · estimates, excludes ${COST_EXCLUSIONS}` +
             // Don't present a generic fallback rate with the same confidence
             // as one we actually hold for that city.
-            (c.season ? ` · ${c.season} — prices run higher` : "") +
+            (c.season ? ` · ${c.season} — prices run ${c.seasonCheaper ? "lower" : "higher"}` : "") +
             (c.lodgingApproximate ? " · no local rate for this city, using a rough average" : ""),
         })
       );
@@ -2547,13 +2614,18 @@
       );
     }
 
-    const lockBtn = el("button", {
-      class: locked ? "btn secondary" : "btn",
-      style: "width:100%;margin-top:14px",
-      text: locked ? "✓ Locked — tap to unlock" : "🔒 Lock this plan",
-      onClick: () => toggleLock(c),
-    });
-    body.appendChild(lockBtn);
+    // Deciding is the organiser's job. Guests seeing "Lock this plan" (and a
+    // Lock on every alternative) worried they might break the plan.
+    if (state.role === "organizer") {
+      body.appendChild(
+        el("button", {
+          class: locked ? "btn secondary" : "btn",
+          style: "width:100%;margin-top:14px",
+          text: locked ? "✓ Locked — tap to unlock" : "🔒 Lock this plan",
+          onClick: () => toggleLock(c),
+        })
+      );
+    }
     // Who is coming from where, and how. Placed after the numbers rather than
     // before them: it's the human summary of everything above, and on a real
     // group it's the first thing that makes the spread of origins obvious.
@@ -2589,14 +2661,16 @@
         })
       );
       head.appendChild(w);
-      head.appendChild(
-        el("button", {
-          class: "btn ghost sm",
-          style: "width:auto",
-          text: lockState(c) ? "Locked" : "Lock",
-          onClick: () => toggleLock(c),
-        })
-      );
+      if (state.role === "organizer") {
+        head.appendChild(
+          el("button", {
+            class: "btn ghost sm",
+            style: "width:auto",
+            text: lockState(c) ? "Locked" : "Lock",
+            onClick: () => toggleLock(c),
+          })
+        );
+      }
       row.appendChild(head);
       list.appendChild(row);
     });
@@ -2727,7 +2801,7 @@
       miles,
       fare,
       flight: miles != null ? E.flightTimeHours(miles) : null,
-      drive: miles != null ? E.driveTimeHours(miles) : null,
+      drive: miles != null ? E.driveTimeHours(miles, E.roadProfile(fromCity, toCity)) : null,
     };
   }
 
@@ -2770,7 +2844,7 @@
     const leg =
       legMiles == null || fare.min === 0
         ? null
-        : E.chooseTravel(legMiles, (fare.min + fare.max) / 2, party);
+        : E.chooseTravel(legMiles, (fare.min + fare.max) / 2, party, E.roadProfile(p.city, toCity));
     const driving = leg && leg.mode === "drive";
     const fareRow = el("div", { class: "fare-row" });
     fareRow.appendChild(
@@ -2863,9 +2937,9 @@
         const fare = fareProvider(p.city, toCity);
         const party = 1 + Math.max(0, parseInt((p.prefs && p.prefs.kids) || 0, 10) || 0);
         const mode = fare && fare.min != null
-          ? E.chooseTravel(info.miles, (fare.min + fare.max) / 2, party).mode
+          ? E.chooseTravel(info.miles, (fare.min + fare.max) / 2, party, E.roadProfile(p.city, toCity)).mode
           : "flight";
-        const door = E.journeyHours(info.miles);
+        const door = E.journeyHours(info.miles, E.roadProfile(p.city, toCity));
         if (mode === "drive") {
           metaParts.push(`🚗 ${E.formatHours(info.drive)} each way`);
         } else if (mode === "flight") {
@@ -2881,7 +2955,10 @@
       side.appendChild(el("div", { class: "cost-meta", text: metaParts.join(" · ") }));
     }
     const links = el("div", { class: "cost-links" });
-    links.appendChild(linkChip("Flights", E.googleFlightsLink(p.city, toCity)));
+    const lp = state.lockedPlan;
+    links.appendChild(
+      linkChip("Flights", E.googleFlightsLink(p.city, toCity, lp && lp.dateStart, lp && lp.dateEnd))
+    );
     links.appendChild(linkChip("Rome2Rio", E.rome2rioLink(p.city, toCity)));
     links.appendChild(linkChip("Maps", E.mapsRouteLink(p.city, toCity)));
     side.appendChild(links);
@@ -3033,7 +3110,7 @@
       String(v == null ? "" : v)
         .replace(/\\/g, "\\\\")
         .replace(/[;,]/g, "\\$&")
-        .replace(/\r?\n/g, "\\n");
+        .replace(/\r\n|\r|\n/g, "\\n"); // a lone \r breaks a line too
     // A malformed date reaches here only if it slipped past isoOrEmpty, but
     // this is a download the user triggered — fail quietly, don't throw.
     if (!Number.isFinite(Date.parse(plan.dateStart + "T00:00:00Z"))) {
@@ -3160,7 +3237,7 @@
       // exists, were never inserted for those groups.
       const miles = E.milesBetween(p.city, destination, fareProvider);
       if (miles == null) continue;
-      const hours = E.journeyHours(miles);
+      const hours = E.journeyHours(miles, E.roadProfile(p.city, destination));
       if (hours > worst) worst = hours;
     }
     return worst;
@@ -3314,22 +3391,29 @@
   }
 
   // ---- Reunly Pro (monetisation) ----
+  // Only what Pro actually does today, then what's coming — labelled as such.
+  // The old list sold "unlimited photos (free keeps 3)" against a real cap of
+  // 40, plus AI re-rolls, themes and "no ads", none of which existed. The
+  // "coming soon" items are the ones organisers said they would pay for.
   const PRO_FEATURES = [
-    "Downloadable Trip Pack — a printable one-pager for the whole group",
-    "Unlimited memory-wall photos (free keeps 3)",
-    "Priority live-fare refresh & AI itinerary re-rolls",
-    "Custom event cover & themes · no ads",
+    "Trip Pack — a printable one-pager: who's going, travel, costs and what's left to settle",
+    "Up to 40 memory-wall photos on this device (free keeps 3)",
+    "Coming soon: deposit tracker with due dates & reminders",
+    "Coming soon: live shared plan — no sending links back",
   ];
   function renderProCard() {
     const panel = $("#proPanel");
     if (!panel) return;
     panel.textContent = "";
     if (state.pro) return; // no upsell once unlocked
+    // The organiser is the buyer. Guests saw this on every page and read it as
+    // an ad they couldn't act on.
+    if (state.role !== "organizer") return;
     const card = el("div", { class: "card pro-card stagger" });
     card.appendChild(el("div", { class: "pro-emoji", text: "✨" }));
     card.appendChild(el("div", { class: "pro-title", text: "Reunly Pro" }));
     card.appendChild(
-      el("div", { class: "pro-sub", text: "Everything to run the perfect trip — for the whole group." })
+      el("div", { class: "pro-sub", text: "For the organiser: the Trip Pack and a bigger memory wall for this event." })
     );
     card.appendChild(
       el("button", { class: "btn", style: "margin-top:12px", text: "See Pro — £7.99/event", onClick: openProModal })
@@ -3470,7 +3554,11 @@
       )
       .join("");
     const html =
-      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Trip Pack — ${escapeHtml(state.reunion.name)}</title>` +
+      // Its own CSP as a backstop: the pack is opened outside the app, so the
+      // app's policy doesn't cover it if an escape is ever missed.
+      `<!DOCTYPE html><html><head><meta charset="utf-8">` +
+      `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">` +
+      `<title>Trip Pack — ${escapeHtml(state.reunion.name)}</title>` +
       `<style>body{font-family:system-ui,Segoe UI,Roboto,sans-serif;max-width:680px;margin:32px auto;padding:0 20px;color:#1a2233}` +
       `h1{margin:0 0 4px}h2{border-bottom:2px solid #6366f1;padding-bottom:4px;margin-top:28px;color:#4f46e5}` +
       `.hero{background:linear-gradient(135deg,#6366f1,#ec4899);color:#fff;padding:24px;border-radius:16px}` +
@@ -3524,7 +3612,8 @@
     const days = E.daysUntil(plan.dateStart);
     if (days == null || days < 0) return; // the trip has been and gone
     const international = E.isInternationalTrip(state.participants, plan.destination);
-    const steps = E.prepStepsFor(days, international);
+    const season = E.seasonFactorFor({ start: plan.dateStart, end: plan.dateEnd }, plan.destination);
+    const steps = E.prepStepsFor(days, international, { peak: season.lodging > 1 });
     const outstanding = steps.filter((st) => !flagOn(state.prepDone, st.id));
 
     const card = el("div", { class: "card toolkit stagger" });
@@ -3655,8 +3744,20 @@
     }
 
     const grid = el("div", { class: "invite-grid tool-grid" });
-    grid.appendChild(toolLink("🏨", "Hotels", `https://www.google.com/travel/hotels?q=${encodeURIComponent(dest)}`));
-    grid.appendChild(toolLink("🏠", "Airbnb", `https://www.airbnb.com/s/${encodeURIComponent(dest)}/homes`));
+    // Dates and head count pre-filled, so the search opens on the actual trip.
+    const adults = Math.max(1, state.participants.filter((x) => x.rsvp === "in").length);
+    const stay = `${plan.dateStart} to ${plan.dateEnd} for ${adults} ${adults === 1 ? "adult" : "adults"}`;
+    grid.appendChild(
+      toolLink("🏨", "Hotels", `https://www.google.com/travel/hotels?q=${encodeURIComponent(`hotels in ${dest} ${stay}`)}`)
+    );
+    grid.appendChild(
+      toolLink(
+        "🏠",
+        "Airbnb",
+        `https://www.airbnb.com/s/${encodeURIComponent(dest)}/homes?checkin=${encodeURIComponent(plan.dateStart)}` +
+          `&checkout=${encodeURIComponent(plan.dateEnd)}&adults=${adults}`
+      )
+    );
     grid.appendChild(toolLink("🗺️", "Explore map", E.mapsSearchLink(dest)));
     grid.appendChild(toolLink("🍽️", "Restaurants", E.mapsSearchLink(`restaurants in ${dest}`)));
     kit.appendChild(grid);
@@ -4221,8 +4322,35 @@
       })
     );
 
-    // Settle-up transfers.
-    if (transfers.length) {
+    // Money paid in before anything is spent is a kitty, not a debt. Settle-up
+    // nets balances, so £150 paid in to Jack read as "Jack → Dev £150 · Mark
+    // paid" — an instruction to hand the deposit straight back.
+    const paidIn = state.expenses.filter((x) => x.settlement);
+    if (!spend.length && paidIn.length) {
+      const held = {};
+      paidIn.forEach((x) => {
+        const to = x.sharedWith[0];
+        (held[to] = held[to] || []).push(x);
+      });
+      card.appendChild(el("div", { class: "gl", text: "💰 Kitty", style: "margin-top:12px" }));
+      Object.entries(held).forEach(([to, list]) => {
+        const sum = list.reduce((a, x) => a + x.amount, 0);
+        const from = [...new Set(list.map((x) => pName(x.payerId)))];
+        card.appendChild(
+          el("div", {
+            class: "exp-transfer",
+            text: `${pName(to)} is holding ${money(sum)} from ${from.length} ${from.length === 1 ? "person" : "people"} (${from.join(", ")})`,
+          })
+        );
+      });
+      card.appendChild(
+        el("div", {
+          class: "muted",
+          style: "font-size:.78rem;margin-top:4px",
+          text: "Settle-up starts once shared costs are added.",
+        })
+      );
+    } else if (transfers.length) {
       card.appendChild(el("div", { class: "gl", text: "To settle up", style: "margin-top:12px" }));
       transfers.forEach((t) => {
         const row = el("div", { class: "exp-transfer" });
@@ -4496,7 +4624,7 @@
     if (!host) return;
     host.textContent = "";
     const me = state.participants.find(isMe);
-    const show = state.role !== "organizer" && me && hasResponded(me);
+    const show = state.role !== "organizer" && me && (hasResponded(me) || me.rsvp === "out");
     host.hidden = !show;
     if (!show) return;
     const bar = el("div", { class: "sendback" });
@@ -4530,6 +4658,12 @@
     renderSendBack();
     const notifWrap = $("#notifWrap");
     if (notifWrap) notifWrap.hidden = state.role !== "organizer";
+    // The event's name, type and invitations belong to the organiser; a guest
+    // shares through "Send my answers" instead.
+    const guest = state.role !== "organizer";
+    $("#reunionName").disabled = guest;
+    $("#reunionType").disabled = guest;
+    $("#shareBtn").hidden = guest;
   }
 
   // ---- Notifications: "someone responded" (organiser only, cross-device) ----
@@ -4559,16 +4693,19 @@
       .forEach((n) => {
         const item = el("div", { class: "notif-item" });
         const locked = n.kind === "locked";
+        const declined = n.kind === "declined";
         item.appendChild(
           el("div", {
             class: "notif-name",
             text: locked
               ? `🔒 ${n.name || "The organiser"} locked the plan`
-              : `${n.name || "Someone"} responded`,
+              : declined
+                ? `${n.name || "Someone"} can't make it`
+                : `${n.name || "Someone"} responded`,
           })
         );
         const bits = [];
-        if (locked) {
+        if (locked || declined) {
           bits.push(`${n.destination} · ${n.dateLabel}`);
         } else {
           bits.push(n.destOk ? `✓ ${n.destination}` : `wants a different place`);
@@ -5255,9 +5392,11 @@
   function startRotator() {
     const node = document.getElementById("rotator");
     if (!node) return;
+    // Occasions, not destinations: "agree on a London" was ungrammatical, and a
+    // rotating place contradicted whichever trip the hero video was showing.
     const picks = [
-      "Bali 🌺", "Goa 🏝️", "Bangkok 🛺", "Dubai 🏙️",
-      "Singapore 🦁", "London 🎡", "Paris 🗼",
+      "a reunion 🎉", "a family get-together 👨‍👩‍👧", "a weekend away 🧳",
+      "an alumni meetup 🎓", "a wedding trip 💍", "a friends' holiday 🌴",
     ];
     let i = 0;
     setInterval(() => {
@@ -5301,7 +5440,7 @@
     // Take the local/walk case from the cost model too, rather than a separate
     // 25-mile literal — someone whose geocoded home city IS the destination was
     // drawn as flying, contradicting a fare card showing zero travel.
-    const mode = E.chooseTravel(miles, (f.min + f.max) / 2, party).mode;
+    const mode = E.chooseTravel(miles, (f.min + f.max) / 2, party, E.roadProfile(fromCity, toCity)).mode;
     if (mode === "local") return "walk";
     return mode === "drive" ? "drive" : "flight";
   }
@@ -5385,6 +5524,7 @@
   // Registration hero: four pre-rendered globe loops (hero-animation/), played
   // one after another. Bali first, because the poster is Bali's finale.
   const HERO_TRIPS = ["bali", "goa", "paris", "newyork"];
+  let heroLoad = null; // set once the hero is wired; showScreen("register") calls it
   function startHeroVideo() {
     const video = $("#heroVideo");
     if (!video) return;
@@ -5409,7 +5549,13 @@
       if (document.visibilityState !== "visible") video.pause();
       else if (onRegister() && video.src) video.play().catch(() => {});
     });
-    if (onRegister()) load();
+    heroLoad = load;
+    // Wait for boot routing: init() runs this while the sign-up screen is
+    // still the default, so loading now made every returning user download
+    // ~0.6 MB they'd never see. Only someone still on sign-up gets the video.
+    setTimeout(() => {
+      if (onRegister() && !video.src) load();
+    }, 0);
   }
 
   // ---------------------------------------------------------------------------
@@ -5530,6 +5676,8 @@
     const hub = project(dv);
     const labelled = new Set(); // two people from one city share one label
     trips.forEach((t, i) => {
+      // Already at the destination: no journey to draw (the caption counts them).
+      if (t.mode === "walk") return;
       const a = toVec(t.coord);
       const arc = Math.acos(Math.min(1, Math.max(-1, dot3(a, dv)))); // angle in radians
       const alt = t.mode === "flight" ? Math.min(0.28, 0.05 + arc * 0.2) : 0.01;
@@ -5594,15 +5742,16 @@
     const [destCoord, ...coords] = await Promise.all(
       [destination, ...people.map((p) => p.city)].map(coordsFor)
     );
-    if (!destCoord || !flat.isConnected) return;
-    const trips = people
-      .map((p, k) => ({
-        city: p.city,
-        coord: coords[k],
-        mode: travelModeFor(p.city, destination, p.prefs) === "drive" ? "drive" : "flight",
-      }))
-      .filter((t) => t.coord);
-    if (!trips.length) return;
+    // Everyone or no one: dropping a person whose city we couldn't place made
+    // them silently vanish from a picture whose caption still counted them.
+    // The flat map shows every name, so it stays when any lookup fails.
+    if (!destCoord || !flat.isConnected || coords.some((c) => !c)) return;
+    const trips = people.map((p, k) => ({
+      city: p.city,
+      coord: coords[k],
+      // Same rule as the flat map and the caption — including "already there".
+      mode: travelModeFor(p.city, destination, p.prefs),
+    }));
     flat.replaceWith(buildJourneyGlobe(trips, { name: destination, coord: destCoord }));
   }
 

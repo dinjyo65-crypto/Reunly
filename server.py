@@ -122,6 +122,52 @@ CACHE_LIMIT = 5000
 # connection is closed rather than left half-drained.
 MAX_DRAIN = 1 << 20
 
+# The only files the static server may hand out. Everything else in the
+# working directory (.git, server source, docs, tests, hero-animation/) is 404.
+STATIC_FILES = {
+    "index.html", "styles.css", "data.js", "engine.js", "fares.js",
+    "globe-land.js", "app.js", "service-worker.js", "manifest.json", "icon.svg",
+}
+# Longest query parameter any /api/ endpoint legitimately takes.
+MAX_PARAM = 160
+
+# Per-IP token bucket for /api/. Sized for the real client: opening a plan
+# fires ~90 fare/photo lookups at once, so the burst is generous; sustained
+# abuse drains it and gets 429s.
+RATE_BURST = 240
+RATE_PER_SEC = 4.0
+_rate_buckets = {}
+_rate_lock = threading.Lock()
+
+
+def _rate_ok(ip):
+    now = time.monotonic()
+    with _rate_lock:
+        tokens, last = _rate_buckets.get(ip, (RATE_BURST, now))
+        tokens = min(RATE_BURST, tokens + (now - last) * RATE_PER_SEC)
+        if len(_rate_buckets) > CACHE_LIMIT:
+            _rate_buckets.clear()  # bounded: forgetting buckets only forgives
+        if tokens < 1:
+            _rate_buckets[ip] = (tokens, now)
+            return False
+        _rate_buckets[ip] = (tokens - 1, now)
+        return True
+
+
+# Nominatim's usage policy is at most 1 request/second per application. One
+# shared pacer for every call this server makes to it, whoever asked.
+_nominatim_lock = threading.Lock()
+_nominatim_next = [0.0]
+
+
+def _nominatim_wait():
+    with _nominatim_lock:
+        now = time.monotonic()
+        wait = _nominatim_next[0] - now
+        _nominatim_next[0] = max(now, _nominatim_next[0]) + 1.0
+    if wait > 0:
+        time.sleep(wait)
+
 
 def _cache_put(cache, key, value):
     """Store, discarding the oldest entries once the cache is full."""
@@ -149,6 +195,8 @@ def geocode(name):
     coord = None
     try:
         q = urllib.parse.urlencode({"q": name, "format": "json", "limit": 1})
+        _nominatim_wait()
+
         req = urllib.request.Request(
             "https://nominatim.openstreetmap.org/search?" + q,
             headers={"User-Agent": USER_AGENT})
@@ -157,7 +205,9 @@ def geocode(name):
         if arr:
             coord = (float(arr[0]["lat"]), float(arr[0]["lon"]))
     except Exception:
-        coord = None
+        # A timeout or 5xx says nothing about the place. Caching it pinned
+        # that city as unresolvable (no fare, no globe) until a restart.
+        return None
     with _geo_lock:
         _cache_put(_geo_cache, key, coord)
     return coord
@@ -196,6 +246,8 @@ def suggest_places(q):
             "q": q, "format": "json", "limit": 6, "addressdetails": 1,
             "featuretype": "city", "accept-language": "en",
         })
+        _nominatim_wait()
+
         req = urllib.request.Request(
             "https://nominatim.openstreetmap.org/search?" + params,
             headers={"User-Agent": USER_AGENT})
@@ -279,6 +331,8 @@ def reverse_geocode(lat, lng):
             "lat": lat, "lon": lng, "format": "json", "zoom": 10,
             "addressdetails": 1, "accept-language": "en",
         })
+        _nominatim_wait()
+
         req = urllib.request.Request(
             "https://nominatim.openstreetmap.org/reverse?" + params,
             headers={"User-Agent": USER_AGENT})
@@ -327,9 +381,12 @@ def estimate_fare(miles):
     if miles == 0:
         return (0, 0, "local")
     driving = miles <= DRIVE_MILES
-    # Round-trip fuel and tolls per car; no booking or airport overhead.
-    base = 0 if driving else 60
-    per_mile = 0.34 if driving else 0.20
+    # Always the price of a SEAT. The client's engine prices the car itself
+    # (per vehicle, real road distance, regional speeds) and picks whichever is
+    # cheaper for the party; handing it fuel money as a "fare" made a short
+    # flight look like a $100 tank of petrol whenever driving was ruled out.
+    base = 60
+    per_mile = 0.20
     near = min(miles, 600) * per_mile
     far = max(0, miles - 600) * 0.11
     mid = base + near + far
@@ -670,10 +727,36 @@ class Handler(SimpleHTTPRequestHandler):
     timeout = 30
 
     def end_headers(self):
-        # Prototype: never let the browser HTTP-cache files, so edits always
-        # load fresh (the service worker handles real offline caching).
-        self.send_header("Cache-Control", "no-store, must-revalidate")
+        # Prototype: never let the browser HTTP-cache app files, so edits always
+        # load fresh (the service worker handles real offline caching). Media
+        # is the exception: re-downloading a 0.6 MB video on every visit was
+        # pure waste, so _send_media sets its own policy.
+        self.send_header("Cache-Control", getattr(self, "_cache_control", None)
+                         or "no-store, must-revalidate")
+        # Clickjacking + MIME sniffing. frame-ancestors can't be set from a
+        # <meta> CSP, so these have to be real headers.
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         super().end_headers()
+
+    def _client_ip(self):
+        # Render terminates TLS in front of us; the caller is the first hop.
+        fwd = self.headers.get("X-Forwarded-For", "")
+        return (fwd.split(",")[0].strip() if fwd else "") or self.client_address[0]
+
+    def _send_static(self, path, head=False):
+        """Serve only the app's own files.
+
+        SimpleHTTPRequestHandler serves the whole working directory, which
+        exposed .git (history, the owner's email), server source, internal
+        docs and directory listings. Anything not on the allowlist is a 404.
+        """
+        name = "index.html" if path in ("", "/") else path.lstrip("/")
+        if name not in STATIC_FILES:
+            return self.send_error(404)
+        self.path = "/" + name
+        return super().do_HEAD() if head else super().do_GET()
 
     def _send_json(self, obj, code=200):
         body = json.dumps(obj).encode()
@@ -716,6 +799,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
         length = end - start + 1
+        self._cache_control = "public, max-age=86400"
         self.send_response(206 if partial else 200)
         self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")
@@ -736,14 +820,23 @@ class Handler(SimpleHTTPRequestHandler):
                 remaining -= len(chunk)
 
     def do_HEAD(self):
-        if urllib.parse.urlparse(self.path).path.startswith("/media/"):
-            return self._send_media(urllib.parse.urlparse(self.path).path)
-        return super().do_HEAD()
+        path = urllib.parse.urlparse(self.path).path
+        if path.startswith("/media/"):
+            return self._send_media(path)
+        return self._send_static(path, head=True)
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path.startswith("/media/"):
             return self._send_media(parsed.path)
+        if parsed.path.startswith("/api/"):
+            # Every /api/ call can fan out to a free upstream (Nominatim,
+            # Photon, Wikipedia, Open-Meteo). Unthrottled, one script could get
+            # this host's IP banned and break lookups for every user.
+            if not _rate_ok(self._client_ip()):
+                return self._send_json({"error": "slow down"}, code=429)
+            if any(len(v) > MAX_PARAM for vs in urllib.parse.parse_qs(parsed.query).values() for v in vs):
+                return self._send_json({"error": "parameter too long"}, code=400)
         if parsed.path == "/api/health":
             return self._send_json({
                 "ok": True,
@@ -814,10 +907,18 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 since = 0.0
             return self._send_json({"results": get_notifications(code, since)})
-        return super().do_GET()
+        if parsed.path.startswith("/api/"):
+            return self._send_json({"error": "not found"}, code=404)
+        return self._send_static(parsed.path)
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
+        if not _rate_ok(self._client_ip()):
+            try:
+                self._drain_body(int(self.headers.get("Content-Length", "0") or "0"))
+            except ValueError:
+                pass
+            return self._send_json({"error": "slow down"}, code=429)
         if parsed.path == "/api/notify":
             try:
                 length = int(self.headers.get("Content-Length", "0") or "0")
@@ -846,7 +947,7 @@ class Handler(SimpleHTTPRequestHandler):
                 entry = {
                     # "reply" = someone answered the confirm step;
                     # "locked" = the plan was decided.
-                    "kind": kind if kind in ("reply", "locked") else "reply",
+                    "kind": kind if kind in ("reply", "locked", "declined") else "reply",
                     "name": str(data.get("name", "Someone"))[:80],
                     "destination": str(data.get("destination", ""))[:120],
                     "dateLabel": str(data.get("dateLabel", ""))[:60],
