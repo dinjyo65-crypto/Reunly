@@ -1,6 +1,6 @@
 # PROGRESS — Reunly
 
-_Last updated: 2026-10-21 — **v8 agreed by all 5 reviewers** (security, travel expert, travel planner, developer, user: SHIP for testing with friends after round-2 fixes, all applied and verified). Branch `v8`, not pushed yet._
+_Last updated: 2026-10-22 — **v8 pushed** (`9880c1f` on `v8` and `master`), agreed by all 5 reviewers. Next: get Render deploying v8, then real-device testing._
 
 ## Goal
 Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla HTML/CSS/JS + a stdlib-only Python server, deployable as a Render Blueprint. Full target spec is in `REBUILD_PROMPT.md`. Done = a real group can plan, vote, lock, cost, settle up and remember a trip end to end on separate devices, with every estimate honestly labelled. v8 goal: a working app that a security expert, travel expert, travel planner, app developer and app user all broadly agree on, with Reunly Pro (monetisation) in mind.
@@ -14,12 +14,12 @@ Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla 
 - Tests: `npm test` 106/106; `.qa/walk2.js` 54/54; `.qa/city.js` 9/9; `.qa/hero.js` 8/8; `.qa/v8fixes.js` 6/6 (all git-ignored except engine tests)
 
 ## In progress
-- Nothing mid-flight. v8 is ready to push (waiting on the user's go-ahead), then real-device testing.
+- Deploy: GitHub's default branch is still `v0.7-dev` (old). Check which branch the Render service tracks (Settings → Build & Deploy → Branch); point it at `master` (or fast-forward `v0.7-dev`). Until v8 is live, the deployed server may still expose `/.git/` and source files.
 
 - Round 2 (all 5 re-verified): travel SHIP, security SHIP, developer/planner/user SHIP after one fix each — fixed: keep-alive leaking the media Cache-Control onto app.js/API; notify token not saved until a later edit (every guest reply lost after the organiser reloaded); guest never prompted to send after Done (send bar now above the tabs + send window opens on Done); bell refreshes when opened; XFF last hop + 5 s cap on the Nominatim queue; passport/visa before a 150-day peak booking; Malaysia off the slow-roads list; Dubai Christmas ×1.6; server fare mode always "flight". Tests: engine 106, walk2 54, city 9, hero 8, v8fixes 9.
 
 ## Next up
-1. Push `v8` and merge to master when the user says so (Render redeploy)
+1. Confirm Render is deploying `master` at `9880c1f`; check `https://…onrender.com/.git/config` returns 404
 3. Real-device test (steps below) — **first check on iPhone that a home-screen-installed app and Safari share data when opening return links** (planner's risk #9)
 4. v9 backlog from the reviews: deposit tracker with due dates + nudges and live shared sync (the two things organisers said they'd pay Pro for); reply-by dates; re-broadcast prompt after merges; join-by-code without a link; multiple events; shorter post-confirm form; hide vote/confirm after lock; passport country + visa hints; long-haul fare levels, nonstop table, home-country holidays; real Pro entitlements (server-signed, Stripe, persistent storage); invite-link auth; split app.js; Python tests for server.py
 
