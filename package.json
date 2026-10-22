@@ -4,6 +4,6 @@
   "private": true,
   "description": "Reunly — the easiest way for groups to decide when, where and how to meet.",
   "scripts": {
-    "test": "node --test test/engine.test.js"
+    "test": "node --test test/engine.test.js test/crawl.test.js"
   }
 }

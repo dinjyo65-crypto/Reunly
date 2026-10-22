@@ -127,6 +127,9 @@ MAX_DRAIN = 1 << 20
 STATIC_FILES = {
     "index.html", "styles.css", "data.js", "engine.js", "fares.js",
     "globe-land.js", "app.js", "service-worker.js", "manifest.json", "icon.svg",
+    # v0.9 prototype (pub crawl / work social live tracker)
+    "prototypes/pub-crawl/index.html", "prototypes/pub-crawl/crawl.css",
+    "prototypes/pub-crawl/crawl.js", "prototypes/pub-crawl/crawl-engine.js",
 }
 # Longest query parameter any /api/ endpoint legitimately takes.
 MAX_PARAM = 160
@@ -724,6 +727,215 @@ def get_notifications(code, since):
         return [e for e in bucket if e["ts"] > since]
 
 
+# --- v0.9 prototype: live events (pub crawl / work social tracker) ----------
+# The first shared, server-held state in the app: where the group is NOW.
+# In memory only, by design: the organiser's phone keeps the full record and
+# re-uploads it (with its host key) whenever the server has forgotten it, so a
+# Render restart costs guests a few seconds of "waiting for the organiser"
+# rather than the evening. No database, still stdlib-only.
+_live = {}  # id -> {"key": str, "rec": dict, "people": {pid: person}, "touched": ts}
+_live_lock = threading.Lock()
+LIVE_MAX = 500
+LIVE_TTL = 2 * 24 * 3600
+LIVE_MAX_STOPS = 12
+LIVE_MAX_PEOPLE = 80
+_LIVE_ID = re.compile(r"^[A-Za-z0-9_-]{8,24}$")
+_HHMM = re.compile(r"^([01]?\d|2[0-4]):[0-5]\d$")
+
+
+def _s(v, n):
+    return str(v if v is not None else "")[:n]
+
+
+def _time_or_blank(v):
+    v = _s(v, 5)
+    return v if _HHMM.match(v) else ""
+
+
+def _num(v, lo, hi):
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) and lo <= x <= hi else None
+
+
+def sanitize_live(data):
+    """Keep only the fields the tracker uses, each bounded. Raises on junk."""
+    if not isinstance(data, dict):
+        raise ValueError("record must be an object")
+    stops = []
+    for s in (data.get("stops") or [])[:LIVE_MAX_STOPS]:
+        if not isinstance(s, dict):
+            continue
+        lat, lon = _num(s.get("lat"), -90, 90), _num(s.get("lon"), -180, 180)
+        if lat is None or lon is None or not _s(s.get("name"), 80).strip():
+            continue
+        stops.append({
+            "id": _s(s.get("id"), 24), "name": _s(s.get("name"), 80),
+            "lat": lat, "lon": lon, "hours": _s(s.get("hours"), 160),
+            "kind": _s(s.get("kind"), 20), "address": _s(s.get("address"), 120),
+        })
+    st = data.get("status") if isinstance(data.get("status"), dict) else {}
+    phase = st.get("phase") if st.get("phase") in ("planning", "live", "done") else "planning"
+    stop_n = _num(st.get("stop"), -1, len(stops) - 1) if stops else None
+    state = st.get("state") if st.get("state") in ("at", "moving") else "at"
+    log = []
+    for e in (data.get("log") or [])[:LIVE_MAX_STOPS * 2]:
+        if isinstance(e, dict) and _num(e.get("stop"), 0, LIVE_MAX_STOPS) is not None:
+            log.append({"stop": int(e["stop"]), "arrived": _num(e.get("arrived"), 0, 1e13),
+                        "left": _num(e.get("left"), 0, 1e13)})
+    date = _s(data.get("date"), 10)
+    return {
+        "name": _s(data.get("name"), 80) or "Evening out",
+        "organizer": _s(data.get("organizer"), 40),
+        "date": date if re.match(r"^\d{4}-\d{2}-\d{2}$", date) else "",
+        "plannedStart": _time_or_blank(data.get("plannedStart")),
+        "finalStart": _time_or_blank(data.get("finalStart")),
+        "dwell": int(_num(data.get("dwell"), 15, 180) or 50),
+        "stops": stops,
+        "status": {"phase": phase, "stop": int(stop_n) if stop_n is not None else -1,
+                   "state": state, "since": _num(st.get("since"), 0, 1e13)},
+        "log": log,
+    }
+
+
+def _live_prune():
+    now = time.time()
+    for k in [k for k, v in _live.items() if now - v["touched"] > LIVE_TTL]:
+        _live.pop(k, None)
+    if len(_live) > LIVE_MAX:  # forget the stalest first; the host can re-upload
+        for k, _ in sorted(_live.items(), key=lambda kv: kv[1]["touched"])[: len(_live) - LIVE_MAX]:
+            _live.pop(k, None)
+
+
+def live_public(entry):
+    """What anyone with the link may see — never the host key."""
+    out = dict(entry["rec"])
+    out["people"] = list(entry["people"].values())
+    out["serverTime"] = time.time() * 1000
+    return out
+
+
+def live_get(eid):
+    with _live_lock:
+        entry = _live.get(eid)
+        return live_public(entry) if entry else None
+
+
+def live_create(data):
+    import secrets
+    rec = sanitize_live(data)
+    eid, key = secrets.token_urlsafe(9), secrets.token_hex(16)
+    with _live_lock:
+        _live_prune()
+        _live[eid] = {"key": key, "rec": rec, "people": {}, "touched": time.time()}
+    return eid, key
+
+
+def live_update(eid, key, data, people=None):
+    """Host update. Re-creates a forgotten event from the host's own copy."""
+    import hmac
+    if not _LIVE_ID.match(eid or "") or not re.match(r"^[0-9a-f]{32}$", key or ""):
+        raise PermissionError("bad id or key")
+    rec = sanitize_live(data)
+    with _live_lock:
+        entry = _live.get(eid)
+        if entry is None:
+            _live_prune()
+            entry = _live[eid] = {"key": key, "rec": rec, "people": {}, "touched": time.time()}
+            # Self-heal the guest list too, from the host's last copy.
+            for p in (people or [])[:LIVE_MAX_PEOPLE]:
+                clean = _live_person(p)
+                if clean:
+                    entry["people"][clean["id"]] = clean
+        elif not hmac.compare_digest(entry["key"], key):
+            raise PermissionError("wrong host key")
+        entry["rec"] = rec
+        entry["touched"] = time.time()
+        return live_public(entry)
+
+
+def _live_person(p):
+    if not isinstance(p, dict):
+        return None
+    pid = _s(p.get("id"), 24)
+    name = _s(p.get("name"), 40).strip()
+    if not _LIVE_ID.match(pid) or not name:
+        return None
+    status = p.get("status") if p.get("status") in ("coming", "onway", "here", "out") else "coming"
+    return {"id": pid, "name": name, "from": _time_or_blank(p.get("from")),
+            "until": _time_or_blank(p.get("until")), "status": status,
+            "ts": time.time() * 1000}
+
+
+def live_person(eid, person):
+    clean = _live_person(person)
+    if not clean:
+        raise ValueError("bad person")
+    with _live_lock:
+        entry = _live.get(eid)
+        if entry is None:
+            return None
+        if clean["id"] not in entry["people"] and len(entry["people"]) >= LIVE_MAX_PEOPLE:
+            raise ValueError("event is full")
+        entry["people"][clean["id"]] = clean
+        entry["touched"] = time.time()
+        return live_public(entry)
+
+
+# Pubs and bars near a point, from OpenStreetMap via Nominatim: a bounded
+# search for "pub" returns both pubs and bars, with opening hours in
+# extratags — which is what lets the route builder warn that a City pub is
+# shut on a Saturday. (Overpass was tried first: the public instances timed
+# out or refused queries during testing, so it isn't a dependency.) Shares the
+# 1 req/s Nominatim pacer; failures are never cached.
+_pubs_cache = {}
+_pubs_lock = threading.Lock()
+PUB_TYPES = {"pub", "bar", "biergarten"}
+
+
+def pubs_near(lat, lon, radius_m=700):
+    key = f"{lat:.3f},{lon:.3f},{radius_m}"
+    with _pubs_lock:
+        if key in _pubs_cache:
+            return _pubs_cache[key]
+    dlat = radius_m / 111_000
+    dlon = dlat / max(0.2, math.cos(math.radians(lat)))
+    try:
+        params = urllib.parse.urlencode({
+            "q": "pub", "format": "json", "limit": 40, "bounded": 1,
+            "extratags": 1, "addressdetails": 1, "accept-language": "en",
+            "viewbox": f"{lon - dlon},{lat + dlat},{lon + dlon},{lat - dlat}",
+        })
+        _nominatim_wait()
+        req = urllib.request.Request(
+            "https://nominatim.openstreetmap.org/search?" + params,
+            headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            arr = json.loads(r.read())
+    except Exception:
+        return None  # not cached: a timeout says nothing about the area
+    out = []
+    for item in arr:
+        if item.get("type") not in PUB_TYPES or not item.get("name"):
+            continue
+        plat, plon = float(item["lat"]), float(item["lon"])
+        addr = item.get("address", {})
+        street = " ".join(x for x in (addr.get("house_number"), addr.get("road")) if x)
+        out.append({
+            "name": item["name"][:80], "lat": plat, "lon": plon,
+            "kind": "bar" if item.get("type") == "bar" else "pub",
+            "hours": ((item.get("extratags") or {}).get("opening_hours") or "")[:160],
+            "address": street[:120],
+            "dist": round(haversine_miles((lat, lon), (plat, plon)) * 1609),
+        })
+    out.sort(key=lambda p: p["dist"])
+    with _pubs_lock:
+        _cache_put(_pubs_cache, key, out)
+    return out
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DIRECTORY, **kwargs)
@@ -770,6 +982,8 @@ class Handler(SimpleHTTPRequestHandler):
         docs and directory listings. Anything not on the allowlist is a 404.
         """
         name = "index.html" if path in ("", "/") else path.lstrip("/")
+        if name.endswith("/"):
+            name += "index.html"
         if name not in STATIC_FILES:
             return self.send_error(404)
         self.path = "/" + name
@@ -912,6 +1126,22 @@ class Handler(SimpleHTTPRequestHandler):
                     q.get("end", [""])[0],
                 )
             )
+        if parsed.path == "/api/live":
+            eid = urllib.parse.parse_qs(parsed.query).get("id", [""])[0]
+            rec = live_get(eid) if _LIVE_ID.match(eid) else None
+            if rec is None:
+                return self._send_json({"missing": True}, code=404)
+            return self._send_json(rec)
+        if parsed.path == "/api/pubs":
+            q = urllib.parse.parse_qs(parsed.query)
+            lat = _num(q.get("lat", [""])[0], -90, 90)
+            lon = _num(q.get("lon", [""])[0], -180, 180)
+            if lat is None or lon is None:
+                return self._send_json({"error": "lat and lon required"}, code=400)
+            pubs = pubs_near(lat, lon)
+            if pubs is None:
+                return self._send_json({"results": [], "error": "unavailable"})
+            return self._send_json({"results": pubs})
         if parsed.path == "/api/notify":
             q = urllib.parse.parse_qs(parsed.query)
             code = q.get("code", [""])[0]
@@ -936,6 +1166,29 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 pass
             return self._send_json({"error": "slow down"}, code=429)
+        if parsed.path.startswith("/api/live/"):
+            try:
+                data = self._read_json(32768)
+            except ValueError:
+                return self._send_json({"error": "bad request"}, code=400)
+            try:
+                if parsed.path == "/api/live/create":
+                    eid, key = live_create(data.get("record"))
+                    return self._send_json({"id": eid, "key": key})
+                if parsed.path == "/api/live/update":
+                    rec = live_update(_s(data.get("id"), 24), _s(data.get("key"), 64),
+                                      data.get("record"), data.get("people"))
+                    return self._send_json(rec)
+                if parsed.path == "/api/live/person":
+                    rec = live_person(_s(data.get("id"), 24), data.get("person"))
+                    if rec is None:
+                        return self._send_json({"missing": True}, code=404)
+                    return self._send_json(rec)
+            except PermissionError:
+                return self._send_json({"error": "not allowed"}, code=403)
+            except ValueError as e:
+                return self._send_json({"error": str(e)[:60]}, code=400)
+            return self._send_json({"error": "not found"}, code=404)
         if parsed.path == "/api/notify":
             try:
                 length = int(self.headers.get("Content-Length", "0") or "0")
@@ -982,6 +1235,23 @@ class Handler(SimpleHTTPRequestHandler):
         except ValueError:
             pass
         return self._send_json({"error": "not found"}, code=404)
+
+    def _read_json(self, limit):
+        """Read a bounded JSON object body, always leaving the socket in sync."""
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            raise ValueError("bad length")
+        if length <= 0 or length > limit:
+            self._drain_body(length)
+            raise ValueError("bad length")
+        try:
+            data = json.loads(self.rfile.read(length))
+        except Exception:
+            raise ValueError("bad json")
+        if not isinstance(data, dict):
+            raise ValueError("bad json")
+        return data
 
     def _drain_body(self, length):
         """Read and discard a request body so the connection stays in sync."""

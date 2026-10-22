@@ -1,6 +1,6 @@
 # PROGRESS — Reunly
 
-_Last updated: 2026-10-22 — v8 live on https://reunly.onrender.com. **Planning v0.9: work meetups & pub crawls with a live progress tracker** — see `PLAN-v0.9.md` (branch `v0.9-dev`)._
+_Last updated: 2026-10-22 — v8 live on Render. **v0.9 prototype working** (pub crawl / work social live tracker) on branch `v0.9-dev`, not pushed — see `PLAN-v0.9.md`._
 
 ## Goal
 Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla HTML/CSS/JS + a stdlib-only Python server, deployable as a Render Blueprint. Full target spec is in `REBUILD_PROMPT.md`. Done = a real group can plan, vote, lock, cost, settle up and remember a trip end to end on separate devices, with every estimate honestly labelled. v8 goal: a working app that a security expert, travel expert, travel planner, app developer and app user all broadly agree on, with Reunly Pro (monetisation) in mind.
@@ -15,7 +15,7 @@ Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla 
 
 ## In progress
 - Real-device testing with friends (steps below). Render deploys from `v0.7-dev` (GitHub default branch) — keep it level with `master`, or switch Render to `master`.
-- **v0.9 planning** (`PLAN-v0.9.md`, branch `v0.9-dev`): evening mode for work socials / pub crawls — time-of-day availability → organiser finalises start time → route of stops with suggested times → live tracker (organiser/co-host taps "We've arrived" / "Moving on"; others poll every ~15 s and can join at a later stop). Needs the app's first server-side shared state (`/api/live`, self-healing from the organiser's phone, no database) and pub search via OpenStreetMap Overpass (tested: returns pubs + opening hours; use GET). Next: user answers the open questions → standalone prototype in `prototypes/pub-crawl/` → expert review → integrate.
+- **v0.9** (`PLAN-v0.9.md`, branch `v0.9-dev`, local only): decisions made (organiser + co-hosts check in; pubs + any place; taps only, no GPS; standalone prototype). **Prototype built and passing**: `prototypes/pub-crawl/` + `/api/live*` + `/api/pubs` (Nominatim; Overpass proved unreliable). Tests: `npm test` 113 (incl. 7 crawl), `.qa/crawl.js` 18/18; main app suites unchanged (54/9/8/9). Open at http://localhost:4175/prototypes/pub-crawl/ . Next: try on phones, 5-expert review, then integrate as an "evening" mode.
 
 - Round 2 (all 5 re-verified): travel SHIP, security SHIP, developer/planner/user SHIP after one fix each — fixed: keep-alive leaking the media Cache-Control onto app.js/API; notify token not saved until a later edit (every guest reply lost after the organiser reloaded); guest never prompted to send after Done (send bar now above the tabs + send window opens on Done); bell refreshes when opened; XFF last hop + 5 s cap on the Nominatim queue; passport/visa before a 150-day peak booking; Malaysia off the slow-roads list; Dubai Christmas ×1.6; server fare mode always "flight". Tests: engine 106, walk2 54, city 9, hero 8, v8fixes 9.
 

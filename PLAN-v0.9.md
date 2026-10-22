@@ -1,6 +1,6 @@
 # Reunly v0.9 — Work meetups & pub crawls (plan)
 
-_Status: planning (2026-10-22). Prototype first, then integrate into the app._
+_Status: **prototype working** (2026-10-22) — `prototypes/pub-crawl/`, open http://localhost:4175/prototypes/pub-crawl/ . Next: try it on phones, expert review, then integrate._
 
 ## The idea in one line
 Same flow as a trip — people say when they're free, the organiser fixes a start time — but for **one evening in one area**, and with a **live progress tracker** so people who can't make the first stop can find the group and join later.
@@ -66,7 +66,7 @@ Today everything syncs by sending links back — fine for a 6-week trip plan, us
 **Storage without a database (recommended):** the organiser's phone holds the full record (as now, in localStorage) and the server is a cache. If Render restarts and the server forgets, the next poll from the organiser's phone re-uploads it automatically ("self-healing"). Guests briefly see "waiting for the organiser…". Keeps the stdlib-only, free-tier setup. A real database (Render Postgres / Upstash) becomes necessary only for Pro features that must outlive the organiser's phone.
 
 ### B. Pub search & opening hours
-OpenStreetMap **Overpass** (free, no key) returns pubs/bars near a point **with opening hours** — tested: 600 m around Bank, London returns named pubs, e.g. *The Saint — "Mo-Fr 12:00-23:00; Sa,Su off"*. The route builder can **warn when a stop is closed at its planned time** (City of London pubs often shut at weekends). Needs a server proxy + caching + the existing rate limiting.
+**Nominatim** bounded search for "pub" (free, no key, already used and rate-paced by the server) returns pubs **and** bars near a point, with opening hours for roughly a third — tested: 40 results within ~700 m of Bank in under a second, e.g. *Jamaica Wine House — "Mo-Fr 11:00-23:00"*. The route builder **warns when a stop is closed at its planned time** (City of London pubs often shut at weekends); missing hours show as "not listed", never as closed. (Overpass was the first choice but every public instance timed out or refused during testing — not a dependency.)
 
 ### C. Time-of-day availability
 New availability shape: `{ from: "18:30", until: "21:00" }` on the event day, alongside the existing date ranges. Engine function: best start time + "joins at stop N" per person.
@@ -92,8 +92,15 @@ Organiser + named **co-hosts** (handing over when the organiser leaves early). T
 3. **Integrate (v0.9)** — "evening" event mode in the main app: time availability, start-time finaliser, route builder with Overpass + opening hours, live tracker tab, co-host link, kitty.
 4. Real-device test with a real after-work social.
 
-## Open questions (need the user's call)
-1. Who can check in — organiser only, organiser + co-hosts, or anyone at the pub?
-2. Route stops — searched pubs only, or also free-typed places (an office, a restaurant)?
-3. Optional live location later, or never?
-4. Prototype as a standalone page in this repo (recommended) — OK?
+## Decisions (2026-10-22)
+1. **Check-in:** organiser + co-hosts (co-host link carries the host key). Everyone else: "On my way" / "I'm here" / "Can't make it".
+2. **Stops:** pub/bar search near a starting point (with opening-hours warnings) **plus** any place via search (office, restaurant, karaoke…).
+3. **Location:** taps only — no GPS, now or later unless revisited.
+4. **Prototype:** standalone page in this repo (`prototypes/pub-crawl/`) with a real in-memory live API on the local server; then expert review; then integrate.
+
+## Prototype results (2026-10-22)
+- Built: `prototypes/pub-crawl/` (`crawl-engine.js` pure logic + `test/crawl.test.js`, `crawl.js` UI, `crawl.css`) and server endpoints `/api/live` (GET), `/api/live/create|update|person` (POST), `/api/pubs`.
+- End-to-end (`.qa/crawl.js`, 3+ separate browsers): organiser plans a 4-stop route from real pubs near Bank → 5 guests reply with times → app suggests moving the start 17:30 → 18:45 (5 at the first stop instead of 1) → organiser confirms → checks in → guests see "Now at…" → "Moving on" → a late joiner is told "The group is walking to … — head there" with walking directions → co-host link checks in → late joiner taps "I'm here" and the organiser sees it. 18/18 steps, no errors.
+- Server: wrong host key → 403; public view never contains the host key; after a server restart the event is gone until the organiser's phone re-uploads it (guests included) — verified.
+- Learned: Overpass unreliable → Nominatim; the "joins at" plan must give way to live status once the night starts (fixed); explicit "Confirm 18:45 / Keep 17:30" choice (fixed).
+- Not yet: phones over Wi-Fi / on Render; opening-hours edge cases (bank holidays → "unknown"); kitty; end-of-night summary; reorder/edit stops once live; expert review.
