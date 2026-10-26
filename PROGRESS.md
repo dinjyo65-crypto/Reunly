@@ -11,6 +11,7 @@ Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla 
 - **v8** (branch `v8`):
   - `59c65ad` Globe hero: Remotion project `hero-animation/` (Globe.tsx, palette "Brand-Glow" + pace 1.0 agreed by a motion designer and a brand/UX designer). 4 MP4 loops in `media/` (~0.6 MB each; WebM dropped — VP9 render failed to decode in Chrome) + finale poster. Locked plan shows the group's real trips on a dot-matrix globe (`globe-land.js`, `/api/geocode`). `/media/*` served with byte ranges (iOS).
   - `9886b25` Review round 1 fixes (security, travel, planner, developer, user) — full list in the commit message: static allowlist + rate limits + headers; hero only for sign-up visitors; regional road model + per-destination seasons + season-aware booking lead times + entry permits + dated booking links; cost tolerance (no trivial-saving override); decline notifications; re-confirm after lock; kitty view; organiser "in"; guest send-back window, invite banner, guest-hidden organiser controls; honest organiser-only Pro copy
+- **Checkpoint `v8-checkpoint` (2026-10-26)**: the live, friends-test version — flat hero animation (`12bc1d2`), all review fixes; `REBUILD_PROMPT.md` updated to rebuild it from scratch. Return with `git checkout v8-checkpoint`.
 - Tests: `npm test` 106/106; `.qa/walk2.js` 54/54; `.qa/city.js` 9/9; `.qa/hero.js` 8/8; `.qa/v8fixes.js` 6/6 (all git-ignored except engine tests)
 
 ## In progress

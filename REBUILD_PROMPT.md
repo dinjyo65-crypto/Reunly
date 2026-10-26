@@ -1,5 +1,9 @@
 # Reunly — From-Scratch Build Prompt
 
+_Snapshot: **v8** (tag `v8-checkpoint`, 2026-10-26) — the version live on
+https://reunly.onrender.com and given to friends for testing. All five expert
+reviews (security, travel expert, travel planner, developer, user) signed off._
+
 Paste the prompt below into a capable coding agent to recreate this app from nothing.
 It captures the product, stack, every feature built across all iterations, the
 design language, the deployment setup, and the hard-won gotchas — in the order
@@ -357,15 +361,35 @@ they were actually built, so a rebuild can follow the same path.
 > - **Glassmorphism** cards (translucent + backdrop blur, large radii,
 >   `box-shadow`). An animated, subtle aurora background gradient behind the
 >   whole app.
-> - **Registration is a hero, not a form**: a gradient headline, a rotating
->   word in the tagline, and an ambient **convergence map** — several origins
->   fanning into one destination hub, each traveller moving by the mode the
->   cost model's own drive-or-fly function picks (on foot / road / flight;
->   flights arc high, roads stay low), so the picture can never contradict a
->   price. Travellers stay upright (a rotated car reads as a glitch). The
->   plane is a real **top-down airliner silhouette**, not an arrow/chevron —
->   check this visually before shipping it. The card containing the actual form pops in
->   with a spring-ish entrance.
+> - **Registration is a hero, not a form**: a gradient headline, a tagline
+>   rotating *occasions* ("The easiest way to plan a reunion / a weekend away /
+>   an alumni meetup…" — never destinations, which read ungrammatically and
+>   contradict the video), and an ambient **convergence animation** shipped as
+>   **pre-rendered video**: four 9 s loops (Bali, Goa, Paris, New York, four
+>   travellers each) made with Remotion in a separate `hero-animation/`
+>   project (`Convergence.tsx`): cities on the left, top-down airliners (and
+>   upright cars for short drives) arcing to the destination with glowing
+>   trails, a ripple per arrival, an "N of 4 arrived" counter, and an
+>   "Everyone's here 🎉" finale with confetti. Rendered 1200×570 H.264 MP4
+>   (~330 KB each — VP9 WebM failed to decode in Chrome, so MP4 only), shown
+>   in a rounded dark card (`aspect-ratio: 1200/570`) so it also sits well on
+>   the light theme. `app.js` plays the loops in turn, fetching the next only
+>   when one ends; it starts only once boot routing leaves the visitor on the
+>   sign-up screen (returning users must never download it), and pauses off
+>   that screen and in background tabs. Poster = Bali's finale frame, used as
+>   first paint and for `prefers-reduced-motion` (no video at all). Versioned
+>   file names (`hero-flat-*.mp4`) so cached loops never linger.
+> - **Once a plan is locked**, the journey map is drawn live in JS for the
+>   group's real cities: a dot-matrix globe (land pre-sampled into
+>   `globe-land.js` — ~1,600 [lon, lat] points from Natural Earth via a small
+>   build script — projected orthographically with plain maths; no mapping
+>   library, since there's no build step and `script-src 'self'`). Great-
+>   circle arcs lifted by distance and hidden behind the globe; gradients
+>   anchored home→destination (gold→violet→pink) in screen space; city
+>   coordinates from the built-in table or `/api/geocode`. If any goer can't
+>   be placed, keep a flat map that shows everyone — never drop people
+>   silently. "Already there" travellers get no arc.
+> - The card containing the actual form pops in with a spring-ish entrance.
 > - Motion budget: screen fade-ups, staggered list-item entrances, score bars
 >   animating from 0 to their value (double-`requestAnimationFrame` so the
 >   0-state paints first), button hover/press lift — all wrapped in a
@@ -417,6 +441,70 @@ they were actually built, so a rebuild can follow the same path.
 >   function and call it from every site.
 > - Server: drain request bodies, release locks on every path, bound caches.
 >
+> ### v8 additions — guest flow, travel realism, server hardening
+> - **Home city like a maps app**: type-ahead from Photon (keyless,
+>   OpenStreetMap, prefix search) restricted to cities/towns, labelled "City,
+>   State, Country" so same-name places stay distinct; registration requires
+>   a pick (editing after a pick clears it); currency from the picked country
+>   code, confirmed under the field. If the lookup service is down, accept the
+>   typed city rather than lock anyone out. Destination fields keep a broader
+>   search (destinations can be regions like Goa).
+> - **Guest experience**: an invite link lands on "✉️ Sam invited you to …"
+>   (organiser's first name travels in the link; an unnamed event reads "a
+>   get-together") with the button "Add my dates →". Guests send answers back
+>   through **"Send your answers to Sam"** (own wording, no tech talk); the
+>   send bar sits above the tabs (visible everywhere) and opens automatically
+>   when a guest taps Done on their card. Guests never see Lock buttons,
+>   event editing, Invite or the Pro card. "I can't make it" notifies the
+>   organiser (`kind: "declined"`) and still shows the send-back bar. On a
+>   locked plan, anyone still undecided after proposing other dates is asked
+>   "are you in?" again. The organiser counts as "in" at setup.
+> - **Notify token**: create it at setup and **save it the moment it's
+>   minted** — minted-on-share-but-saved-later lost every guest reply once the
+>   organiser left to share on WhatsApp and reloaded. The bell refreshes when
+>   opened.
+> - **Ranking**: score cost relative to the cheapest option with a 10%
+>   tolerance (0 at +70%), not stretched min→max — otherwise one person's 2%
+>   cheaper suggestion beats an 8-of-9 majority.
+> - **Roads**: a regional road profile (×1.3 at 50 mph; ×1.45 at 30 mph if
+>   either end is in India / SE Asia, Malaysia excepted). Hours beyond 6 h one
+>   way cost $40 per person per hour each way (smooth — no cost cliff). Fare
+>   estimates are always a **seat** price (client and server); the engine
+>   prices the car separately and picks the cheaper. Mumbai→Goa = flight;
+>   Boston→NYC = ~5 h drive.
+> - **Seasons**: per-destination monthly profiles (Goa Nov–Feb high, Jun–Sep
+>   monsoon low, Christmas rooms ×2.2; Bali Jul–Aug; Dubai/UAE Jun–Aug low,
+>   Nov–Mar high, Christmas ×1.6; Thailand Nov–Feb high, May–Oct low); low
+>   seasons say "prices run lower".
+> - **Before you go**: booking 150 days ahead for a peak trip that is (or may
+>   be) international, 45 domestic, else 60; passport and visa checks always
+>   before booking; insurance due **with** the booking; an online
+>   entry-permit step (ESTA / UK ETA / ETIAS / e-Visa — by passport, not
+>   residence); balance 42 days out. Flights / hotels / Airbnb links carry
+>   the dates and head count.
+> - **Money**: deposits paid in before any shared cost show as a **kitty**
+>   ("Jack is holding £450 from 3 people"), never as settle-up rows telling
+>   the treasurer to refund them.
+> - **Pro copy is honest**: only what exists (Trip Pack; 40 photos vs 3), plus
+>   clearly-labelled "Coming soon: deposit tracker with reminders · live
+>   shared plan"; organiser-only; "test version, nothing is charged".
+> - **Server** (stdlib only):
+>   - Serve an **allowlist** of app files plus `/media/*` — the default
+>     `SimpleHTTPRequestHandler` exposes `.git`, source and docs.
+>   - `/media/*` with HTTP **byte ranges** (iOS Safari won't play video
+>     without 206) and `Cache-Control: public, max-age=86400` — set per
+>     response and **popped** after use, or keep-alive leaks it onto app.js
+>     and API JSON.
+>   - Per-IP token bucket on `/api/*` keyed on the **last** X-Forwarded-For
+>     hop; a 160-char query-param cap; one shared 1 req/s pacer for every
+>     Nominatim call with a 5 s queue cap; never cache an upstream failure as
+>     "no such place".
+>   - `X-Frame-Options: DENY`, `nosniff` and `Referrer-Policy` as real
+>     headers.
+>   - Client side: clamp every timestamp in a link (the lock timestamp
+>     included), cap expense amounts, escape a lone carriage return in
+>     `.ics`, give the Trip Pack its own CSP.
+>
 > ### Deliverables
 > Working files (`index.html`, `styles.css`, `data.js`, `engine.js`, `fares.js`,
 > `app.js`, `server.py`, `service-worker.js`, `manifest.json`, `icon.svg`,
@@ -438,7 +526,9 @@ they were actually built, so a rebuild can follow the same path.
   confirm-step + cross-device notifications), followed by ~45 commits of
   multi-reviewer fix rounds (Aug 26–28 2026: engine tests, overlap windows,
   lodging/season/occupancy, sync/merge hardening, treasurer ledger, ballot
-  sync, Before-you-go, convergence map). A single mega-prompt like the
+  sync, Before-you-go, convergence map), then v8 (Oct 2026: maps-style city
+  lookup, Remotion hero video, plan globe, two rounds of five-expert review
+  — see the "v8 additions" section). A single mega-prompt like the
   one above will very likely need the same kind of iteration in practice —
   treat it as a target to steer toward, not a one-shot spec.
 - The two gotchas called out explicitly above (`[hidden]` vs `display`, and
