@@ -172,3 +172,14 @@ test("a guest's way home starts where they leave the group", () => {
   assert.strictEqual(s.name, "B");
   assert.strictEqual(C.toHHMM(s.leave), "19:30");
 });
+
+test("after the end, someone who never updated is unaccounted for", () => {
+  const people = [{ name: "A", status: "coming" }, { name: "B", status: "safe" }, { name: "C", status: "out" }];
+  assert.deepStrictEqual(C.safetySummary(people).out.map((p) => p.name), []);
+  assert.deepStrictEqual(C.safetySummary(people, true).out.map((p) => p.name), ["A"]);
+});
+
+test("a home thousands of miles away is flagged as the wrong place", () => {
+  const t = C.homeTrip({ lat: 51.45, lon: -2.59 }, { label: "Easton, Massachusetts, United States", lat: 42.02, lon: -71.13 }, "bus", "");
+  assert.ok(t.wrongPlace && t.warn && /is that the right place/.test(t.text), t.text);
+});

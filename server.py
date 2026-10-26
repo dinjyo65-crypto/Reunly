@@ -290,7 +290,7 @@ def suggest_places(q):
 AREA_TAGS = ("city", "town", "village", "suburb", "borough", "neighbourhood", "quarter", "hamlet")
 
 
-def suggest_cities(q, areas=False):
+def suggest_cities(q, areas=False, near=None):
     """Type-ahead for a HOME city, the way a maps app does it.
 
     Nominatim matches whole words, so "Lond" or "Springf" found nothing, and
@@ -307,7 +307,10 @@ def suggest_cities(q, areas=False):
     key = q.strip().lower()
     if len(key) < 2:
         return []
-    ckey = ("area:" if areas else "city:") + key
+    # near=(lat, lon) nudges results towards the event: "Easton" from a
+    # Bristol night out is Easton, Bristol — not Easton, Massachusetts.
+    bias = [("lat", round(near[0], 2)), ("lon", round(near[1], 2)), ("location_bias_scale", 0.3)] if near else []
+    ckey = ("area:" if areas else "city:") + key + (":%s,%s" % (bias[0][1], bias[1][1]) if bias else "")
     with _suggest_lock:
         if ckey in _suggest_cache:
             return _suggest_cache[ckey]
@@ -315,7 +318,7 @@ def suggest_cities(q, areas=False):
     try:
         tags = AREA_TAGS if areas else ("city", "town")
         params = urllib.parse.urlencode(
-            [("q", q), ("limit", 8), ("lang", "en")] + [("osm_tag", "place:" + t) for t in tags])
+            [("q", q), ("limit", 8), ("lang", "en")] + bias + [("osm_tag", "place:" + t) for t in tags])
         req = urllib.request.Request(
             "https://photon.komoot.io/api/?" + params,
             headers={"User-Agent": USER_AGENT})
@@ -344,6 +347,49 @@ def suggest_cities(q, areas=False):
                 break
     except Exception:
         return suggest_places(q)
+    with _suggest_lock:
+        _cache_put(_suggest_cache, ckey, results)
+    return results
+
+
+def suggest_venues(q, near=None):
+    """Type-ahead for "add any place": named venues (a restaurant, an
+    office, a karaoke bar) near the route. The city search behind it before
+    only knew towns, so "The Llandoger Trow, Bristol" came back as
+    "Bristol" and was added as a stop. Towns and areas are left out."""
+    key = q.strip().lower()
+    if len(key) < 3:
+        return []
+    bias = [("lat", round(near[0], 3)), ("lon", round(near[1], 3)), ("location_bias_scale", 0.5)] if near else []
+    ckey = "venue:" + key + (":%s,%s" % (bias[0][1], bias[1][1]) if bias else "")
+    with _suggest_lock:
+        if ckey in _suggest_cache:
+            return _suggest_cache[ckey]
+    results = []
+    try:
+        params = urllib.parse.urlencode([("q", q), ("limit", 12), ("lang", "en")] + bias)
+        req = urllib.request.Request("https://photon.komoot.io/api/?" + params, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            feats = json.loads(r.read()).get("features", [])
+    except Exception:
+        return []
+    seen = set()
+    for f in feats:
+        p = f.get("properties", {})
+        name = p.get("name")
+        if not name or p.get("osm_key") in ("place", "boundary", "highway", "landuse"):
+            continue
+        street = " ".join(x for x in (p.get("housenumber"), p.get("street")) if x)
+        parts = [name] + [x for x in (street, p.get("city") or p.get("county")) if x and x != name]
+        label = ", ".join(parts)
+        if label.lower() in seen:
+            continue
+        seen.add(label.lower())
+        lon, lat = f["geometry"]["coordinates"]
+        results.append({"label": label, "lat": float(lat), "lon": float(lon),
+                        "cc": (p.get("countrycode") or "").lower(), "venue": True})
+        if len(results) == 6:
+            break
     with _suggest_lock:
         _cache_put(_suggest_cache, ckey, results)
     return results
@@ -925,7 +971,7 @@ LOOPBACK = {"127.0.0.1", "::1"}
 
 # Where people live and how they get home is for the organiser (duty of care)
 # and for each guest's own phone — not for everyone holding the guest link.
-PRIVATE_PERSON = ("home", "transport", "lastTrain")
+PRIVATE_PERSON = ("home", "transport", "lastTrain", "stepFree")
 PRIVATE_RECORD = ("organizerHome", "organizerTransport", "organizerLastTrain")
 
 
@@ -1309,8 +1355,13 @@ class Handler(SimpleHTTPRequestHandler):
             q = urllib.parse.parse_qs(parsed.query)
             kind = q.get("kind", [""])[0]
             text = q.get("q", [""])[0]
+            lat = _num(q.get("lat", [""])[0], -90, 90)
+            lon = _num(q.get("lon", [""])[0], -180, 180)
+            near = (lat, lon) if lat is not None and lon is not None else None
+            if kind == "venue":
+                return self._send_json({"results": suggest_venues(text, near)})
             if kind in ("city", "area"):
-                return self._send_json({"results": suggest_cities(text, areas=kind == "area")})
+                return self._send_json({"results": suggest_cities(text, areas=kind == "area", near=near if kind == "area" else None)})
             return self._send_json({"results": suggest_places(text)})
         if parsed.path == "/api/reverse":
             q = urllib.parse.parse_qs(parsed.query)

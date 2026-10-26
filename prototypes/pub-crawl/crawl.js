@@ -74,7 +74,7 @@
   }
 
   // ---- Place suggestions (any place, via the app's existing /api/geosuggest) ----
-  function attachSuggest(input, onPick, kind) {
+  function attachSuggest(input, onPick, kind, near) {
     const wrap = input.parentElement;
     let menu = null;
     let timer = null;
@@ -89,7 +89,9 @@
       timer = setTimeout(async () => {
         let data = null;
         try {
-          data = (await api(`/api/geosuggest?q=${encodeURIComponent(q)}${kind ? "&kind=" + kind : ""}`)).data;
+          const at = near && near();
+          const bias = at ? `&lat=${at.lat.toFixed(3)}&lon=${at.lon.toFixed(3)}` : "";
+          data = (await api(`/api/geosuggest?q=${encodeURIComponent(q)}${kind ? "&kind=" + kind : ""}${bias}`)).data;
         } catch (e) {
           return; // no signal: just no suggestions
         }
@@ -333,7 +335,8 @@
     const orgHome = el("input", { id: "evOrgHome", placeholder: "Your town or area — e.g. Manchester", autocomplete: "off",
       value: draft.organizerHome ? draft.organizerHome.label : "" });
     homeWrap.appendChild(orgHome);
-    attachSuggest(orgHome, (pl) => { draft.organizerHome = { label: pl.label, lat: pl.lat, lon: pl.lon }; save(); drawRoute(); }, "area");
+    attachSuggest(orgHome, (pl) => { draft.organizerHome = { label: pl.label, lat: pl.lat, lon: pl.lon }; save(); drawRoute(); }, "area",
+      () => draft.stops[0] || null);
     orgHome.addEventListener("input", () => {
       if (draft.organizerHome && orgHome.value !== draft.organizerHome.label) { draft.organizerHome = null; save(); drawRoute(); }
     });
@@ -506,6 +509,11 @@
     anyWrap.appendChild(anyPlace);
     find.append(el("label", { for: "evAny", text: "Or add any place" }), anyWrap);
     attachSuggest(anyPlace, (s) => {
+      if (!s.venue) {
+        anyPlace.value = "";
+        toast(`"${s.label}" is a whole area, not a place — search for the venue's name`);
+        return;
+      }
       const place = { name: s.label.split(",")[0], lat: s.lat, lon: s.lon };
       if (isOnRoute(place)) {
         anyPlace.value = "";
@@ -517,7 +525,7 @@
       anyPlace.value = "";
       drawRoute();
       toast(`Added ${s.label.split(",")[0]}`);
-    });
+    }, "venue", () => draft.stops[draft.stops.length - 1] || areaPoint || null);
     app.appendChild(find);
 
     // --- The route with times ---
@@ -1124,18 +1132,18 @@
       const t = C.homeTrip(C.lastStopFor(pp, sched), pp.home, pp.transport, pp.lastTrain, rec.date);
       if (t) ways.push([pp.name, t]);
     });
-    if (ways.length) {
+    if (ways.length && st.phase !== "done") {
       const box = el("div", { class: "safety", id: "waysHome" }, [el("div", { class: "name", text: "Ways home" })]);
       ways.forEach(([who, t]) => box.appendChild(el("div", { class: t.warn ? "warn" : "note", text: `${who}: ${t.text}` })));
       card.appendChild(box);
     }
     // Duty of care: who's still out, who's heading home, who's home safe.
     if (st.phase !== "planning") {
-      const s = C.safetySummary(rec.people || []);
+      const s = C.safetySummary(rec.people || [], st.phase === "done");
       const names = (list) => list.map((p) => p.name).join(", ") || "—";
       card.appendChild(el("div", { class: "safety", id: "safetyPanel" }, [
         el("div", { class: "name", text: st.phase === "done" ? "Getting everyone home" : "Getting home" }),
-        el("div", { class: "note", text: `Still out: ${names(s.out)}` }),
+        el("div", { class: "note", text: `${st.phase === "done" ? "Not home safe yet" : "Still out"}: ${names(s.out)}` }),
         el("div", { class: "note", text: `Heading home: ${names(s.headingHome)}` }),
         el("div", { class: "note", text: `Home safe ✓: ${names(s.safe)}` }),
         st.phase === "done" && (s.out.length || s.headingHome.length)
@@ -1166,7 +1174,8 @@
       const myHome = el("input", { id: "meHome", placeholder: "Town or area — so we can check your way home", autocomplete: "off" });
       homeWrap.appendChild(myHome);
       let syncTrain = () => {};
-      attachSuggest(myHome, (pl) => { pickedHome = { label: pl.label, lat: pl.lat, lon: pl.lon }; syncTrain(); }, "area");
+      attachSuggest(myHome, (pl) => { pickedHome = { label: pl.label, lat: pl.lat, lon: pl.lon }; syncTrain(); homeWrap.dispatchEvent(new Event("picked")); }, "area",
+        () => sched[0] || null);
       myHome.addEventListener("input", () => {
         if (pickedHome && myHome.value !== pickedHome.label) { pickedHome = null; syncTrain(); }
       });
@@ -1185,6 +1194,14 @@
       );
       const stepFree = el("input", { type: "checkbox", id: "meStepFree" });
       card.appendChild(el("div", { class: "checks" }, [el("label", { class: "check", for: "meStepFree" }, [stepFree, "I need step-free access"])]));
+      const homeCheck = el("div", { class: "warn", id: "meHomeCheck", hidden: true });
+      homeWrap.after(homeCheck);
+      const checkHome = () => {
+        const t = pickedHome && C.homeTrip(sched[0], pickedHome, "", "", rec.date);
+        homeCheck.textContent = t && t.wrongPlace ? t.text : "";
+        homeCheck.hidden = !homeCheck.textContent;
+      };
+      homeWrap.addEventListener("picked", checkHome);
       syncTrain = wireTrain(transport, myTrain, trainHint,
         () => C.homeTrip(sched[sched.length - 1], pickedHome, transport.value, myTrain.value, rec.date));
       const join = (status) => {
@@ -1233,6 +1250,12 @@
     if (me.status === "safe") line = "Home safe ✓ — thanks for letting everyone know.";
     card.appendChild(el("h2", { text: `Hi ${me.name}` }));
     card.appendChild(el("div", { class: "muted", text: line }));
+    if (me.stepFree && me.status !== "out" && st.phase !== "done") {
+      const unsure = sched.filter((x) => x.stepFree !== "yes").map((x) => x.name);
+      card.appendChild(el("div", { class: "note", id: "meAccess",
+        text: `♿ ${rec.organizer || "The organiser"} can see you need step-free access.` +
+          (unsure.length ? ` Not confirmed step-free: ${unsure.join(", ")}.` : " Every stop is listed as step-free.") }));
+    }
     const set = (status, msg, extra) => savePerson({ ...me, status, eta: 0, ...(extra || {}) }).then((ok) => ok && toast(msg));
 
     // The night card: everything a guest needs in one place, on the night.
@@ -1251,8 +1274,10 @@
       // Once the night's over, "before the night ends" no longer applies.
       const mine = C.lastStopFor(me, sched);
       const last = st.phase === "done" ? { ...mine, leave: null } : mine;
-      const trip = me.status === "safe" ? null : C.homeTrip(last, me.home, me.transport, me.lastTrain, rec.date);
-      const leave = me.status === "safe" ? null : C.leaveBy(me.lastTrain);
+      // After the end, train times are history — keep only a wrong-place flag.
+      const tripNow = me.status === "safe" ? null : C.homeTrip(last, me.home, me.transport, me.lastTrain, rec.date);
+      const trip = st.phase === "done" && tripNow && !tripNow.wrongPlace ? null : tripNow;
+      const leave = me.status === "safe" || st.phase === "done" ? null : C.leaveBy(me.lastTrain);
       if (trip) info.appendChild(el("div", { class: trip.warn ? "warn" : "note", text: `🏠 ${trip.text}` }));
       else if (leave) info.appendChild(el("div", { class: "note", text: `🚆 Leave by ${leave} for your ${me.lastTrain} train` }));
       // They said when they have to go: which stop that means.

@@ -338,13 +338,16 @@
   }
 
   /**
-   * Who still needs looking after at the end of the night. Everyone who came
-   * (here / heading home) and hasn't tapped "Home safe" is still out.
+   * Who still needs looking after. Everyone who came (here / heading home)
+   * and hasn't tapped "Home safe" is still out. Once the night has ended,
+   * someone who said they were coming and never updated is unaccounted for
+   * too — before, they silently dropped off the list.
    */
-  function safetySummary(people) {
-    const came = people.filter((p) => ["here", "home", "safe", "late", "onway"].includes(p.status));
+  function safetySummary(people, ended) {
+    const open = ended ? ["here", "late", "onway", "coming"] : ["here", "late", "onway"];
+    const came = people.filter((p) => open.includes(p.status) || p.status === "home" || p.status === "safe");
     return {
-      out: came.filter((p) => p.status === "here" || p.status === "late" || p.status === "onway"),
+      out: came.filter((p) => open.includes(p.status)),
       headingHome: came.filter((p) => p.status === "home"),
       safe: came.filter((p) => p.status === "safe"),
     };
@@ -385,6 +388,12 @@
     const far = miles > 25;
     let text;
     let warn = false;
+    if (miles > 300) {
+      // Almost always the wrong pick from the suggestions (a same-named town
+      // in another country), not a real journey home from a night out.
+      return { miles, far: true, warn: true, wrongPlace: true,
+        text: `${place} is ${Math.round(miles)} mi away — is that the right place? Pick it again from the suggestions.` };
+    }
     if (miles < 0.3) {
       text = `Home is right here (${place})`;
     } else if (transport === "walk") {
