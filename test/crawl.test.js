@@ -145,11 +145,20 @@ test("way home from the last stop depends on where you live and how you travel",
   const last = { name: "Last pub", lat: 51.5136, lon: -0.089 };
   const manchester = { label: "Manchester, England, United Kingdom", lat: 53.4808, lon: -2.2426 };
   const islington = { label: "Islington, London", lat: 51.5362, lon: -0.1033 };
-  const t1 = C.homeTrip(last, manchester, "train", "");
-  assert.ok(t1.far && t1.warn && /set your last train/.test(t1.text), t1.text);
+  const t1 = C.homeTrip({ ...last, leave: 23 * 60 }, manchester, "train", "");
+  assert.ok(t1.auto && t1.lastTrain === "21:30" && t1.early && t1.warn, t1.text);
+  assert.ok(/about 21:30, estimated/.test(t1.text) && /before the night ends at 23:00/.test(t1.text), t1.text);
   const t2 = C.homeTrip(last, manchester, "train", "21:30");
-  assert.ok(/leave by 21:15 for the 21:30 train/.test(t2.text) && !t2.warn, t2.text);
+  assert.ok(/leave by 21:15 for the 21:30 train/.test(t2.text) && !t2.warn && !t2.auto, t2.text);
   const t3 = C.homeTrip(last, islington, "walk", "");
   assert.ok(/min walk home to Islington/.test(t3.text), t3.text);
   assert.strictEqual(C.homeTrip(last, null, "walk", ""), null, "no home given → nothing to say");
+});
+
+test("last train is estimated from distance, later locally at weekends", () => {
+  assert.strictEqual(C.estimateLastTrain(3, "2026-10-29"), "23:45"); // Thursday
+  assert.strictEqual(C.estimateLastTrain(3, "2026-10-30"), "00:15"); // Friday
+  assert.strictEqual(C.estimateLastTrain(25), "23:30");
+  assert.strictEqual(C.estimateLastTrain(160), "21:30");
+  assert.strictEqual(C.estimateLastTrain(null), null);
 });

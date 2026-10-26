@@ -190,7 +190,7 @@
   }
 
   const TRANSPORT = [
-    ["", "How are you getting home?"], ["walk", "Walking"], ["train", "Train / tube"],
+    ["", "How are you getting home?"], ["walk", "Walking"], ["train", "Train / tube / tram"],
     ["bus", "Night bus"], ["taxi", "Taxi / Uber"], ["lift", "Getting a lift"],
     ["drive", "Driving (not drinking)"], ["unsure", "Not sure yet"],
   ];
@@ -203,6 +203,30 @@
       const t = C.toHHMM(m);
       select.appendChild(el("option", { value: t, text: t, selected: t === value }));
     }
+  }
+
+  /**
+   * A last train only matters by train / tube / tram, and defaults to Auto —
+   * an estimate from the distance home, shown underneath so it can be
+   * changed. `trip()` returns the current C.homeTrip (or null). Returns the
+   * sync function, to call again when the home or the route changes.
+   */
+  function wireTrain(transport, train, hint, trip) {
+    const sync = () => {
+      const on = transport.value === "train";
+      train.disabled = !on;
+      if (!on) train.value = "";
+      const t = on ? trip() : null;
+      hint.textContent = !on ? ""
+        : !t ? "Add where you're coming from and we'll estimate your last train."
+        : t.auto ? `Last train estimated at about ${t.lastTrain} from the distance — pick the real time if you know it.`
+        : "";
+      hint.hidden = !hint.textContent;
+    };
+    transport.addEventListener("change", sync);
+    train.addEventListener("change", sync);
+    sync();
+    return sync;
   }
 
   const telHref = (phone) => `tel:${String(phone).replace(/[^0-9+]/g, "")}`;
@@ -303,24 +327,27 @@
     // Getting home + being reachable on the night.
     const orgPhone = el("input", { id: "evOrgPhone", type: "tel", placeholder: "Optional — guests can call you on the night", value: draft.organizerPhone, autocomplete: "tel" });
     orgPhone.addEventListener("input", () => { draft.organizerPhone = orgPhone.value; save(); });
-    const lastTrain = el("select", { id: "evLastTrain" });
-    trainOptions(lastTrain, draft.lastTrain, "Not sure / not relevant");
-    lastTrain.addEventListener("change", () => { draft.lastTrain = lastTrain.value; save(); drawRoute(); });
     // Where the organiser is travelling from — the night may be in another city.
     const homeWrap = el("div", { class: "ac" });
     const orgHome = el("input", { id: "evOrgHome", placeholder: "Your town or area — e.g. Manchester", autocomplete: "off",
       value: draft.organizerHome ? draft.organizerHome.label : "" });
     homeWrap.appendChild(orgHome);
-    attachSuggest(orgHome, (pl) => { draft.organizerHome = { label: pl.label, lat: pl.lat, lon: pl.lon }; save(); }, "area");
+    attachSuggest(orgHome, (pl) => { draft.organizerHome = { label: pl.label, lat: pl.lat, lon: pl.lon }; save(); drawRoute(); }, "area");
     orgHome.addEventListener("input", () => {
-      if (draft.organizerHome && orgHome.value !== draft.organizerHome.label) { draft.organizerHome = null; save(); }
+      if (draft.organizerHome && orgHome.value !== draft.organizerHome.label) { draft.organizerHome = null; save(); drawRoute(); }
     });
     const orgTransport = el("select", { id: "evOrgTransport" });
     TRANSPORT.forEach(([v, t]) => orgTransport.appendChild(el("option", { value: v, text: t, selected: v === draft.organizerTransport })));
-    orgTransport.addEventListener("change", () => { draft.organizerTransport = orgTransport.value; save(); });
+    orgTransport.addEventListener("change", () => { draft.organizerTransport = orgTransport.value; save(); drawRoute(); });
     const orgTrain = el("select", { id: "evOrgLastTrain" });
-    trainOptions(orgTrain, draft.organizerLastTrain, "No last train");
-    orgTrain.addEventListener("change", () => { draft.organizerLastTrain = orgTrain.value; save(); });
+    trainOptions(orgTrain, draft.organizerLastTrain, "Auto (estimated)");
+    orgTrain.addEventListener("change", () => { draft.organizerLastTrain = orgTrain.value; save(); drawRoute(); });
+    const orgTrainHint = el("div", { class: "note", id: "evOrgTrainHint" });
+    // The organiser's own trip home from the last stop of the current route.
+    const orgTrip = () => {
+      const s = C.scheduleStops(draft.stops, draft.plannedStart, draft.dwell);
+      return C.homeTrip(s[s.length - 1], draft.organizerHome, draft.organizerTransport, draft.organizerLastTrain, draft.date);
+    };
     basics.append(
       el("label", { for: "evOrgPhone", text: "Your phone (optional)" }), orgPhone,
       el("label", { for: "evOrgHome", text: "You're coming from" }), homeWrap,
@@ -328,8 +355,11 @@
         el("div", {}, [el("label", { for: "evOrgTransport", text: "Getting home" }), orgTransport]),
         el("div", {}, [el("label", { for: "evOrgLastTrain", text: "Your last train" }), orgTrain]),
       ]),
-      el("label", { for: "evLastTrain", text: "Last train / tube from the area" }), lastTrain
+      orgTrainHint
     );
+    const syncOrgTrain = wireTrain(orgTransport, orgTrain, orgTrainHint, orgTrip);
+    // wireTrain clears the train when it isn't relevant — keep the draft in step.
+    draft.organizerLastTrain = orgTrain.value;
     app.appendChild(basics);
 
     // --- Who's coming (drives smart suggest) ---
@@ -530,12 +560,14 @@
         );
       });
       route.appendChild(list);
-      // Getting home: does the plan run past the area's last train?
-      const over = C.pastLastTrain(sched, draft.lastTrain);
-      if (over > 0) {
+      // Getting home: does the plan run past the organiser's own last train?
+      // (Guests' trains are checked on the event page as they reply.)
+      const mine = orgTrip();
+      if (mine && mine.early) {
         route.appendChild(el("div", { class: "warn", id: "lastTrainWarn",
-          text: `🚆 Ends at ${sched[sched.length - 1].leaveAt} — after the last train (${draft.lastTrain}). Drop a stop, start earlier, or plan taxis.` }));
+          text: `🚆 Ends at ${sched[sched.length - 1].leaveAt} — you'd need to leave by ${mine.leave} for your last train (${mine.auto ? `about ${mine.lastTrain}, estimated` : mine.lastTrain}). Drop a stop, start earlier, or plan another way home.` }));
       }
+      syncOrgTrain();
       if ((draft.who.size || 0) >= C.BOOK_AHEAD_AT && sched.length) {
         route.appendChild(el("div", { class: "note", style: "margin-top:6px",
           text: `👥 ${draft.who.size} people — most pubs can't seat that many walk-ins together. You can track bookings stop by stop after creating.` }));
@@ -562,8 +594,8 @@
         organizerPhone: draft.organizerPhone.trim(),
         organizerHome: draft.organizerHome,
         organizerTransport: draft.organizerTransport,
-        organizerLastTrain: draft.organizerLastTrain,
-        lastTrain: draft.lastTrain,
+        organizerLastTrain: draft.organizerTransport === "train" ? draft.organizerLastTrain : "",
+        lastTrain: "",
         date: draft.date,
         plannedStart: draft.plannedStart,
         finalStart: "",
@@ -787,6 +819,8 @@
     Object.entries(keep).forEach(([id, v]) => {
       const n = document.getElementById(id);
       if (n) n.value = v;
+      // Selects drive other fields (getting home → last train): let them catch up.
+      if (n && n.tagName === "SELECT") n.dispatchEvent(new Event("change"));
     });
     if (focused && document.getElementById(focused)) document.getElementById(focused).focus();
   }
@@ -1047,11 +1081,11 @@
     const lastStop = sched[sched.length - 1];
     const ways = [];
     if (rec.organizerHome) {
-      const t = C.homeTrip(lastStop, rec.organizerHome, rec.organizerTransport, rec.organizerLastTrain);
+      const t = C.homeTrip(lastStop, rec.organizerHome, rec.organizerTransport, rec.organizerLastTrain, rec.date);
       if (t) ways.push([`${rec.organizer || "You"} (you)`, t]);
     }
     (rec.people || []).filter((pp) => pp.status !== "out" && pp.home).forEach((pp) => {
-      const t = C.homeTrip(lastStop, pp.home, pp.transport, pp.lastTrain);
+      const t = C.homeTrip(lastStop, pp.home, pp.transport, pp.lastTrain, rec.date);
       if (t) ways.push([pp.name, t]);
     });
     if (ways.length) {
@@ -1090,13 +1124,15 @@
       const transport = el("select", { id: "meTransport" });
       TRANSPORT.forEach(([v, t]) => transport.appendChild(el("option", { value: v, text: t })));
       const myTrain = el("select", { id: "meLastTrain" });
-      trainOptions(myTrain, "", "No last train");
+      trainOptions(myTrain, "", "Auto (estimated)");
+      const trainHint = el("div", { class: "note", id: "meTrainHint" });
       const homeWrap = el("div", { class: "ac" });
       const myHome = el("input", { id: "meHome", placeholder: "Town or area — so we can check your way home", autocomplete: "off" });
       homeWrap.appendChild(myHome);
-      attachSuggest(myHome, (pl) => { pickedHome = { label: pl.label, lat: pl.lat, lon: pl.lon }; }, "area");
+      let syncTrain = () => {};
+      attachSuggest(myHome, (pl) => { pickedHome = { label: pl.label, lat: pl.lat, lon: pl.lon }; syncTrain(); }, "area");
       myHome.addEventListener("input", () => {
-        if (pickedHome && myHome.value !== pickedHome.label) pickedHome = null;
+        if (pickedHome && myHome.value !== pickedHome.label) { pickedHome = null; syncTrain(); }
       });
       card.append(
         el("label", { for: "meName", text: "Name" }), name,
@@ -1108,8 +1144,11 @@
         el("div", { class: "row" }, [
           el("div", {}, [el("label", { for: "meTransport", text: "Getting home" }), transport]),
           el("div", {}, [el("label", { for: "meLastTrain", text: "My last train" }), myTrain]),
-        ])
+        ]),
+        trainHint
       );
+      syncTrain = wireTrain(transport, myTrain, trainHint,
+        () => C.homeTrip(sched[sched.length - 1], pickedHome, transport.value, myTrain.value, rec.date));
       const join = (status) => {
         if (!name.value.trim()) {
           toast("Add your name first");
@@ -1118,7 +1157,7 @@
         }
         savePerson({
           id: rid(), token: rid() + rid() + rid(), name: name.value.trim(), from: from.value, until: until.value, status,
-          transport: transport.value, lastTrain: myTrain.value, home: pickedHome,
+          transport: transport.value, lastTrain: transport.value === "train" ? myTrain.value : "", home: pickedHome,
         }).then((ok) => {
           if (ok) toast(status === "out" ? "Thanks — the organiser will see you can't make it" : "You're on the list 🍻");
         });
@@ -1168,7 +1207,7 @@
           st.state === "at" && st.spot ? el("div", { class: "spot", text: `Find us: ${st.spot}` }) : null,
         ].forEach((n) => n && info.appendChild(n));
       }
-      const trip = C.homeTrip(sched[sched.length - 1], me.home, me.transport, me.lastTrain);
+      const trip = C.homeTrip(sched[sched.length - 1], me.home, me.transport, me.lastTrain, rec.date);
       const leave = C.leaveBy(me.lastTrain);
       if (trip) info.appendChild(el("div", { class: trip.warn ? "warn" : "note", text: `🏠 ${trip.text}` }));
       else if (leave) info.appendChild(el("div", { class: "note", text: `🚆 Leave by ${leave} for your ${me.lastTrain} train` }));
@@ -1176,36 +1215,50 @@
         info.appendChild(el("a", { class: "btn ghost sm", href: telHref(rec.organizerPhone), text: `📞 Call ${rec.organizer || "the organiser"}` }));
       }
       card.appendChild(info);
-    } else if (going && C.leaveBy(me.lastTrain)) {
-      card.appendChild(el("div", { class: "note", text: `🚆 On the night: leave by ${C.leaveBy(me.lastTrain)} for your ${me.lastTrain} train.` }));
+    } else if (going) {
+      const trip = C.homeTrip(sched[sched.length - 1], me.home, me.transport, me.lastTrain, rec.date);
+      if (trip) card.appendChild(el("div", { class: trip.warn ? "warn" : "note", text: `🏠 On the night: ${trip.text}` }));
+      else if (C.leaveBy(me.lastTrain)) card.appendChild(el("div", { class: "note", text: `🚆 On the night: leave by ${C.leaveBy(me.lastTrain)} for your ${me.lastTrain} train.` }));
     }
 
     // Actions for the night, kept in a sticky bar so they're always in reach.
-    if (going && st.phase === "live") {
-      const eta = el("select", { id: "meEta", "aria-label": "How late" });
-      [15, 30, 45, 60].forEach((m) => eta.appendChild(el("option", { value: m, text: `~${m} min`, selected: m === (me.eta || 30) })));
-      card.appendChild(el("div", { class: "guestbar" }, [
-        el("button", { class: "btn secondary", id: "meOnWay", text: "🚶 On my way", disabled: me.status === "onway", onClick: () => set("onway", "The group knows you're coming") }),
-        el("button", { class: "btn", id: "meHere", text: "📍 I'm here", disabled: me.status === "here", onClick: () => set("here", "Welcome! 🍻") }),
-        el("div", { class: "late" }, [
-          eta,
-          el("button", { class: "btn ghost", id: "meLate", text: "⏰ Running late", onClick: () => set("late", "The group knows you're running late", { eta: Number(eta.value) }) }),
-        ]),
-        el("button", { class: "btn ghost", id: "meHome", text: "🏠 Heading home", disabled: me.status === "home" || me.status === "safe", onClick: () => set("home", "Get home safe — tap Home safe when you're in") }),
-      ]));
+    // Each one only while it still makes sense: "On my way" and "Running
+    // late" until you've caught up with the group; once you're heading home
+    // the only thing left is "Home safe".
+    const withGroup = me.status === "here";
+    const leaving = me.status === "home" || me.status === "safe";
+    if (going && st.phase === "live" && !leaving) {
+      const bar = [];
+      if (!withGroup) {
+        const eta = el("select", { id: "meEta", "aria-label": "How late" });
+        [15, 30, 45, 60].forEach((m) => eta.appendChild(el("option", { value: m, text: `~${m} min`, selected: m === (me.eta || 30) })));
+        bar.push(
+          el("button", { class: "btn secondary", id: "meOnWay", text: "🚶 On my way", disabled: me.status === "onway", onClick: () => set("onway", "The group knows you're coming") }),
+          el("button", { class: "btn", id: "meHere", text: "📍 I'm here", onClick: () => set("here", "Welcome! 🍻") }),
+          el("div", { class: "late" }, [
+            eta,
+            el("button", { class: "btn ghost", id: "meLate", text: "⏰ Running late", onClick: () => set("late", "The group knows you're running late", { eta: Number(eta.value) }) }),
+          ])
+        );
+      }
+      bar.push(el("button", { class: withGroup ? "btn" : "btn ghost", id: "meHome", text: "🏠 Heading home", onClick: () => set("home", "Get home safe — tap Home safe when you're in") }));
+      card.appendChild(el("div", { class: "guestbar" }, bar));
     }
-    if (going && (me.status === "home" || st.phase === "done")) {
+    if (going && (leaving || st.phase === "done")) {
       card.appendChild(el("div", { class: "btns" }, [
         el("button", { class: "btn", id: "meSafe", text: me.status === "safe" ? "Home safe ✓" : "✅ I'm home safe", disabled: me.status === "safe", onClick: () => set("safe", "Thanks — the organiser can see you're home") }),
       ]));
     }
-    card.appendChild(
-      el("div", { class: "btns" }, [
-        me.status === "out"
-          ? el("button", { class: "btn ghost sm", text: "Actually, I can come", onClick: () => set("coming", "You're back on the list") })
-          : el("button", { class: "btn ghost sm", id: "meCant", text: "Can't make it after all", onClick: () => set("out", "Thanks for letting them know") }),
-      ])
-    );
+    // Pulling out only makes sense before you've joined and before the end.
+    if (me.status === "out" && st.phase !== "done") {
+      card.appendChild(el("div", { class: "btns" }, [
+        el("button", { class: "btn ghost sm", text: "Actually, I can come", onClick: () => set("coming", "You're back on the list") }),
+      ]));
+    } else if (going && st.phase !== "done" && !withGroup && !leaving) {
+      card.appendChild(el("div", { class: "btns" }, [
+        el("button", { class: "btn ghost sm", id: "meCant", text: "Can't make it after all", onClick: () => set("out", "Thanks for letting them know") }),
+      ]));
+    }
     return card;
   }
 

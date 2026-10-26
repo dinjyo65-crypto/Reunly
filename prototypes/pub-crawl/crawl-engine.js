@@ -351,14 +351,31 @@
   }
 
   /**
+   * A rough last train home, from how far it is. We have no timetables, so
+   * this is a cautious rule of thumb (UK-style networks): city metro / tram
+   * runs latest, long-distance services stop early. Fri/Sat local services
+   * run a little later. Always shown as an estimate the person can change.
+   */
+  function estimateLastTrain(miles, date) {
+    if (miles == null) return null;
+    const day = date ? new Date(`${date}T12:00:00`).getDay() : -1;
+    const weekend = day === 5 || day === 6;
+    if (miles < 10) return weekend ? "00:15" : "23:45";
+    if (miles < 40) return "23:30";
+    if (miles < 100) return "22:30";
+    if (miles < 200) return "21:30";
+    return "20:30";
+  }
+
+  /**
    * One person's way home from the last stop: distance, a rough time for the
    * way they said they're travelling, and plain advice. `home` is
    * { label, lat, lon } (where they're coming from); `transport` is walk /
-   * train / bus / taxi / lift / drive / unsure. We have no timetables, so
-   * public transport gets distance + the leave-by from their last train, and
-   * a nudge when home is far and no last train was given.
+   * train / bus / taxi / lift / drive / unsure. A train traveller with no
+   * last train given gets an estimate from the distance (`auto: true`), and a
+   * warning when they'd have to leave before the night ends.
    */
-  function homeTrip(lastStop, home, transport, lastTrain) {
+  function homeTrip(lastStop, home, transport, lastTrain, date) {
     if (!lastStop || !home || !Number.isFinite(home.lat) || !Number.isFinite(home.lon)) return null;
     const miles = milesBetween(lastStop, home);
     if (miles == null) return null;
@@ -378,12 +395,17 @@
       if (far) { text += " — a long, expensive ride"; warn = true; }
     } else if (transport === "drive" || transport === "lift") {
       text = `~${mins(far ? 45 : 22)} min ${transport === "drive" ? "drive" : "by car"} to ${place}`;
-    } else if (transport === "train" || transport === "bus") {
-      const leave = leaveBy(lastTrain);
-      text = leave
-        ? `${Math.round(miles)} mi to ${place} — leave by ${leave} for the ${lastTrain} ${transport === "bus" ? "bus" : "train"}`
-        : `${Math.round(miles)} mi to ${place} — ${far ? "set your last train so you don't miss it" : "check the last train / bus"}`;
-      warn = !leave && far;
+    } else if (transport === "train") {
+      const auto = toMin(lastTrain) == null;
+      const train = auto ? estimateLastTrain(miles, date) : lastTrain;
+      const leave = leaveBy(train);
+      const early = lastStop.leave != null && toMin(leave) < lastStop.leave;
+      text = `${Math.round(miles)} mi to ${place} — leave by ${leave} for the ${auto ? `last train (about ${train}, estimated)` : `${train} train`}`;
+      if (early) { text += ` — before the night ends at ${toHHMM(lastStop.leave)}`; warn = true; }
+      return { miles, text, warn, far, lastTrain: train, auto, leave, early };
+    } else if (transport === "bus") {
+      text = `${Math.round(miles)} mi to ${place} — check the night bus times`;
+      warn = far;
     } else {
       text = `${Math.round(miles)} mi to ${place} — ${far ? "plan how you're getting back" : "sort a way home"}`;
       warn = far;
@@ -407,6 +429,7 @@
     toMin, toHHMM, milesBetween, walkMinutes, scheduleStops, joinsAt,
     headcounts, bestStart, isOpenAt, closedStops, sameStop, scoreVenue, suggestRoute,
     leaveBy, pastLastTrain, safetySummary, bookingNeeded, BOOK_AHEAD_AT, homeTrip,
+    estimateLastTrain,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.CrawlEngine = api;
