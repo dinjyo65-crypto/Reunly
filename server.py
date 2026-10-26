@@ -807,11 +807,14 @@ def sanitize_live(data):
         if lat is None or lon is None or not _s(s.get("name"), 80).strip():
             continue
         bk = s.get("booking") if isinstance(s.get("booking"), dict) else {}
+        tags = s.get("tags") if isinstance(s.get("tags"), dict) else {}
+        access = s.get("stepFree") or tags.get("wheelchair")
         stops.append({
             "id": _s(s.get("id"), 24), "name": _s(s.get("name"), 80),
             "lat": lat, "lon": lon, "hours": _s(s.get("hours"), 160),
             "kind": _s(s.get("kind"), 20), "address": _s(s.get("address"), 120),
             "phone": _phone(s.get("phone")), "website": _web(s.get("website")),
+            "stepFree": access if access in ("yes", "limited", "no") else "",
             "booking": {
                 "status": bk.get("status") if bk.get("status") in BOOKING_STATUSES else "none",
                 "ref": _s(bk.get("ref"), 40),
@@ -1016,6 +1019,9 @@ def _live_person(p):
             "transport": transport, "lastTrain": _time_or_blank(p.get("lastTrain")),
             "home": _place(p.get("home")),
             "eta": int(eta) if eta is not None else 0,
+            # Which stop they said "I'm here" / "on my way" at (-1 = not given).
+            "at": int(_num(p.get("at"), -1, LIVE_MAX_STOPS) if _num(p.get("at"), -1, LIVE_MAX_STOPS) is not None else -1),
+            "stepFree": p.get("stepFree") is True,
             "ts": time.time() * 1000}
 
 

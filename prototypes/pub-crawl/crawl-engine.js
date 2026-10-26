@@ -413,6 +413,20 @@
     return { miles, text, warn, far };
   }
 
+  /**
+   * Where someone leaves the group: the last stop they'll reach before their
+   * "until", with the leave time capped at it — or the last stop if they're
+   * out all night. Their way home starts from here.
+   */
+  function lastStopFor(person, schedule) {
+    if (!schedule.length) return null;
+    const end = schedule[schedule.length - 1];
+    const until = person && person.until ? toMin(person.until) : null;
+    if (until == null) return end;
+    const mine = schedule.filter((s) => s.arrive < until).pop();
+    return mine ? { ...mine, leave: Math.min(mine.leave, until) } : end;
+  }
+
   // ---- Booking -----------------------------------------------------------
   const BOOK_AHEAD_AT = 12; // most pubs can't seat 12+ walk-ins together
 
@@ -429,7 +443,7 @@
     toMin, toHHMM, milesBetween, walkMinutes, scheduleStops, joinsAt,
     headcounts, bestStart, isOpenAt, closedStops, sameStop, scoreVenue, suggestRoute,
     leaveBy, pastLastTrain, safetySummary, bookingNeeded, BOOK_AHEAD_AT, homeTrip,
-    estimateLastTrain,
+    estimateLastTrain, lastStopFor,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.CrawlEngine = api;

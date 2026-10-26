@@ -162,3 +162,13 @@ test("last train is estimated from distance, later locally at weekends", () => {
   assert.strictEqual(C.estimateLastTrain(160), "21:30");
   assert.strictEqual(C.estimateLastTrain(null), null);
 });
+
+test("a guest's way home starts where they leave the group", () => {
+  const sched = C.scheduleStops([
+    { name: "A", lat: 51.5, lon: -0.1 }, { name: "B", lat: 51.5, lon: -0.1 }, { name: "C", lat: 51.5, lon: -0.1 },
+  ], "18:00", 60);
+  assert.strictEqual(C.lastStopFor({ until: "" }, sched).name, "C");
+  const s = C.lastStopFor({ until: "19:30" }, sched);
+  assert.strictEqual(s.name, "B");
+  assert.strictEqual(C.toHHMM(s.leave), "19:30");
+});

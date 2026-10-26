@@ -211,7 +211,7 @@
    * changed. `trip()` returns the current C.homeTrip (or null). Returns the
    * sync function, to call again when the home or the route changes.
    */
-  function wireTrain(transport, train, hint, trip) {
+  function wireTrain(transport, train, hint, trip, missing) {
     const sync = () => {
       const on = transport.value === "train";
       train.disabled = !on;
@@ -219,7 +219,7 @@
       if (!on) train.value = "";
       const t = on ? trip() : null;
       hint.textContent = !on ? ""
-        : !t ? "Your last train is estimated once we know where you're coming from and the route has stops."
+        : !t ? (missing ? missing() : "Pick where you're coming from and we'll estimate your last train.")
         : t.auto ? `Last train estimated at about ${t.lastTrain} from the distance — pick the real time if you know it.`
         : "";
       hint.hidden = !hint.textContent;
@@ -358,7 +358,8 @@
       ]),
       orgTrainHint
     );
-    const syncOrgTrain = wireTrain(orgTransport, orgTrain, orgTrainHint, orgTrip);
+    const syncOrgTrain = wireTrain(orgTransport, orgTrain, orgTrainHint, orgTrip,
+      () => (draft.organizerHome ? "Your last train is estimated once the route has stops." : "Pick where you're coming from and we'll estimate your last train."));
     // wireTrain clears the train when it isn't relevant — keep the draft in step.
     draft.organizerLastTrain = orgTrain.value;
     app.appendChild(basics);
@@ -376,7 +377,7 @@
     who.append(
       el("div", { class: "row" }, [
         el("div", {}, [el("label", { for: "whoSize", text: "Roughly how many" }),
-          sel("whoSize", [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 20, 25, 30, 40].map((n) => [n, `${n} people`]), draft.who.size, (v) => { draft.who.size = Number(v); })]),
+          sel("whoSize", Array.from({ length: 39 }, (_, i) => i + 2).map((n) => [n, `${n} people`]), draft.who.size, (v) => { draft.who.size = Number(v); })]),
         el("div", {}, [el("label", { for: "whoStops", text: "How many stops" }),
           sel("whoStops", [2, 3, 4, 5, 6, 7, 8].map((n) => [n, `${n} stops`]), draft.target, (v) => { draft.target = Number(v); drawRoute(); })]),
       ]),
@@ -421,6 +422,7 @@
       draft.stops.push({
         id: rid(), name: p.name, lat: p.lat, lon: p.lon, hours: p.hours, kind: p.kind, address: p.address,
         phone: p.phone || "", website: p.website || "", why: why || [],
+        stepFree: (p.tags && p.tags.wheelchair) || "",
       });
     };
     function renderResults() {
@@ -716,6 +718,7 @@
     h.people = data.people;
     store.set(`crawl:host:${ctx.id}`, h);
     renderEvent();
+    return true;
   }
 
   async function savePerson(person) {
@@ -976,12 +979,23 @@
       const where = !planning || p.status === "out" ? "" : j ? ` · joins at ${sched[j.stopIndex].name}` : " · misses the route";
       const window = p.status === "out" ? "" : ` (${p.from || "?"}–${p.until || "late"})`;
       const eta = p.status === "late" && p.eta ? ` (~${p.eta} min${p.ts ? `, at ${clock(p.ts)}` : ""})` : "";
-      const stale = rec.status.phase === "done" && ["coming", "onway", "late"].includes(p.status);
+      const stale = rec.status.phase === "done" && ["coming", "onway", "late", "here"].includes(p.status);
+      const at = (p.status === "here" || p.status === "onway") && sched[p.at] ? ` (${p.status === "here" ? "joined at" : "heading to"} ${sched[p.at].name})` : "";
+      const needs = p.stepFree ? " ♿" : "";
       const shown = ["late", "home", "safe", "here", "onway"].includes(p.status) ? "" : window;
       chips.appendChild(el("span", { class: `chip ${stale ? "late" : p.status}`,
-        text: stale ? `${p.name}: no update since "${label[p.status]}"` : `${p.name}: ${label[p.status] || p.status}${eta}${shown}${isHost ? where : ""}` }));
+        text: stale
+          ? `${p.name}${needs}: no update since "${label[p.status]}"${p.ts ? ` at ${clock(p.ts)}` : ""}`
+          : `${p.name}${needs}: ${label[p.status] || p.status}${at}${eta}${shown}${isHost ? where : ""}` }));
     });
     card.appendChild(chips);
+    const access = going.filter((p) => p.stepFree);
+    if (isHost && access.length) {
+      const unsure = sched.filter((x) => x.stepFree !== "yes").map((x) => `${x.name}${x.stepFree === "no" ? " (not step-free)" : ""}`);
+      card.appendChild(el("div", { class: unsure.length ? "warn" : "note", id: "accessNote",
+        text: `♿ ${access.map((p) => p.name).join(", ")} need${access.length === 1 ? "s" : ""} step-free access` +
+          (unsure.length ? ` — check: ${unsure.join(", ")}.` : " — every stop is listed as step-free.") }));
+    }
 
     if (isHost && rec.status.phase === "planning") {
       // Head count per stop + suggested start.
@@ -1000,28 +1014,31 @@
       card.append(el("label", { text: "Head count at each stop" }), bars);
       const best = C.bestStart(rec.stops, people, rec.plannedStart, rec.dwell);
       const current = rec.finalStart || rec.plannedStart;
-      if (best && best.start !== current) {
+      if (best && best.start !== current && !rec.finalStart) {
         const moved = C.scheduleStops(rec.stops, best.start, rec.dwell);
         const end = moved[moved.length - 1];
         const ways = [];
         if (rec.organizerHome) ways.push([rec.organizer || "You", rec.organizerHome, rec.organizerTransport, rec.organizerLastTrain]);
-        going.forEach((pp) => ways.push([pp.name, pp.home, pp.transport, pp.lastTrain]));
-        const missed = ways.filter(([, h, t, lt]) => {
-          const trip = C.homeTrip(end, h, t, lt, rec.date);
-          const before = C.homeTrip(sched[sched.length - 1], h, t, lt, rec.date);
+        going.forEach((pp) => ways.push([pp.name, pp.home, pp.transport, pp.lastTrain, pp]));
+        const missed = ways.filter(([, h, t, lt, pp]) => {
+          const trip = C.homeTrip(pp ? C.lastStopFor(pp, moved) : end, h, t, lt, rec.date);
+          const before = C.homeTrip(pp ? C.lastStopFor(pp, sched) : sched[sched.length - 1], h, t, lt, rec.date);
           return trip && trip.early && !(before && before.early);
         }).map(([n]) => n);
         card.appendChild(el("div", { class: missed.length ? "warn" : "note", id: "bestImpact",
           text: `Starting at ${best.start} ends the night at ${end.leaveAt}` +
             (missed.length ? ` — ${missed.join(", ")} would have to leave before the end for their last train.` : ".") }));
       }
-      if (best) {
-        const nowFirst = counts[0];
+      if (best && !rec.finalStart) {
+        // bestStart maximises "person-stops" (people × stops they're there
+        // for), so say that — "6 at the first stop (vs 6)" read as no gain.
+        const nowTotal = counts.reduce((a, b) => a + b, 0);
+        const gain = best.total - nowTotal;
         card.appendChild(
           el("div", { class: "muted", style: "margin-top:10px", id: "bestStart",
             text: best.start === current
               ? `✓ ${current} is the best start for who's replied (${best.first} at the first stop).`
-              : `Suggested start: ${best.start} — ${best.first} at the first stop (vs ${nowFirst} at ${current}).` })
+              : `Suggested start: ${best.start} — ${gain} more person-stop${gain === 1 ? "" : "s"} together (${best.first} at the first stop vs ${counts[0]}).` })
         );
       }
       // Two explicit choices. "Use 18:45" used to confirm silently and then
@@ -1090,13 +1107,13 @@
       const spot = el("input", { id: "spotInput", placeholder: "Where to find us — e.g. back room, by the fireplace", value: st.phase === "live" && st.state === "at" ? st.spot || "" : "" });
       card.appendChild(el("div", {}, [el("label", { for: "spotInput", text: "Where to find us (optional)" }), spot]));
       if (st.phase === "live" && st.state === "at") {
-        btns.appendChild(el("button", { class: "btn ghost", id: "saveSpot", text: "Update note", onClick: () => hostUpdate((r) => { r.status = { ...r.status, spot: spot.value.trim() }; }) }));
+        btns.appendChild(el("button", { class: "btn ghost", id: "saveSpot", text: "Update note", onClick: () => hostUpdate((r) => { r.status = { ...r.status, spot: spot.value.trim() }; }).then((ok) => ok && toast("Note updated — guests see it within 15 s")) }));
       }
     }
     card.appendChild(btns);
     card.appendChild(el("div", { class: "muted", style: "margin-top:8px", text: "Everyone following the link sees this within about 15 seconds." }));
-    // Everyone's way home from the last stop — the organiser's included — so
-    // a long journey or a missing last train shows up while it can be fixed.
+    // Everyone's way home from where they leave — the organiser's included —
+    // so a long journey or a missing last train shows up while it can be fixed.
     const lastStop = sched[sched.length - 1];
     const ways = [];
     if (rec.organizerHome) {
@@ -1104,11 +1121,11 @@
       if (t) ways.push([`${rec.organizer || "You"} (you)`, t]);
     }
     (rec.people || []).filter((pp) => pp.status !== "out" && pp.home).forEach((pp) => {
-      const t = C.homeTrip(lastStop, pp.home, pp.transport, pp.lastTrain, rec.date);
+      const t = C.homeTrip(C.lastStopFor(pp, sched), pp.home, pp.transport, pp.lastTrain, rec.date);
       if (t) ways.push([pp.name, t]);
     });
     if (ways.length) {
-      const box = el("div", { class: "safety", id: "waysHome" }, [el("div", { class: "name", text: "Ways home from the last stop" })]);
+      const box = el("div", { class: "safety", id: "waysHome" }, [el("div", { class: "name", text: "Ways home" })]);
       ways.forEach(([who, t]) => box.appendChild(el("div", { class: t.warn ? "warn" : "note", text: `${who}: ${t.text}` })));
       card.appendChild(box);
     }
@@ -1166,6 +1183,8 @@
         ]),
         trainHint
       );
+      const stepFree = el("input", { type: "checkbox", id: "meStepFree" });
+      card.appendChild(el("div", { class: "checks" }, [el("label", { class: "check", for: "meStepFree" }, [stepFree, "I need step-free access"])]));
       syncTrain = wireTrain(transport, myTrain, trainHint,
         () => C.homeTrip(sched[sched.length - 1], pickedHome, transport.value, myTrain.value, rec.date));
       const join = (status) => {
@@ -1177,6 +1196,7 @@
         savePerson({
           id: rid(), token: rid() + rid() + rid(), name: name.value.trim(), from: from.value, until: until.value, status,
           transport: transport.value, lastTrain: transport.value === "train" ? myTrain.value : "", home: pickedHome,
+          stepFree: stepFree.checked,
         }).then((ok) => {
           if (ok) toast(status === "out" ? "Thanks — the organiser will see you can't make it" : "You're on the list 🍻");
         });
@@ -1200,12 +1220,14 @@
     // late joiner to an empty pub.
     let line;
     if (me.status === "out") line = "You said you can't make it.";
+    else if (st.phase === "done") line = "The night's over.";
     else if (me.status === "here") line = "You're with the group 🍻";
     else if (st.phase === "live" && st.state === "moving" && sched[st.stop + 1]) line = `The group is walking to ${sched[st.stop + 1].name} — head there.`;
     else if (st.phase === "live" && sched[st.stop]) line = `The group is at ${sched[st.stop].name} right now — join them there.`;
     else if (st.phase === "done") line = "The night's over.";
     else if (j) line = `You'll probably catch the group at ${sched[j.stopIndex].name} (planned ${sched[j.stopIndex].arriveAt}).`;
     else line = "Your times miss the planned route — the organiser will see that.";
+    if (me.status === "onway" && st.phase === "live") line = `You're on your way ✓ — ${line.charAt(0).toLowerCase()}${line.slice(1)}`;
     if (me.status === "late") line = `You're running late${me.eta ? ` (~${me.eta} min)` : ""} — ${line.charAt(0).toLowerCase()}${line.slice(1)}`;
     if (me.status === "home") line = "Heading home — tap Home safe when you're in.";
     if (me.status === "safe") line = "Home safe ✓ — thanks for letting everyone know.";
@@ -1227,7 +1249,8 @@
         ].forEach((n) => n && info.appendChild(n));
       }
       // Once the night's over, "before the night ends" no longer applies.
-      const last = st.phase === "done" ? { ...sched[sched.length - 1], leave: null } : sched[sched.length - 1];
+      const mine = C.lastStopFor(me, sched);
+      const last = st.phase === "done" ? { ...mine, leave: null } : mine;
       const trip = me.status === "safe" ? null : C.homeTrip(last, me.home, me.transport, me.lastTrain, rec.date);
       const leave = me.status === "safe" ? null : C.leaveBy(me.lastTrain);
       if (trip) info.appendChild(el("div", { class: trip.warn ? "warn" : "note", text: `🏠 ${trip.text}` }));
@@ -1262,8 +1285,8 @@
         const eta = el("select", { id: "meEta", "aria-label": "How late" });
         [15, 30, 45, 60].forEach((m) => eta.appendChild(el("option", { value: m, text: `~${m} min`, selected: m === (me.eta || 30) })));
         bar.push(
-          el("button", { class: "btn secondary", id: "meOnWay", text: "🚶 On my way", disabled: me.status === "onway", onClick: () => set("onway", "The group knows you're coming") }),
-          el("button", { class: "btn", id: "meHere", text: "📍 I'm here", onClick: () => set("here", "Welcome! 🍻") }),
+          el("button", { class: "btn secondary", id: "meOnWay", text: "🚶 On my way", disabled: me.status === "onway", onClick: () => set("onway", "The group knows you're coming", { at: st.state === "moving" ? st.stop + 1 : st.stop }) }),
+          el("button", { class: "btn", id: "meHere", text: "📍 I'm here", onClick: () => set("here", "Welcome! 🍻", { at: st.state === "moving" ? st.stop + 1 : st.stop }) }),
           el("div", { class: "late" }, [
             eta,
             el("button", { class: "btn ghost", id: "meLate", text: "⏰ Running late", onClick: () => set("late", "The group knows you're running late", { eta: Number(eta.value) }) }),
@@ -1290,7 +1313,7 @@
           if (b.dataset.armed) return set("out", "Thanks for letting them know");
           b.dataset.armed = "1";
           b.textContent = "Tap again to confirm you can't make it";
-          setTimeout(() => { delete b.dataset.armed; b.textContent = "Can't make it after all"; }, 4000);
+          setTimeout(() => { delete b.dataset.armed; b.textContent = "Can't make it after all"; }, 10000);
         } }),
       ]));
     }
