@@ -287,7 +287,10 @@ def suggest_places(q):
     return results
 
 
-def suggest_cities(q):
+AREA_TAGS = ("city", "town", "village", "suburb", "borough", "neighbourhood", "quarter", "hamlet")
+
+
+def suggest_cities(q, areas=False):
     """Type-ahead for a HOME city, the way a maps app does it.
 
     Nominatim matches whole words, so "Lond" or "Springf" found nothing, and
@@ -296,19 +299,23 @@ def suggest_cities(q):
     is built for prefix search and returns state + country for each match.
     Restricted to cities and towns: a home is never a state or a borough.
     Falls back to the Nominatim path if Photon is unreachable.
+
+    areas=True widens it to suburbs, neighbourhoods and villages, labelled
+    with their city ("Islington, London, United Kingdom") — for "coming
+    from", where the general search only offered "Greater London".
     """
     key = q.strip().lower()
     if len(key) < 2:
         return []
-    ckey = "city:" + key
+    ckey = ("area:" if areas else "city:") + key
     with _suggest_lock:
         if ckey in _suggest_cache:
             return _suggest_cache[ckey]
     results = []
     try:
+        tags = AREA_TAGS if areas else ("city", "town")
         params = urllib.parse.urlencode(
-            [("q", q), ("limit", 8), ("lang", "en"),
-             ("osm_tag", "place:city"), ("osm_tag", "place:town")])
+            [("q", q), ("limit", 8), ("lang", "en")] + [("osm_tag", "place:" + t) for t in tags])
         req = urllib.request.Request(
             "https://photon.komoot.io/api/?" + params,
             headers={"User-Agent": USER_AGENT})
@@ -321,7 +328,9 @@ def suggest_cities(q):
             if not name or not country:
                 continue
             state = p.get("state")
-            parts = [name] + ([state] if state and state not in (name, country) else []) + [country]
+            # A suburb is better placed by its city than its state.
+            region = (p.get("city") if areas and p.get("city") not in (None, name) else None) or state
+            parts = [name] + ([region] if region and region not in (name, country) else []) + [country]
             label = ", ".join(parts)
             if label.lower() in seen:
                 continue
@@ -770,6 +779,17 @@ def _phone(v):
     return v if _PHONE.match(v) else ""
 
 
+def _place(v):
+    """{label, lat, lon} for where someone is coming from, or None."""
+    if not isinstance(v, dict):
+        return None
+    lat, lon = _num(v.get("lat"), -90, 90), _num(v.get("lon"), -180, 180)
+    label = _s(v.get("label"), 80).strip()
+    if lat is None or lon is None or not label:
+        return None
+    return {"label": label, "lat": lat, "lon": lon}
+
+
 def _web(v):
     v = _s(v, 200).strip()
     return v if re.match(r"^https?://[^\s<>\"']+$", v) else ""
@@ -817,6 +837,10 @@ def sanitize_live(data):
         "stops": stops,
         # Optional, organiser-supplied: shown to guests as a call button.
         "organizerPhone": _phone(data.get("organizerPhone")),
+        # The organiser's own way home (they're a traveller too).
+        "organizerHome": _place(data.get("organizerHome")),
+        "organizerTransport": data.get("organizerTransport") if data.get("organizerTransport") in LIVE_TRANSPORT else "",
+        "organizerLastTrain": _time_or_blank(data.get("organizerLastTrain")),
         # The area's last train / tube, for the "ends after the last train" check.
         "lastTrain": _time_or_blank(data.get("lastTrain")),
         "status": {"phase": phase, "stop": int(stop_n) if stop_n is not None else -1,
@@ -976,6 +1000,7 @@ def _live_person(p):
     return {"id": pid, "name": name, "from": _time_or_blank(p.get("from")),
             "until": _time_or_blank(p.get("until")), "status": status,
             "transport": transport, "lastTrain": _time_or_blank(p.get("lastTrain")),
+            "home": _place(p.get("home")),
             "eta": int(eta) if eta is not None else 0,
             "ts": time.time() * 1000}
 
@@ -1262,8 +1287,11 @@ class Handler(SimpleHTTPRequestHandler):
             })
         if parsed.path == "/api/geosuggest":
             q = urllib.parse.parse_qs(parsed.query)
-            fn = suggest_cities if q.get("kind", [""])[0] == "city" else suggest_places
-            return self._send_json({"results": fn(q.get("q", [""])[0])})
+            kind = q.get("kind", [""])[0]
+            text = q.get("q", [""])[0]
+            if kind in ("city", "area"):
+                return self._send_json({"results": suggest_cities(text, areas=kind == "area")})
+            return self._send_json({"results": suggest_places(text)})
         if parsed.path == "/api/reverse":
             q = urllib.parse.parse_qs(parsed.query)
             return self._send_json(

@@ -350,6 +350,47 @@
     };
   }
 
+  /**
+   * One person's way home from the last stop: distance, a rough time for the
+   * way they said they're travelling, and plain advice. `home` is
+   * { label, lat, lon } (where they're coming from); `transport` is walk /
+   * train / bus / taxi / lift / drive / unsure. We have no timetables, so
+   * public transport gets distance + the leave-by from their last train, and
+   * a nudge when home is far and no last train was given.
+   */
+  function homeTrip(lastStop, home, transport, lastTrain) {
+    if (!lastStop || !home || !Number.isFinite(home.lat) || !Number.isFinite(home.lon)) return null;
+    const miles = milesBetween(lastStop, home);
+    if (miles == null) return null;
+    const road = miles * ROAD_FACTOR;
+    const mins = (mph) => Math.max(5, Math.round(((road / mph) * 60) / 5) * 5);
+    const place = String(home.label || "home").split(",")[0];
+    const far = miles > 25;
+    let text;
+    let warn = false;
+    if (miles < 0.3) {
+      text = `Home is right here (${place})`;
+    } else if (transport === "walk") {
+      text = `~${mins(WALK_MPH)} min walk home to ${place}`;
+      if (miles > 2.5) { text += " — that's a long walk late at night"; warn = true; }
+    } else if (transport === "taxi") {
+      text = `~${mins(18)} min by taxi to ${place}`;
+      if (far) { text += " — a long, expensive ride"; warn = true; }
+    } else if (transport === "drive" || transport === "lift") {
+      text = `~${mins(far ? 45 : 22)} min ${transport === "drive" ? "drive" : "by car"} to ${place}`;
+    } else if (transport === "train" || transport === "bus") {
+      const leave = leaveBy(lastTrain);
+      text = leave
+        ? `${Math.round(miles)} mi to ${place} — leave by ${leave} for the ${lastTrain} ${transport === "bus" ? "bus" : "train"}`
+        : `${Math.round(miles)} mi to ${place} — ${far ? "set your last train so you don't miss it" : "check the last train / bus"}`;
+      warn = !leave && far;
+    } else {
+      text = `${Math.round(miles)} mi to ${place} — ${far ? "plan how you're getting back" : "sort a way home"}`;
+      warn = far;
+    }
+    return { miles, text, warn, far };
+  }
+
   // ---- Booking -----------------------------------------------------------
   const BOOK_AHEAD_AT = 12; // most pubs can't seat 12+ walk-ins together
 
@@ -365,7 +406,7 @@
   const api = {
     toMin, toHHMM, milesBetween, walkMinutes, scheduleStops, joinsAt,
     headcounts, bestStart, isOpenAt, closedStops, sameStop, scoreVenue, suggestRoute,
-    leaveBy, pastLastTrain, safetySummary, bookingNeeded, BOOK_AHEAD_AT,
+    leaveBy, pastLastTrain, safetySummary, bookingNeeded, BOOK_AHEAD_AT, homeTrip,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.CrawlEngine = api;

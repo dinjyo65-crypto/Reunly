@@ -170,3 +170,9 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
 .chip.late { border-color: var(--warn); }
 .chip.home { border-color: var(--accent); }
 .chip.safe { border-color: var(--good); }
+
+/* Native controls follow the dark theme. Without this, Windows draws the
+   dropdown list white while the option text inherits the light theme colour
+   — white on white, unreadable. */
+:root { color-scheme: dark; }
+select option, select optgroup { background: #141a2e; color: #eef1f8; }

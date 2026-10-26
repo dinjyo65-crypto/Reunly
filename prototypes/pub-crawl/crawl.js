@@ -74,7 +74,7 @@
   }
 
   // ---- Place suggestions (any place, via the app's existing /api/geosuggest) ----
-  function attachSuggest(input, onPick) {
+  function attachSuggest(input, onPick, kind) {
     const wrap = input.parentElement;
     let menu = null;
     let timer = null;
@@ -87,7 +87,12 @@
       const q = input.value.trim();
       if (q.length < 3) return close();
       timer = setTimeout(async () => {
-        const { data } = await api(`/api/geosuggest?q=${encodeURIComponent(q)}`);
+        let data = null;
+        try {
+          data = (await api(`/api/geosuggest?q=${encodeURIComponent(q)}${kind ? "&kind=" + kind : ""}`)).data;
+        } catch (e) {
+          return; // no signal: just no suggestions
+        }
         if (input.value.trim() !== q) return;
         close();
         const items = (data && data.results) || [];
@@ -202,6 +207,42 @@
 
   const telHref = (phone) => `tel:${String(phone).replace(/[^0-9+]/g, "")}`;
 
+  /**
+   * Copy text and say so on the button. The Clipboard API only exists on
+   * secure pages — a phone opening http://192.168… had none, and the old code
+   * silently selected the text instead. Fall back to execCommand, and if even
+   * that fails, select it and say how to copy by hand.
+   */
+  async function copyText(text, input, button) {
+    let ok = false;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        ok = true;
+      }
+    } catch (e) {
+      ok = false;
+    }
+    if (!ok && input) {
+      input.focus();
+      input.select();
+      input.setSelectionRange(0, text.length);
+      try {
+        ok = document.execCommand("copy");
+      } catch (e) {
+        ok = false;
+      }
+    }
+    if (ok) {
+      const was = button.textContent;
+      button.textContent = "Copied ✓";
+      setTimeout(() => { button.textContent = was; }, 1800);
+      toast("Link copied — paste it into WhatsApp, a text or an email");
+    } else {
+      toast("Couldn't copy automatically — the link is selected, long-press it to copy");
+    }
+  }
+
   function scheduleOf(rec) {
     return C.scheduleStops(rec.stops, rec.finalStart || rec.plannedStart, rec.dwell);
   }
@@ -219,6 +260,7 @@
   function renderBuilder() {
     const fresh = {
       name: "", organizer: "", organizerPhone: "", lastTrain: "",
+      organizerHome: null, organizerTransport: "", organizerLastTrain: "",
       date: nextThursday(), plannedStart: "17:30", dwell: 50, stops: [],
       target: 4,
       who: { size: 8, ageMin: 30, ageMax: 60, vibe: "mixed", needs: { food: false, stepFree: false, outdoor: false } },
@@ -264,8 +306,28 @@
     const lastTrain = el("select", { id: "evLastTrain" });
     trainOptions(lastTrain, draft.lastTrain, "Not sure / not relevant");
     lastTrain.addEventListener("change", () => { draft.lastTrain = lastTrain.value; save(); drawRoute(); });
+    // Where the organiser is travelling from — the night may be in another city.
+    const homeWrap = el("div", { class: "ac" });
+    const orgHome = el("input", { id: "evOrgHome", placeholder: "Your town or area — e.g. Manchester", autocomplete: "off",
+      value: draft.organizerHome ? draft.organizerHome.label : "" });
+    homeWrap.appendChild(orgHome);
+    attachSuggest(orgHome, (pl) => { draft.organizerHome = { label: pl.label, lat: pl.lat, lon: pl.lon }; save(); }, "area");
+    orgHome.addEventListener("input", () => {
+      if (draft.organizerHome && orgHome.value !== draft.organizerHome.label) { draft.organizerHome = null; save(); }
+    });
+    const orgTransport = el("select", { id: "evOrgTransport" });
+    TRANSPORT.forEach(([v, t]) => orgTransport.appendChild(el("option", { value: v, text: t, selected: v === draft.organizerTransport })));
+    orgTransport.addEventListener("change", () => { draft.organizerTransport = orgTransport.value; save(); });
+    const orgTrain = el("select", { id: "evOrgLastTrain" });
+    trainOptions(orgTrain, draft.organizerLastTrain, "No last train");
+    orgTrain.addEventListener("change", () => { draft.organizerLastTrain = orgTrain.value; save(); });
     basics.append(
       el("label", { for: "evOrgPhone", text: "Your phone (optional)" }), orgPhone,
+      el("label", { for: "evOrgHome", text: "You're coming from" }), homeWrap,
+      el("div", { class: "row" }, [
+        el("div", {}, [el("label", { for: "evOrgTransport", text: "Getting home" }), orgTransport]),
+        el("div", {}, [el("label", { for: "evOrgLastTrain", text: "Your last train" }), orgTrain]),
+      ]),
       el("label", { for: "evLastTrain", text: "Last train / tube from the area" }), lastTrain
     );
     app.appendChild(basics);
@@ -498,6 +560,9 @@
         name: draft.name.trim() || "Evening out",
         organizer: draft.organizer.trim(),
         organizerPhone: draft.organizerPhone.trim(),
+        organizerHome: draft.organizerHome,
+        organizerTransport: draft.organizerTransport,
+        organizerLastTrain: draft.organizerLastTrain,
         lastTrain: draft.lastTrain,
         date: draft.date,
         plannedStart: draft.plannedStart,
@@ -660,6 +725,7 @@
   }
 
   let lastSig = "";
+  let lastWhere = "";
   function renderEvent(force) {
     const app = $("#app");
     // Only rebuild when something changed. Rebuilding every 15 s wiped what a
@@ -669,7 +735,13 @@
     lastSig = sig;
     // ...and if it did change, carry the guest's half-filled form across.
     const keep = {};
-    ["meName", "meFrom", "meUntil", "meTransport", "meLastTrain", "spotInput"].forEach((id) => {
+    // The "where to find us" box belongs to one stop: carry a half-typed note
+    // across a refresh only while the group is still at that same stop.
+    const where = live && live.status ? `${live.status.phase}|${live.status.stop}|${live.status.state}` : "";
+    const keepIds = ["meName", "meFrom", "meUntil", "meTransport", "meLastTrain", "meHome"];
+    if (where === lastWhere) keepIds.push("spotInput");
+    lastWhere = where;
+    keepIds.forEach((id) => {
       const n = document.getElementById(id);
       if (n) keep[id] = n.value;
     });
@@ -970,6 +1042,23 @@
     }
     card.appendChild(btns);
     card.appendChild(el("div", { class: "muted", style: "margin-top:8px", text: "Everyone following the link sees this within about 15 seconds." }));
+    // Everyone's way home from the last stop — the organiser's included — so
+    // a long journey or a missing last train shows up while it can be fixed.
+    const lastStop = sched[sched.length - 1];
+    const ways = [];
+    if (rec.organizerHome) {
+      const t = C.homeTrip(lastStop, rec.organizerHome, rec.organizerTransport, rec.organizerLastTrain);
+      if (t) ways.push([`${rec.organizer || "You"} (you)`, t]);
+    }
+    (rec.people || []).filter((pp) => pp.status !== "out" && pp.home).forEach((pp) => {
+      const t = C.homeTrip(lastStop, pp.home, pp.transport, pp.lastTrain);
+      if (t) ways.push([pp.name, t]);
+    });
+    if (ways.length) {
+      const box = el("div", { class: "safety", id: "waysHome" }, [el("div", { class: "name", text: "Ways home from the last stop" })]);
+      ways.forEach(([who, t]) => box.appendChild(el("div", { class: t.warn ? "warn" : "note", text: `${who}: ${t.text}` })));
+      card.appendChild(box);
+    }
     // Duty of care: who's still out, who's heading home, who's home safe.
     if (st.phase !== "planning") {
       const s = C.safetySummary(rec.people || []);
@@ -987,6 +1076,7 @@
     return card;
   }
 
+  let pickedHome = null; // the guest's "coming from" pick, survives re-renders
   function guestPanel(rec, sched, me) {
     const card = el("div", { class: "card", id: "guestPanel" });
     if (!me) {
@@ -1001,12 +1091,20 @@
       TRANSPORT.forEach(([v, t]) => transport.appendChild(el("option", { value: v, text: t })));
       const myTrain = el("select", { id: "meLastTrain" });
       trainOptions(myTrain, "", "No last train");
+      const homeWrap = el("div", { class: "ac" });
+      const myHome = el("input", { id: "meHome", placeholder: "Town or area — so we can check your way home", autocomplete: "off" });
+      homeWrap.appendChild(myHome);
+      attachSuggest(myHome, (pl) => { pickedHome = { label: pl.label, lat: pl.lat, lon: pl.lon }; }, "area");
+      myHome.addEventListener("input", () => {
+        if (pickedHome && myHome.value !== pickedHome.label) pickedHome = null;
+      });
       card.append(
         el("label", { for: "meName", text: "Name" }), name,
         el("div", { class: "row" }, [
           el("div", {}, [el("label", { for: "meFrom", text: "I can be there from" }), from]),
           el("div", {}, [el("label", { for: "meUntil", text: "Until" }), until]),
         ]),
+        el("label", { for: "meHome", text: "Coming from" }), homeWrap,
         el("div", { class: "row" }, [
           el("div", {}, [el("label", { for: "meTransport", text: "Getting home" }), transport]),
           el("div", {}, [el("label", { for: "meLastTrain", text: "My last train" }), myTrain]),
@@ -1020,7 +1118,7 @@
         }
         savePerson({
           id: rid(), token: rid() + rid() + rid(), name: name.value.trim(), from: from.value, until: until.value, status,
-          transport: transport.value, lastTrain: myTrain.value,
+          transport: transport.value, lastTrain: myTrain.value, home: pickedHome,
         }).then((ok) => {
           if (ok) toast(status === "out" ? "Thanks — the organiser will see you can't make it" : "You're on the list 🍻");
         });
@@ -1070,8 +1168,10 @@
           st.state === "at" && st.spot ? el("div", { class: "spot", text: `Find us: ${st.spot}` }) : null,
         ].forEach((n) => n && info.appendChild(n));
       }
+      const trip = C.homeTrip(sched[sched.length - 1], me.home, me.transport, me.lastTrain);
       const leave = C.leaveBy(me.lastTrain);
-      if (leave) info.appendChild(el("div", { class: "note", text: `🚆 Leave by ${leave} for your ${me.lastTrain} train` }));
+      if (trip) info.appendChild(el("div", { class: trip.warn ? "warn" : "note", text: `🏠 ${trip.text}` }));
+      else if (leave) info.appendChild(el("div", { class: "note", text: `🚆 Leave by ${leave} for your ${me.lastTrain} train` }));
       if (rec.organizerPhone) {
         info.appendChild(el("a", { class: "btn ghost sm", href: telHref(rec.organizerPhone), text: `📞 Call ${rec.organizer || "the organiser"}` }));
       }
@@ -1121,16 +1221,16 @@
         el("div", { class: "linkbox" }, [
           input,
           el("button", {
-            class: "btn sm secondary", text: "Copy",
-            onClick: async () => {
-              try {
-                await navigator.clipboard.writeText(url);
-                toast("Copied");
-              } catch (e) {
-                input.select();
-              }
-            },
+            class: "btn sm secondary", text: "Copy", id: `${id}Copy`,
+            onClick: (e) => copyText(url, input, e.currentTarget),
           }),
+          // Phones: straight into WhatsApp / Messages / email.
+          navigator.share
+            ? el("button", {
+                class: "btn sm secondary", text: "Share…",
+                onClick: () => navigator.share({ title: live ? live.name : "Evening out", url }).catch(() => {}),
+              })
+            : null,
         ]),
         el("div", { class: "muted", text: hint }),
       ]);

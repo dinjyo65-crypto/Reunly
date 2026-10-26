@@ -140,3 +140,16 @@ test("a group of 12+ is told to book stops that aren't booked or walk-in", () =>
   assert.deepStrictEqual(C.bookingNeeded(route, 14), [1, 2]);
   assert.deepStrictEqual(C.bookingNeeded(route, 8), [], "small groups can walk in");
 });
+
+test("way home from the last stop depends on where you live and how you travel", () => {
+  const last = { name: "Last pub", lat: 51.5136, lon: -0.089 };
+  const manchester = { label: "Manchester, England, United Kingdom", lat: 53.4808, lon: -2.2426 };
+  const islington = { label: "Islington, London", lat: 51.5362, lon: -0.1033 };
+  const t1 = C.homeTrip(last, manchester, "train", "");
+  assert.ok(t1.far && t1.warn && /set your last train/.test(t1.text), t1.text);
+  const t2 = C.homeTrip(last, manchester, "train", "21:30");
+  assert.ok(/leave by 21:15 for the 21:30 train/.test(t2.text) && !t2.warn, t2.text);
+  const t3 = C.homeTrip(last, islington, "walk", "");
+  assert.ok(/min walk home to Islington/.test(t3.text), t3.text);
+  assert.strictEqual(C.homeTrip(last, null, "walk", ""), null, "no home given → nothing to say");
+});
