@@ -5557,7 +5557,7 @@
     const onRegister = () => $("#screen-register").classList.contains("active");
     let i = 0;
     const load = () => {
-      video.src = `media/hero-${HERO_TRIPS[i % HERO_TRIPS.length]}.${ext}`;
+      video.src = `media/hero-flat-${HERO_TRIPS[i % HERO_TRIPS.length]}.${ext}`;
       video.play().catch(() => {}); // autoplay refused: the poster stays up
     };
     // Fetch the next clip only when this one ends, so a visitor downloads one
