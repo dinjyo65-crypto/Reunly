@@ -507,9 +507,18 @@
         status: { phase: "planning", stop: -1, state: "at", since: null },
         log: [],
       };
-      const { ok, data } = await api("/api/live/create", { record });
+      let res;
+      try {
+        res = await api("/api/live/create", { record });
+      } catch (e) {
+        res = { ok: false, status: 0 };
+      }
+      const { ok, data, status } = res;
       if (!ok) {
-        toast("Couldn't create the event — try again");
+        // Say why, rather than a generic failure.
+        toast(status === 429 ? "You've created a lot of events in the last hour — try again a bit later"
+          : status === 0 ? "No connection — check your signal and try again"
+          : "Couldn't create the event — try again");
         createBtn.disabled = false;
         return;
       }

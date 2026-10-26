@@ -890,6 +890,10 @@ class LiveRateLimited(Exception):
 # push real (quietly idle) events out of memory.
 LIVE_CREATES_PER_HOUR = 10
 _live_creates = {}
+# Requests from this machine itself (local development and testing) aren't
+# limited: a morning of test runs otherwise locks the developer out. On Render
+# every request arrives through the proxy, so nothing there is loopback.
+LOOPBACK = {"127.0.0.1", "::1"}
 
 
 def live_public(entry):
@@ -915,7 +919,7 @@ def live_create(data, ip=""):
     now = time.time()
     with _live_lock:
         recent = [t for t in _live_creates.get(ip, []) if now - t < 3600]
-        if len(recent) >= LIVE_CREATES_PER_HOUR:
+        if len(recent) >= LIVE_CREATES_PER_HOUR and ip not in LOOPBACK:
             raise LiveRateLimited()
         recent.append(now)
         _live_creates[ip] = recent
@@ -1020,6 +1024,8 @@ _pubs_calls = {}
 
 
 def pubs_rate_ok(ip):
+    if ip in LOOPBACK:
+        return True
     now = time.time()
     with _pubs_lock:
         recent = [t for t in _pubs_calls.get(ip, []) if now - t < 60]
