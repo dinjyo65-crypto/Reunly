@@ -130,6 +130,7 @@ STATIC_FILES = {
     # v0.9 prototype (pub crawl / work social live tracker)
     "prototypes/pub-crawl/index.html", "prototypes/pub-crawl/crawl.css",
     "prototypes/pub-crawl/crawl.js", "prototypes/pub-crawl/crawl-engine.js",
+    "prototypes/pub-crawl/vendor/leaflet.js", "prototypes/pub-crawl/vendor/leaflet.css",
 }
 # Longest query parameter any /api/ endpoint legitimately takes.
 MAX_PARAM = 160
@@ -809,10 +810,67 @@ def _live_prune():
             _live.pop(k, None)
 
 
+def _live_secret():
+    """Secret the host keys are derived from. Must survive restarts, or no
+    organiser could re-upload their event: LIVE_SECRET on Render (generated
+    once by the Blueprint), a git-ignored local file otherwise."""
+    env = os.environ.get("LIVE_SECRET", "")
+    if len(env) >= 16:
+        return env.encode()
+    path = os.path.join(DIRECTORY, ".live-secret")
+    try:
+        with open(path, "rb") as f:
+            saved = f.read().strip()
+        if len(saved) >= 32:
+            return saved
+    except OSError:
+        pass
+    import secrets
+    fresh = secrets.token_hex(32).encode()
+    try:
+        with open(path, "wb") as f:
+            f.write(fresh)
+    except OSError:
+        pass  # read-only disk: keys still work until the next restart
+    return fresh
+
+
+_LIVE_SECRET = _live_secret()
+
+
+def host_key_for(eid):
+    """The one host key for an event. Bound to the id, so re-creating a
+    forgotten event (self-heal) works only for the real organiser — before,
+    anyone holding the public guest link could re-create it first with a key
+    of their own and lock the organiser out."""
+    import hashlib
+    import hmac
+    return hmac.new(_LIVE_SECRET, eid.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+class LiveConflict(Exception):
+    """The host's copy is behind the server's (another co-host moved first)."""
+
+    def __init__(self, current):
+        super().__init__("stale")
+        self.current = current
+
+
+class LiveRateLimited(Exception):
+    pass
+
+
+# Events created per IP per hour. A script could otherwise fill LIVE_MAX and
+# push real (quietly idle) events out of memory.
+LIVE_CREATES_PER_HOUR = 10
+_live_creates = {}
+
+
 def live_public(entry):
-    """What anyone with the link may see — never the host key."""
+    """What anyone with the link may see — never the host key or guest tokens."""
     out = dict(entry["rec"])
     out["people"] = list(entry["people"].values())
+    out["rev"] = entry["rev"]
     out["serverTime"] = time.time() * 1000
     return out
 
@@ -820,38 +878,52 @@ def live_public(entry):
 def live_get(eid):
     with _live_lock:
         entry = _live.get(eid)
+        if entry:
+            entry["touched"] = time.time()  # evict by least recently polled
         return live_public(entry) if entry else None
 
 
-def live_create(data):
+def live_create(data, ip=""):
     import secrets
     rec = sanitize_live(data)
-    eid, key = secrets.token_urlsafe(9), secrets.token_hex(16)
+    now = time.time()
     with _live_lock:
+        recent = [t for t in _live_creates.get(ip, []) if now - t < 3600]
+        if len(recent) >= LIVE_CREATES_PER_HOUR:
+            raise LiveRateLimited()
+        recent.append(now)
+        _live_creates[ip] = recent
+        if len(_live_creates) > CACHE_LIMIT:
+            _live_creates.clear()
         _live_prune()
-        _live[eid] = {"key": key, "rec": rec, "people": {}, "touched": time.time()}
-    return eid, key
+        eid = secrets.token_urlsafe(9)
+        _live[eid] = {"rec": rec, "people": {}, "tokens": {}, "rev": 1, "touched": now}
+        return eid, host_key_for(eid), live_public(_live[eid])
 
 
-def live_update(eid, key, data, people=None):
+def live_update(eid, key, data, people=None, base_rev=None):
     """Host update. Re-creates a forgotten event from the host's own copy."""
     import hmac
-    if not _LIVE_ID.match(eid or "") or not re.match(r"^[0-9a-f]{32}$", key or ""):
-        raise PermissionError("bad id or key")
+    if not _LIVE_ID.match(eid or "") or not hmac.compare_digest(host_key_for(eid), _s(key, 64)):
+        raise PermissionError("wrong host key")
     rec = sanitize_live(data)
     with _live_lock:
         entry = _live.get(eid)
         if entry is None:
             _live_prune()
-            entry = _live[eid] = {"key": key, "rec": rec, "people": {}, "touched": time.time()}
+            entry = _live[eid] = {"rec": rec, "people": {}, "tokens": {},
+                                  "rev": int(base_rev or 0), "touched": time.time()}
             # Self-heal the guest list too, from the host's last copy.
             for p in (people or [])[:LIVE_MAX_PEOPLE]:
                 clean = _live_person(p)
                 if clean:
                     entry["people"][clean["id"]] = clean
-        elif not hmac.compare_digest(entry["key"], key):
-            raise PermissionError("wrong host key")
+        elif base_rev is not None and int(base_rev) != entry["rev"]:
+            # Two co-hosts tapping "Moving on" at once used to skip a stop:
+            # each sent a whole record built on the same old state.
+            raise LiveConflict(live_public(entry))
         entry["rec"] = rec
+        entry["rev"] += 1
         entry["touched"] = time.time()
         return live_public(entry)
 
@@ -860,7 +932,7 @@ def _live_person(p):
     if not isinstance(p, dict):
         return None
     pid = _s(p.get("id"), 24)
-    name = _s(p.get("name"), 40).strip()
+    name = "".join(ch for ch in _s(p.get("name"), 40) if ch.isprintable()).strip()
     if not _LIVE_ID.match(pid) or not name:
         return None
     status = p.get("status") if p.get("status") in ("coming", "onway", "here", "out") else "coming"
@@ -870,16 +942,27 @@ def _live_person(p):
 
 
 def live_person(eid, person):
+    """Guest upsert. Each guest's first save registers a private token; later
+    saves must carry it, so nobody can rename someone else or mark them out
+    (ids are visible to everyone in the public record)."""
+    import hashlib
+    import hmac
     clean = _live_person(person)
-    if not clean:
+    token = _s((person or {}).get("token"), 64)
+    if not clean or len(token) < 16:
         raise ValueError("bad person")
+    digest = hashlib.sha256(token.encode()).hexdigest()
     with _live_lock:
         entry = _live.get(eid)
         if entry is None:
             return None
+        known = entry["tokens"].get(clean["id"])
+        if known is not None and not hmac.compare_digest(known, digest):
+            raise PermissionError("not your entry")
         if clean["id"] not in entry["people"] and len(entry["people"]) >= LIVE_MAX_PEOPLE:
             raise ValueError("event is full")
         entry["people"][clean["id"]] = clean
+        entry["tokens"][clean["id"]] = digest
         entry["touched"] = time.time()
         return live_public(entry)
 
@@ -893,6 +976,26 @@ def live_person(eid, person):
 _pubs_cache = {}
 _pubs_lock = threading.Lock()
 PUB_TYPES = {"pub", "bar", "biergarten"}
+PUB_TAGS = {"food", "wheelchair", "outdoor_seating", "real_ale", "live_sport",
+            "cuisine", "diet:vegetarian", "diet:vegan"}
+# /api/pubs per IP per minute: every new area is a Nominatim call on the
+# shared 1 req/s pacer, so one client must not starve city search for all.
+PUBS_PER_MINUTE = 20
+_pubs_calls = {}
+
+
+def pubs_rate_ok(ip):
+    now = time.time()
+    with _pubs_lock:
+        recent = [t for t in _pubs_calls.get(ip, []) if now - t < 60]
+        if len(recent) >= PUBS_PER_MINUTE:
+            _pubs_calls[ip] = recent
+            return False
+        recent.append(now)
+        _pubs_calls[ip] = recent
+        if len(_pubs_calls) > CACHE_LIMIT:
+            _pubs_calls.clear()
+        return True
 
 
 def pubs_near(lat, lon, radius_m=700):
@@ -929,6 +1032,9 @@ def pubs_near(lat, lon, radius_m=700):
             "hours": ((item.get("extratags") or {}).get("opening_hours") or "")[:160],
             "address": street[:120],
             "dist": round(haversine_miles((lat, lon), (plat, plon)) * 1609),
+            # What smart suggest scores on (only these, each bounded).
+            "tags": {k: _s(v, 40) for k, v in (item.get("extratags") or {}).items()
+                     if k in PUB_TAGS},
         })
     out.sort(key=lambda p: p["dist"])
     with _pubs_lock:
@@ -1133,6 +1239,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_json({"missing": True}, code=404)
             return self._send_json(rec)
         if parsed.path == "/api/pubs":
+            if not pubs_rate_ok(self._client_ip()):
+                return self._send_json({"results": [], "error": "busy"}, code=429)
             q = urllib.parse.parse_qs(parsed.query)
             lat = _num(q.get("lat", [""])[0], -90, 90)
             lon = _num(q.get("lon", [""])[0], -180, 180)
@@ -1173,17 +1281,23 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_json({"error": "bad request"}, code=400)
             try:
                 if parsed.path == "/api/live/create":
-                    eid, key = live_create(data.get("record"))
-                    return self._send_json({"id": eid, "key": key})
+                    eid, key, rec = live_create(data.get("record"), self._client_ip())
+                    return self._send_json({"id": eid, "key": key, "record": rec})
                 if parsed.path == "/api/live/update":
+                    base = _num(data.get("rev"), 0, 1e9)
                     rec = live_update(_s(data.get("id"), 24), _s(data.get("key"), 64),
-                                      data.get("record"), data.get("people"))
+                                      data.get("record"), data.get("people"),
+                                      None if base is None else int(base))
                     return self._send_json(rec)
                 if parsed.path == "/api/live/person":
                     rec = live_person(_s(data.get("id"), 24), data.get("person"))
                     if rec is None:
                         return self._send_json({"missing": True}, code=404)
                     return self._send_json(rec)
+            except LiveConflict as c:
+                return self._send_json({"error": "stale", "current": c.current}, code=409)
+            except LiveRateLimited:
+                return self._send_json({"error": "too many events"}, code=429)
             except PermissionError:
                 return self._send_json({"error": "not allowed"}, code=403)
             except ValueError as e:

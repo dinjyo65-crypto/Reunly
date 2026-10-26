@@ -196,11 +196,13 @@
     }
     const today = byDay.get(day);
     const yesterday = byDay.get(prevDay);
-    if (today === undefined && yesterday === undefined) return null;
+    if (!byDay.size) return null;
     if (today && today.some(([o, c]) => clock >= o && clock < c)) return true;
     // Still inside yesterday's late opening (e.g. Fr 17:00-01:00 at 00:30 Sa).
     if (yesterday && yesterday.some(([o, c]) => c > 1440 && clock + 1440 < c && clock + 1440 >= o)) return true;
-    return today === undefined ? null : false;
+    // In opening_hours, a day the rules don't mention is a closed day:
+    // "Fr-Su 12:00-23:00" means shut Monday to Thursday, not "unknown".
+    return false;
   }
 
   /** Stops on the schedule that will be shut when the group gets there. */
@@ -211,9 +213,114 @@
       .map((x) => x.i);
   }
 
+  /** Two stops are the same place if they share a name and sit within ~60 m. */
+  function sameStop(a, b) {
+    if (!a || !b) return false;
+    const close = milesBetween(a, b);
+    return String(a.name || "").trim().toLowerCase() === String(b.name || "").trim().toLowerCase() &&
+      close != null && close < 0.04;
+  }
+
+  // ---- Smart suggest ----------------------------------------------------
+  // Rule-based, transparent scoring from what OpenStreetMap actually records
+  // about each venue (pub vs bar, food, step-free access, outdoor seating,
+  // real ale, live sport, opening hours) against who's coming. Every point
+  // has a reason the organiser can read, rather than a black-box pick.
+
+  /**
+   * Score one venue for a group. `who` = { ageMin, ageMax, vibe: "chatty" |
+   * "lively" | "mixed", needs: { food, stepFree, outdoor } }.
+   * Returns { score, reasons[], blocked } — blocked means it fails a stated
+   * need outright (e.g. step-free needed, venue says no access).
+   */
+  function scoreVenue(v, who) {
+    const t = v.tags || {};
+    const needs = who.needs || {};
+    const older = (who.ageMax || 0) >= 45;
+    const younger = (who.ageMin || 99) < 30;
+    let score = 1;
+    const reasons = [];
+    let blocked = false;
+
+    if (v.kind === "pub") {
+      if (who.vibe === "chatty" || older) { score += 1; reasons.push("Proper pub"); }
+    } else if (v.kind === "bar") {
+      if (who.vibe === "lively" || (younger && !older)) { score += 0.6; reasons.push("Bar"); }
+      else if (who.vibe === "chatty") score -= 0.3;
+    }
+    if (t.food === "yes") {
+      score += needs.food ? 1.2 : 0.3;
+      reasons.push("Food served");
+    } else if (needs.food && t.food === "no") {
+      score -= 1;
+    }
+    if (t.wheelchair === "yes") {
+      score += needs.stepFree ? 1.5 : 0.2;
+      reasons.push("Step-free");
+    } else if (t.wheelchair === "limited") {
+      score += needs.stepFree ? 0.3 : 0;
+      if (needs.stepFree) reasons.push("Limited step-free access");
+    } else if (t.wheelchair === "no" && needs.stepFree) {
+      blocked = true;
+    }
+    if (t.outdoor_seating === "yes") {
+      score += needs.outdoor ? 1 : 0.2;
+      reasons.push("Outdoor seating");
+    }
+    if (t.real_ale === "yes" && (older || who.vibe === "chatty")) {
+      score += 0.3;
+      reasons.push("Real ale");
+    }
+    if (t.live_sport === "yes") {
+      if (who.vibe === "chatty") score -= 0.4;
+      else if (who.vibe === "lively") { score += 0.3; reasons.push("Shows sport"); }
+    }
+    return { score, reasons, blocked };
+  }
+
+  /**
+   * Pick `count` stops forming a walkable route from `start` ({lat, lon}).
+   * Greedy: the best-scoring venue near the start first, then each next stop
+   * trades score against walking time (and must be under ~15 min away),
+   * skipping anything shut when the group would arrive. Returns the chosen
+   * venues in order, each with `why` (reasons + open check). Fewer than
+   * `count` comes back if the area can't supply them — never padding with
+   * closed or unsuitable places.
+   */
+  function suggestRoute(venues, start, who, plan) {
+    const count = Math.max(1, Math.min(10, plan.count || 4));
+    const pool = venues
+      .map((v) => ({ v, s: scoreVenue(v, who) }))
+      .filter((x) => !x.s.blocked);
+    const chosen = [];
+    let here = start;
+    let clock = toMin(plan.start);
+    while (chosen.length < count && pool.length) {
+      let best = null;
+      for (const x of pool) {
+        const walk = chosen.length ? walkMinutes(here, x.v) : 0;
+        if (chosen.length && walk > 15) continue;
+        const startPenalty = chosen.length ? 0 : (milesBetween(start, x.v) || 0) * 1.5;
+        const arrive = clock + walk;
+        const open = isOpenAt(x.v.hours, plan.date, toHHMM(arrive));
+        if (open === false) continue;
+        const value = x.s.score - walk / 10 - startPenalty + (open === true ? 0.2 : 0);
+        if (!best || value > best.value) best = { x, value, walk, open };
+      }
+      if (!best) break;
+      const why = [...best.x.s.reasons];
+      if (best.open === true) why.push("Open then");
+      chosen.push({ ...best.x.v, why });
+      pool.splice(pool.indexOf(best.x), 1);
+      clock += best.walk + (plan.dwell || 50);
+      here = best.x.v;
+    }
+    return chosen;
+  }
+
   const api = {
     toMin, toHHMM, milesBetween, walkMinutes, scheduleStops, joinsAt,
-    headcounts, bestStart, isOpenAt, closedStops,
+    headcounts, bestStart, isOpenAt, closedStops, sameStop, scoreVenue, suggestRoute,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.CrawlEngine = api;

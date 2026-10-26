@@ -5,9 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#080b16" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'" />
+        content="default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'" />
+  <!-- Origin only: OSM tiles want a referrer; the #e=…&k=… part is never sent. -->
+  <meta name="referrer" content="strict-origin" />
   <title>Reunly — Evening out (prototype)</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="vendor/leaflet.css" />
   <link rel="stylesheet" href="crawl.css" />
 </head>
 <body>
@@ -18,8 +21,9 @@
       <div class="sub" id="topSub">Work socials &amp; pub crawls</div>
     </div>
   </header>
-  <main id="app" aria-live="polite"></main>
+  <main id="app"></main>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="vendor/leaflet.js"></script>
   <script src="crawl-engine.js"></script>
   <script src="crawl.js"></script>
 </body>

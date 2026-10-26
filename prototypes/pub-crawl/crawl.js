@@ -113,11 +113,68 @@
     input.addEventListener("blur", () => setTimeout(close, 150));
   }
 
+  // Local date, not toISOString(): that's UTC and lands on the wrong day
+  // for anyone east or west of London late in the evening.
   const nextThursday = () => {
     const d = new Date();
     d.setDate(d.getDate() + ((4 - d.getDay() + 7) % 7 || 7));
-    return d.toISOString().slice(0, 10);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   };
+
+  // ---- Route map (Leaflet + OpenStreetMap tiles, vendored; no API key) ----
+  // One persistent map per view: re-rendering the page re-attaches the same
+  // card rather than rebuilding the map (and re-downloading tiles) every poll.
+  const maps = {};
+  function mapCard(key, title) {
+    if (!window.L) return null; // map is a bonus; the route list stands alone
+    if (!maps[key]) {
+      const box = el("div", { class: "map", role: "img", "aria-label": "Map of the route" });
+      const card = el("div", { class: "card map-card" }, [el("h2", { text: title }), box]);
+      maps[key] = { card, box, map: null, layer: null, fitted: "" };
+    }
+    return maps[key];
+  }
+  function updateMap(key, stops, stateOf) {
+    const m = maps[key];
+    if (!m || !window.L) return;
+    m.card.hidden = !stops.length;
+    if (!stops.length) return;
+    const L = window.L;
+    if (!m.map) {
+      m.map = L.map(m.box, { scrollWheelZoom: false, zoomControl: true });
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "© OpenStreetMap contributors",
+      }).addTo(m.map);
+      m.layer = L.layerGroup().addTo(m.map);
+    }
+    m.layer.clearLayers();
+    const pts = stops.map((s) => [s.lat, s.lon]);
+    if (pts.length > 1) {
+      L.polyline(pts, { color: "#a855f7", weight: 4, opacity: 0.85, dashArray: "6 8" }).addTo(m.layer);
+    }
+    stops.forEach((s, i) => {
+      // Tooltip content as a DOM node: a string would be parsed as HTML, and
+      // venue names come from OpenStreetMap.
+      const tip = document.createElement("span");
+      tip.textContent = `${i + 1}. ${s.name}${s.arriveAt ? " · " + s.arriveAt : ""}`;
+      L.marker([s.lat, s.lon], {
+        icon: L.divIcon({ className: `pin ${stateOf ? stateOf(i) : ""}`, html: String(i + 1), iconSize: [30, 30] }),
+        title: s.name,
+        keyboard: false,
+      }).bindTooltip(tip, { direction: "top", offset: [0, -14] }).addTo(m.layer);
+    });
+    // Only re-frame when the route itself changes, so a guest who zoomed in
+    // isn't yanked back every 15 seconds.
+    const sig = pts.map((p) => p.join(",")).join("|");
+    setTimeout(() => {
+      m.map.invalidateSize();
+      if (m.fitted !== sig) {
+        m.map.fitBounds(L.latLngBounds(pts).pad(0.3), { maxZoom: 17 });
+        m.fitted = sig;
+      }
+    }, 0);
+  }
 
   function timeOptions(select, value, allowBlank) {
     if (allowBlank) select.appendChild(el("option", { value: "", text: "All night" }));
@@ -142,9 +199,16 @@
   // Builder (organiser, before the event exists)
   // =========================================================================
   function renderBuilder() {
-    const draft = store.get("crawl:draft") || {
+    const fresh = {
       name: "", organizer: "", date: nextThursday(), plannedStart: "17:30", dwell: 50, stops: [],
+      target: 4,
+      who: { size: 8, ageMin: 30, ageMax: 60, vibe: "mixed", needs: { food: false, stepFree: false, outdoor: false } },
     };
+    const saved = store.get("crawl:draft");
+    // A malformed or older draft must not break the builder.
+    const draft = saved && typeof saved === "object" && Array.isArray(saved.stops)
+      ? { ...fresh, ...saved, who: { ...fresh.who, ...(saved.who || {}), needs: { ...fresh.who.needs, ...((saved.who || {}).needs || {}) } } }
+      : fresh;
     const save = () => store.set("crawl:draft", draft);
     const app = $("#app");
     app.textContent = "";
@@ -177,47 +241,137 @@
     );
     app.appendChild(basics);
 
+    // --- Who's coming (drives smart suggest) ---
+    const who = el("div", { class: "card", id: "whoCard" });
+    who.appendChild(el("h2", { text: "2 · Who's coming" }));
+    const sel = (id, options, value, onChange) => {
+      const node = el("select", { id });
+      options.forEach(([v, t]) => node.appendChild(el("option", { value: v, text: t, selected: String(v) === String(value) })));
+      node.addEventListener("change", () => { onChange(node.value); save(); });
+      return node;
+    };
+    const ages = [18, 21, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70].map((a) => [a, String(a)]);
+    who.append(
+      el("div", { class: "row" }, [
+        el("div", {}, [el("label", { for: "whoSize", text: "Roughly how many" }),
+          sel("whoSize", [2, 4, 6, 8, 10, 12, 15, 20, 25, 30, 40].map((n) => [n, `${n} people`]), draft.who.size, (v) => { draft.who.size = Number(v); })]),
+        el("div", {}, [el("label", { for: "whoStops", text: "How many stops" }),
+          sel("whoStops", [2, 3, 4, 5, 6, 7, 8].map((n) => [n, `${n} stops`]), draft.target, (v) => { draft.target = Number(v); drawRoute(); })]),
+      ]),
+      el("div", { class: "row" }, [
+        el("div", {}, [el("label", { for: "whoAgeMin", text: "Ages from" }), sel("whoAgeMin", ages, draft.who.ageMin, (v) => { draft.who.ageMin = Number(v); })]),
+        el("div", {}, [el("label", { for: "whoAgeMax", text: "to" }), sel("whoAgeMax", ages, draft.who.ageMax, (v) => { draft.who.ageMax = Number(v); })]),
+      ]),
+      el("label", { for: "whoVibe", text: "Kind of night" }),
+      sel("whoVibe", [["chatty", "Relaxed — somewhere we can talk"], ["mixed", "A bit of both"], ["lively", "Lively — buzz and music"]], draft.who.vibe, (v) => { draft.who.vibe = v; })
+    );
+    const needs = el("div", { class: "checks", role: "group", "aria-label": "Must have" });
+    [["food", "Food"], ["stepFree", "Step-free access"], ["outdoor", "Outdoor space"]].forEach(([k, t]) => {
+      const box = el("input", { type: "checkbox", id: `need_${k}`, checked: !!draft.who.needs[k] });
+      box.addEventListener("change", () => { draft.who.needs[k] = box.checked; save(); });
+      needs.appendChild(el("label", { class: "check", for: `need_${k}` }, [box, t]));
+    });
+    who.append(el("label", { text: "Must have" }), needs);
+    app.appendChild(who);
+
     // --- Find pubs near a starting point ---
     const find = el("div", { class: "card" });
-    find.appendChild(el("h2", { text: "2 · Add stops" }));
+    find.appendChild(el("h2", { text: "3 · Add stops" }));
     const areaWrap = el("div", { class: "ac" });
     const area = el("input", { id: "evArea", placeholder: "Start near… (e.g. Bank, London or your office)", autocomplete: "off" });
     areaWrap.appendChild(area);
     const results = el("div", { class: "results", id: "pubResults" });
-    find.append(el("label", { for: "evArea", text: "Pubs & bars near" }), areaWrap, results);
-    attachSuggest(area, async (s) => {
+    const suggestBtn = el("button", {
+      class: "btn", id: "suggestBtn", disabled: true,
+      text: "✨ Suggest a route for this group",
+    });
+    find.append(
+      el("label", { for: "evArea", text: "Pubs & bars near" }), areaWrap,
+      el("div", { class: "btns" }, [suggestBtn]),
+      el("div", { class: "muted", id: "suggestHint", text: "Pick a starting point, then let the app plan the stops — or add them yourself below." }),
+      results
+    );
+    let pubsFound = [];
+    let areaPoint = null;
+    let showAll = false;
+    const isOnRoute = (p) => draft.stops.some((s) => C.sameStop(s, p));
+    const addStop = (p, why) => {
+      draft.stops.push({ id: rid(), name: p.name, lat: p.lat, lon: p.lon, hours: p.hours, kind: p.kind, address: p.address, why: why || [] });
+    };
+    function renderResults() {
       results.textContent = "";
-      results.appendChild(el("div", { class: "muted", text: "Finding pubs and bars nearby…" }));
-      const { data } = await api(`/api/pubs?lat=${s.lat}&lon=${s.lon}`);
-      results.textContent = "";
-      const pubs = (data && data.results) || [];
-      if (!pubs.length) {
-        results.appendChild(el("div", { class: "muted", text: data && data.error ? "Pub search is busy — try again in a moment." : "No pubs found within ~700 m." }));
-        return;
-      }
-      pubs.forEach((p) => {
+      const list = showAll ? pubsFound : pubsFound.slice(0, 8);
+      list.forEach((p) => {
         const sched = { ...p, arriveAt: draft.plannedStart };
         const note = hoursNote(sched, draft.date);
+        const added = isOnRoute(p);
+        const traits = C.scoreVenue(p, draft.who).reasons.filter((r) => r !== "Proper pub" && r !== "Bar");
         results.appendChild(
           el("div", { class: "result" }, [
             el("div", { class: "grow" }, [
               el("div", { class: "name", text: p.name }),
               el("div", { class: "muted", text: `${p.kind === "bar" ? "Bar" : "Pub"} · ${p.dist} m${p.address ? " · " + p.address : ""}` }),
+              traits.length ? el("div", { class: "why", text: traits.join(" · ") }) : null,
               el("div", { class: note.bad ? "warn" : "muted", text: note.text }),
             ]),
+            // Already on the route: say so, rather than letting it be added
+            // again and again.
             el("button", {
               class: "btn sm secondary",
-              text: "Add",
+              text: added ? "Added ✓" : "Add",
+              disabled: added,
+              "aria-label": added ? `${p.name} is already on the route` : `Add ${p.name}`,
               onClick: () => {
-                draft.stops.push({ id: rid(), name: p.name, lat: p.lat, lon: p.lon, hours: p.hours, kind: p.kind, address: p.address });
+                if (isOnRoute(p)) return;
+                addStop(p);
                 save();
                 drawRoute();
-                toast(`Added ${p.name}`);
+                renderResults();
               },
             }),
           ])
         );
       });
+      if (!showAll && pubsFound.length > 8) {
+        results.appendChild(
+          el("button", { class: "btn ghost", text: `Show all ${pubsFound.length}`, onClick: () => { showAll = true; renderResults(); } })
+        );
+      }
+    }
+    attachSuggest(area, async (s) => {
+      results.textContent = "";
+      results.appendChild(el("div", { class: "muted", text: "Finding pubs and bars nearby…" }));
+      areaPoint = { lat: s.lat, lon: s.lon };
+      showAll = false;
+      let data = null;
+      try {
+        data = (await api(`/api/pubs?lat=${s.lat}&lon=${s.lon}`)).data;
+      } catch (e) {
+        data = { error: "offline" };
+      }
+      pubsFound = (data && data.results) || [];
+      suggestBtn.disabled = !pubsFound.length;
+      if (!pubsFound.length) {
+        results.textContent = "";
+        results.appendChild(el("div", { class: "muted", text: data && data.error ? "Pub search is busy — try again in a moment." : "No pubs found within ~700 m." }));
+        return;
+      }
+      renderResults();
+    });
+    suggestBtn.addEventListener("click", () => {
+      if (!pubsFound.length || !areaPoint) return;
+      if (draft.stops.length && !window.confirm("Replace the stops you've added with a suggested route?")) return;
+      const route = C.suggestRoute(pubsFound, areaPoint, draft.who, {
+        count: draft.target, date: draft.date, start: draft.plannedStart, dwell: draft.dwell,
+      });
+      draft.stops = [];
+      route.forEach((v) => addStop(v, v.why));
+      save();
+      drawRoute();
+      renderResults();
+      toast(route.length < draft.target
+        ? `Found ${route.length} good stops nearby — add more by hand if you like`
+        : `Planned ${route.length} stops — tweak anything below`);
     });
     // --- Or any place ---
     const anyWrap = el("div", { class: "ac" });
@@ -225,7 +379,13 @@
     anyWrap.appendChild(anyPlace);
     find.append(el("label", { for: "evAny", text: "Or add any place" }), anyWrap);
     attachSuggest(anyPlace, (s) => {
-      draft.stops.push({ id: rid(), name: s.label.split(",")[0], lat: s.lat, lon: s.lon, hours: "", kind: "place", address: s.label });
+      const place = { name: s.label.split(",")[0], lat: s.lat, lon: s.lon };
+      if (isOnRoute(place)) {
+        anyPlace.value = "";
+        toast(`${place.name} is already on the route`);
+        return;
+      }
+      draft.stops.push({ id: rid(), name: place.name, lat: s.lat, lon: s.lon, hours: "", kind: "place", address: s.label });
       save();
       anyPlace.value = "";
       drawRoute();
@@ -236,12 +396,17 @@
     // --- The route with times ---
     const route = el("div", { class: "card", id: "routeCard" });
     app.appendChild(route);
+    const builderMap = mapCard("builder", "Route map");
+    if (builderMap) app.appendChild(builderMap.card);
+    // Always-reachable summary + create, instead of a button at the very end.
+    const summary = el("div", { class: "createbar-text", id: "createSummary" });
     const createBtn = el("button", { class: "btn", id: "createBtn", text: "Create event & get links" });
-    app.appendChild(createBtn);
+    app.appendChild(el("div", { class: "createbar" }, [summary, createBtn]));
 
     function drawRoute() {
       route.textContent = "";
-      route.appendChild(el("h2", { text: `3 · Route (${draft.stops.length} stop${draft.stops.length === 1 ? "" : "s"})` }));
+      const n = draft.stops.length;
+      route.appendChild(el("h2", { text: `4 · Route — ${n} of ${draft.target} stop${draft.target === 1 ? "" : "s"}` }));
       if (!draft.stops.length) {
         route.appendChild(el("div", { class: "muted", text: "Add at least two stops." }));
       }
@@ -254,8 +419,9 @@
           el("li", { class: "stop" }, [
             el("div", { class: "dot" }),
             el("div", { class: "grow" }, [
-              el("div", { class: "name", text: s.name }),
+              el("div", { class: "name", text: `${i + 1}. ${s.name}` }),
               el("div", { class: "note", text: i ? `🚶 ${walk} min from ${sched[i - 1].name}` : "Start here" }),
+              s.why && s.why.length ? el("div", { class: "why", text: `Why: ${s.why.join(" · ")}` }) : null,
               el("div", { class: note.bad ? "warn" : "note", text: note.text }),
             ]),
             el("div", {}, [
@@ -271,6 +437,10 @@
       });
       route.appendChild(list);
       createBtn.disabled = draft.stops.length < 2;
+      summary.textContent = sched.length
+        ? `${sched.length} stop${sched.length === 1 ? "" : "s"} · ${sched[0].arriveAt}–${sched[sched.length - 1].leaveAt}`
+        : "No stops yet";
+      updateMap("builder", sched);
     }
     function move(i, d) {
       const [s] = draft.stops.splice(i, 1);
@@ -299,7 +469,7 @@
         createBtn.disabled = false;
         return;
       }
-      store.set(`crawl:host:${data.id}`, { key: data.key, record, people: [] });
+      store.set(`crawl:host:${data.id}`, { key: data.key, record: stripPeople(data.record || record), people: [] });
       store.set("crawl:draft", null);
       location.hash = `e=${data.id}&k=${data.key}`;
     });
@@ -317,9 +487,23 @@
     return { id: h.get("e") || "", key: h.get("k") || "" };
   }
 
+  let offline = false;
+  let lastOk = 0;
   async function refresh() {
-    const { ok, status, data } = await api(`/api/live?id=${encodeURIComponent(ctx.id)}`);
+    let res;
+    try {
+      res = await api(`/api/live?id=${encodeURIComponent(ctx.id)}`);
+    } catch (e) {
+      // Bad signal in a pub is normal: keep showing the last known state,
+      // say how old it is, and keep trying.
+      offline = true;
+      renderEvent();
+      return;
+    }
+    offline = false;
+    const { ok, status, data } = res;
     if (ok) {
+      lastOk = Date.now();
       live = data;
       if (ctx.key) {
         const h = store.get(`crawl:host:${ctx.id}`) || { key: ctx.key };
@@ -332,7 +516,9 @@
       // put it back, guests included.
       const h = store.get(`crawl:host:${ctx.id}`);
       if (h && h.record) {
-        const r = await api("/api/live/update", { id: ctx.id, key: ctx.key, record: h.record, people: h.people || [] });
+        const r = await api("/api/live/update", {
+          id: ctx.id, key: ctx.key, record: h.record, people: h.people || [], rev: h.record.rev || 0,
+        });
         if (r.ok) live = r.data;
       }
     } else if (status === 404) {
@@ -345,15 +531,30 @@
     const r = { ...rec };
     delete r.people;
     delete r.serverTime;
+    delete r.rev;
     return r;
   }
 
-  async function hostUpdate(mutate) {
+  async function hostUpdate(mutate, retried) {
     const record = stripPeople(live);
     mutate(record);
-    const { ok, data, status } = await api("/api/live/update", {
-      id: ctx.id, key: ctx.key, record, people: live.people || [],
-    });
+    let res;
+    try {
+      res = await api("/api/live/update", {
+        id: ctx.id, key: ctx.key, record, people: live.people || [], rev: live.rev,
+      });
+    } catch (e) {
+      toast("No signal — try again in a moment");
+      return;
+    }
+    const { ok, data, status } = res;
+    if (status === 409 && data && data.current && !retried) {
+      // A co-host changed it first: start from their version, not ours.
+      live = data.current;
+      toast("Your co-host just updated the plan — refreshed");
+      renderEvent(true);
+      return;
+    }
     if (!ok) {
       toast(status === 403 ? "This link can't change the plan" : "Couldn't update — try again");
       return;
@@ -367,7 +568,14 @@
   }
 
   async function savePerson(person) {
-    const { ok, data, status } = await api("/api/live/person", { id: ctx.id, person });
+    let res;
+    try {
+      res = await api("/api/live/person", { id: ctx.id, person });
+    } catch (e) {
+      toast("No signal — try again in a moment");
+      return false;
+    }
+    const { ok, data, status } = res;
     if (!ok) {
       toast(status === 404 ? "The organiser's event isn't live yet — try again shortly" : "Couldn't save — try again");
       return false;
@@ -380,6 +588,17 @@
 
   function startEvent() {
     ctx = parseHash();
+    // The co-host key shouldn't sit in the address bar (or browser history)
+    // once it's stored: keep it on this device, show #e=ID only.
+    if (ctx.key) {
+      const h = store.get(`crawl:host:${ctx.id}`) || {};
+      h.key = ctx.key;
+      store.set(`crawl:host:${ctx.id}`, h);
+      history.replaceState(null, "", `${location.pathname}#e=${ctx.id}`);
+    } else {
+      const h = store.get(`crawl:host:${ctx.id}`);
+      if (h && h.key) ctx.key = h.key;
+    }
     clearInterval(pollTimer);
     refresh();
     pollTimer = setInterval(() => {
@@ -387,8 +606,21 @@
     }, POLL_MS);
   }
 
-  function renderEvent() {
+  let lastSig = "";
+  function renderEvent(force) {
     const app = $("#app");
+    // Only rebuild when something changed. Rebuilding every 15 s wiped what a
+    // guest was typing, their scroll position and keyboard focus.
+    const sig = JSON.stringify([live && { ...live, serverTime: 0 }, offline]);
+    if (!force && sig === lastSig) return;
+    lastSig = sig;
+    // ...and if it did change, carry the guest's half-filled form across.
+    const keep = {};
+    ["meName", "meFrom", "meUntil"].forEach((id) => {
+      const n = document.getElementById(id);
+      if (n) keep[id] = n.value;
+    });
+    const focused = document.activeElement && document.activeElement.id;
     app.textContent = "";
     if (!live || live.missing) {
       app.appendChild(
@@ -404,18 +636,44 @@
     const me = store.get(`crawl:me:${ctx.id}`);
     $("#topSub").textContent = `${live.name}${live.organizer ? " · by " + live.organizer : ""}`;
 
+    if (offline) {
+      const at = lastOk ? new Date(lastOk).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+      app.appendChild(el("div", { class: "offline", role: "status", text: `📶 Can't reach the server — showing what we knew at ${at}. Retrying…` }));
+    }
     app.appendChild(statusBanner(live, sched));
+    const planning = live.status.phase === "planning";
+    // Right after creating it, sharing the link is the organiser's only job.
+    if (isHost && planning) app.appendChild(linksCard());
     if (isHost) app.appendChild(hostControls(live, sched));
     else app.appendChild(guestPanel(live, sched, me));
+    const liveMap = mapCard("event", "Map");
+    if (liveMap) app.appendChild(liveMap.card);
     app.appendChild(trackerCard(live, sched));
     app.appendChild(peopleCard(live, sched, isHost));
-    if (isHost) app.appendChild(linksCard());
+    if (isHost && !planning) app.appendChild(linksCard());
+    const st = live.status;
+    updateMap("event", sched, (i) => {
+      if (st.phase === "planning") return "";
+      if (i < st.stop || (i === st.stop && (st.state === "moving" || st.phase === "done"))) return "done";
+      if (i === st.stop) return "here";
+      if (i === st.stop + 1) return "next";
+      return "";
+    });
+    Object.entries(keep).forEach(([id, v]) => {
+      const n = document.getElementById(id);
+      if (n) n.value = v;
+    });
+    if (focused && document.getElementById(focused)) document.getElementById(focused).focus();
   }
 
   function statusBanner(rec, sched) {
     const st = rec.status;
-    const box = el("div", { class: "status", id: "statusBanner" });
-    const when = new Date(rec.date + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+    // The one place that announces changes to screen readers.
+    const box = el("div", { class: "status", id: "statusBanner", role: "status", "aria-live": "polite" });
+    const d = new Date(rec.date + "T12:00:00");
+    const when = Number.isFinite(d.getTime())
+      ? d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })
+      : "Date to be confirmed";
     if (st.phase === "planning") {
       box.append(
         el("div", { class: "big", text: `${when} · starts ${rec.finalStart || rec.plannedStart}` }),
@@ -629,7 +887,7 @@
           name.focus();
           return;
         }
-        savePerson({ id: rid(), name: name.value.trim(), from: from.value, until: until.value, status }).then((ok) => {
+        savePerson({ id: rid(), token: rid() + rid() + rid(), name: name.value.trim(), from: from.value, until: until.value, status }).then((ok) => {
           if (ok) toast(status === "out" ? "Thanks — the organiser will see you can't make it" : "You're on the list 🍻");
         });
       };
@@ -638,6 +896,10 @@
           el("button", { class: "btn", id: "meIn", text: "I'm in", onClick: () => join("coming") }),
           el("button", { class: "btn ghost", id: "meOut", text: "Can't make it", onClick: () => join("out") }),
         ])
+      );
+      card.appendChild(
+        el("div", { class: "muted", style: "margin-top:10px",
+          text: "🔒 Everyone with this link sees first names, times and which stop the group is at — never anyone's location. The event is deleted after 2 days." })
       );
       return card;
     }

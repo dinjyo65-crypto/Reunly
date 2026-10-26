@@ -11,3 +11,7 @@ services:
     envVars:
       - key: PORT
         value: 10000
+      # Host keys for live events are derived from this; generated once by
+      # Render and kept across restarts/redeploys.
+      - key: LIVE_SECRET
+        generateValue: true

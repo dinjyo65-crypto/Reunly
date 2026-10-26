@@ -67,3 +67,45 @@ test("closedStops flags a stop that will be shut when the group arrives", () => 
   const s = C.scheduleStops(withHours, "17:30", 50);
   assert.deepStrictEqual(C.closedStops(s, "2026-11-05"), [2]);
 });
+
+// ---- Duplicates & smart suggest ----
+test("the same pub can't be added twice", () => {
+  const a = { name: "The Crown", lat: 51.5136, lon: -0.089 };
+  assert.ok(C.sameStop(a, { name: "the crown ", lat: 51.51362, lon: -0.08905 }));
+  assert.ok(!C.sameStop(a, { name: "The Crown", lat: 51.53, lon: -0.12 }), "a different Crown elsewhere");
+});
+
+const venues = [
+  { name: "Quiet Ale House", kind: "pub", lat: 51.5136, lon: -0.0890, tags: { food: "yes", wheelchair: "yes", real_ale: "yes" }, hours: "Mo-Su 11:00-23:00" },
+  { name: "Neon Cocktails", kind: "bar", lat: 51.5139, lon: -0.0884, tags: { live_sport: "yes" }, hours: "" },
+  { name: "Step Inn", kind: "pub", lat: 51.5142, lon: -0.0879, tags: { wheelchair: "no", food: "yes" }, hours: "" },
+  { name: "Garden Arms", kind: "pub", lat: 51.5146, lon: -0.0872, tags: { outdoor_seating: "yes", wheelchair: "yes" }, hours: "" },
+  { name: "Shut On Thursdays", kind: "pub", lat: 51.5137, lon: -0.0887, tags: { food: "yes", wheelchair: "yes" }, hours: "Fr-Su 12:00-23:00" },
+  { name: "Far Away Tavern", kind: "pub", lat: 51.5400, lon: -0.1500, tags: { food: "yes", wheelchair: "yes" }, hours: "" },
+];
+const start = { lat: 51.5136, lon: -0.0890 };
+const plan = { count: 3, date: "2026-11-05", start: "18:00", dwell: 50 };
+
+test("a 30-60 chatty group gets pubs with food first, not the sports bar", () => {
+  const who = { ageMin: 30, ageMax: 60, vibe: "chatty", needs: { food: true } };
+  const route = C.suggestRoute(venues, start, who, plan);
+  assert.strictEqual(route.length, 3);
+  assert.strictEqual(route[0].name, "Quiet Ale House");
+  assert.ok(route[0].why.includes("Food served"));
+  assert.ok(!route.some((v) => v.name === "Neon Cocktails" && route.indexOf(v) === 0));
+});
+
+test("step-free need rules out a pub that says no access; closed and far places are skipped", () => {
+  const who = { ageMin: 30, ageMax: 60, vibe: "mixed", needs: { stepFree: true } };
+  const route = C.suggestRoute(venues, start, who, { ...plan, count: 6 });
+  const names = route.map((v) => v.name);
+  assert.ok(!names.includes("Step Inn"), "no step-free access");
+  assert.ok(!names.includes("Shut On Thursdays"), "shut that evening");
+  assert.ok(!names.includes("Far Away Tavern"), "over 15 minutes' walk");
+});
+
+test("a lively younger group can get the bar", () => {
+  const who = { ageMin: 22, ageMax: 28, vibe: "lively", needs: {} };
+  const s = C.scoreVenue(venues[1], who);
+  assert.ok(s.score > 1.5 && s.reasons.includes("Shows sport"));
+});

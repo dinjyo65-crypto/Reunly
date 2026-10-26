@@ -108,3 +108,37 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
 }
 .toast.show { opacity: 1; transform: translateX(-50%); }
 @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+
+/* ---- v0.9 round 2: smart suggest, map, sticky create, a11y ---- */
+.btn.sm { min-height: 44px; min-width: 44px; } /* comfortable tap targets */
+.checks { display: flex; flex-wrap: wrap; gap: 8px; }
+.check {
+  display: inline-flex; align-items: center; gap: 8px; margin: 0;
+  padding: 10px 12px; min-height: 44px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); font-size: 0.88rem; font-weight: 600; cursor: pointer;
+}
+.check input { width: 18px; height: 18px; accent-color: #a855f7; }
+.why { font-size: 0.8rem; color: var(--gold); margin-top: 2px; }
+.results { max-height: none; }
+.map { height: 260px; border-radius: var(--radius-sm); overflow: hidden; background: #0c1122; }
+.leaflet-container { font: inherit; }
+.pin {
+  display: grid; place-items: center; border-radius: 50%;
+  background: #141a2e; color: var(--text); border: 2px solid var(--accent);
+  font-weight: 800; font-size: 13px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+.pin.done { background: #2a3045; border-color: var(--text-dim); color: var(--text-dim); }
+.pin.next { border-color: var(--gold); color: var(--gold); }
+.pin.here { background: var(--pink); border-color: #fff; color: #fff; box-shadow: 0 0 0 6px rgba(236, 72, 153, 0.3); }
+.createbar {
+  position: sticky; bottom: 0; z-index: 5; display: flex; gap: 12px; align-items: center;
+  margin: 12px -16px 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  background: rgba(8, 11, 22, 0.94); border-top: 1px solid var(--border);
+}
+.createbar .btn { width: auto; flex: none; }
+.createbar-text { flex: 1; font-size: 0.85rem; color: var(--text-dim); }
+.offline {
+  margin: 12px 0; padding: 10px 14px; border-radius: var(--radius-sm);
+  border: 1px solid var(--warn); color: var(--warn); font-size: 0.85rem;
+}
