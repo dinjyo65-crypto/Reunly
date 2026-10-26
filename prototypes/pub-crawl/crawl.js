@@ -222,7 +222,9 @@
       const t = on ? trip() : null;
       hint.textContent = !on ? ""
         : !t ? (missing ? missing() : "Pick where you're coming from and we'll estimate your last train.")
-        : t.auto ? `Last train estimated at about ${t.lastTrain} from the distance — pick the real time if you know it.`
+        : t.real ? `🚆 Last train ${t.lastTrain} from ${t.station} (timetable) — leave by ${t.leave}.`
+        : t.noTrain ? "No train home found tonight — pick another way home."
+        : t.auto ? `Last train estimated at about ${t.lastTrain} from the distance — looking up the timetable…`
         : "";
       hint.hidden = !hint.textContent;
     };
@@ -230,6 +232,45 @@
     train.addEventListener("change", sync);
     sync();
     return sync;
+  }
+
+  // ---- Real last train / bus home (journey planner, via /api/lasttrain) ----
+  // One lookup per stop → home → date; kept on the phone so it works offline
+  // on the night. Until it lands (or if the planner can't be reached) the
+  // page shows the distance estimate, then re-renders with the real one.
+  const rides = {};
+  let onRide = null;
+  function rideHome(from, home, date) {
+    if (!from || !home || !date || !Number.isFinite(home.lat) || !Number.isFinite(from.lat)) return null;
+    const key = [from.lat, from.lon, home.lat, home.lon].map((v) => Number(v).toFixed(3)).join(",") + "@" + date;
+    if (rides[key] !== undefined) return rides[key] === "pending" || rides[key] === "none" ? null : rides[key];
+    const kept = store.get(`crawl:ride:${key}`);
+    if (kept) {
+      rides[key] = kept;
+      return kept;
+    }
+    rides[key] = "pending";
+    const tz = -new Date(`${date}T22:00:00`).getTimezoneOffset();
+    const q = `flat=${from.lat}&flon=${from.lon}&tlat=${home.lat}&tlon=${home.lon}&date=${date}&tz=${tz}`;
+    api(`/api/lasttrain?${q}`).then(({ ok, data }) => {
+      if (ok && data && "found" in data) {
+        rides[key] = data;
+        store.set(`crawl:ride:${key}`, data);
+        if (onRide) onRide();
+      } else {
+        rides[key] = "none";
+        setTimeout(() => { delete rides[key]; }, 60000); // try again later
+      }
+    }).catch(() => {
+      rides[key] = "none";
+      setTimeout(() => { delete rides[key]; }, 60000);
+    });
+    return null;
+  }
+  /** C.homeTrip with tonight's real train / bus when we have it. */
+  function tripFor(stop, home, transport, lastTrain, date) {
+    const ask = (transport === "train" && C.toMin(lastTrain) == null) || transport === "bus";
+    return C.homeTrip(stop, home, transport, lastTrain, date, ask ? rideHome(stop, home, date) : null);
   }
 
   const telHref = (phone) => `tel:${String(phone).replace(/[^0-9+]/g, "")}`;
@@ -286,6 +327,7 @@
   // Builder (organiser, before the event exists)
   // =========================================================================
   function renderBuilder() {
+    onRide = () => drawRoute();
     const fresh = {
       name: "", organizer: "", organizerPhone: "", lastTrain: "",
       organizerHome: null, organizerTransport: "", organizerLastTrain: "",
@@ -345,13 +387,13 @@
     TRANSPORT.forEach(([v, t]) => orgTransport.appendChild(el("option", { value: v, text: t, selected: v === draft.organizerTransport })));
     orgTransport.addEventListener("change", () => { draft.organizerTransport = orgTransport.value; save(); drawRoute(); });
     const orgTrain = el("select", { id: "evOrgLastTrain" });
-    trainOptions(orgTrain, draft.organizerLastTrain, "Auto (estimated)");
+    trainOptions(orgTrain, draft.organizerLastTrain, "Auto (from the timetable)");
     orgTrain.addEventListener("change", () => { draft.organizerLastTrain = orgTrain.value; save(); drawRoute(); });
     const orgTrainHint = el("div", { class: "note", id: "evOrgTrainHint" });
     // The organiser's own trip home from the last stop of the current route.
     const orgTrip = () => {
       const s = C.scheduleStops(draft.stops, draft.plannedStart, draft.dwell);
-      return C.homeTrip(s[s.length - 1], draft.organizerHome, draft.organizerTransport, draft.organizerLastTrain, draft.date);
+      return tripFor(s[s.length - 1], draft.organizerHome, draft.organizerTransport, draft.organizerLastTrain, draft.date);
     };
     basics.append(
       el("label", { for: "evOrgPhone", text: "Your phone (optional)" }), orgPhone,
@@ -577,7 +619,7 @@
       const mine = orgTrip();
       if (mine && mine.early) {
         route.appendChild(el("div", { class: "warn", id: "lastTrainWarn",
-          text: `🚆 Ends at ${sched[sched.length - 1].leaveAt} — you'd need to leave by ${mine.leave} for your last train (${mine.auto ? `about ${mine.lastTrain}, estimated` : mine.lastTrain}). Drop a stop, start earlier, or plan another way home.` }));
+          text: `🚆 Ends at ${sched[sched.length - 1].leaveAt} — you'd need to leave by ${mine.leave} for your last train (${mine.real ? `${mine.lastTrain} from ${mine.station}` : mine.auto ? `about ${mine.lastTrain}, estimated` : mine.lastTrain}). Drop a stop, start earlier, or plan another way home.` }));
       }
       syncOrgTrain();
       if ((draft.who.size || 0) >= C.BOOK_AHEAD_AT && sched.length) {
@@ -772,6 +814,7 @@
   let lastSig = "";
   let lastWhere = "";
   function renderEvent(force) {
+    onRide = () => renderEvent(true);
     const app = $("#app");
     // Only rebuild when something changed. Rebuilding every 15 s wiped what a
     // guest was typing, their scroll position and keyboard focus.
@@ -1034,8 +1077,8 @@
         if (rec.organizerHome) ways.push([rec.organizer || "You", rec.organizerHome, rec.organizerTransport, rec.organizerLastTrain]);
         going.forEach((pp) => ways.push([pp.name, pp.home, pp.transport, pp.lastTrain, pp]));
         const missed = ways.filter(([, h, t, lt, pp]) => {
-          const trip = C.homeTrip(pp ? C.lastStopFor(pp, moved) : end, h, t, lt, rec.date);
-          const before = C.homeTrip(pp ? C.lastStopFor(pp, sched) : sched[sched.length - 1], h, t, lt, rec.date);
+          const trip = tripFor(pp ? C.lastStopFor(pp, moved) : end, h, t, lt, rec.date);
+          const before = tripFor(pp ? C.lastStopFor(pp, sched) : sched[sched.length - 1], h, t, lt, rec.date);
           return trip && trip.early && !(before && before.early);
         }).map(([n]) => n);
         card.appendChild(el("div", { class: missed.length ? "warn" : "note", id: "bestImpact",
@@ -1168,11 +1211,11 @@
     const lastStop = sched[sched.length - 1];
     const ways = [];
     if (rec.organizerHome) {
-      const t = C.homeTrip(lastStop, rec.organizerHome, rec.organizerTransport, rec.organizerLastTrain, rec.date);
+      const t = tripFor(lastStop, rec.organizerHome, rec.organizerTransport, rec.organizerLastTrain, rec.date);
       if (t) ways.push([`${rec.organizer || "You"} (you)`, t]);
     }
     (rec.people || []).filter((pp) => pp.status !== "out" && pp.home).forEach((pp) => {
-      const t = C.homeTrip(C.lastStopFor(pp, sched), pp.home, pp.transport, pp.lastTrain, rec.date);
+      const t = tripFor(C.lastStopFor(pp, sched), pp.home, pp.transport, pp.lastTrain, rec.date);
       if (t) ways.push([pp.name, t]);
     });
     if (ways.length && st.phase !== "done") {
@@ -1252,7 +1295,7 @@
       const transport = el("select", { id: "meTransport" });
       TRANSPORT.forEach(([v, t]) => transport.appendChild(el("option", { value: v, text: t, selected: !!was && v === was.transport })));
       const myTrain = el("select", { id: "meLastTrain" });
-      trainOptions(myTrain, was ? was.lastTrain : "", "Auto (estimated)");
+      trainOptions(myTrain, was ? was.lastTrain : "", "Auto (from the timetable)");
       if (was && !pickedHome && was.home) pickedHome = was.home;
       const trainHint = el("div", { class: "note", id: "meTrainHint" });
       const homeWrap = el("div", { class: "ac" });
@@ -1285,13 +1328,13 @@
       const homeCheck = el("div", { class: "warn", id: "meHomeCheck", hidden: true });
       homeWrap.after(homeCheck);
       const checkHome = () => {
-        const t = pickedHome && C.homeTrip(sched[0], pickedHome, "", "", rec.date);
+        const t = pickedHome && tripFor(sched[0], pickedHome, "", "", rec.date);
         homeCheck.textContent = t && t.wrongPlace ? t.text : "";
         homeCheck.hidden = !homeCheck.textContent;
       };
       homeWrap.addEventListener("picked", checkHome);
       syncTrain = wireTrain(transport, myTrain, trainHint,
-        () => C.homeTrip(sched[sched.length - 1], pickedHome, transport.value, myTrain.value, rec.date));
+        () => tripFor(sched[sched.length - 1], pickedHome, transport.value, myTrain.value, rec.date));
       const details = () => ({
         name: name.value.trim(), from: from.value, until: until.value,
         transport: transport.value, lastTrain: transport.value === "train" ? myTrain.value : "", home: pickedHome,
@@ -1395,7 +1438,7 @@
       const mine = C.lastStopFor(me, sched);
       const last = st.phase === "done" ? { ...mine, leave: null } : mine;
       // After the end, train times are history — keep only a wrong-place flag.
-      const tripNow = me.status === "safe" ? null : C.homeTrip(last, me.home, me.transport, me.lastTrain, rec.date);
+      const tripNow = me.status === "safe" ? null : tripFor(last, me.home, me.transport, me.lastTrain, rec.date);
       const trip = st.phase === "done" && tripNow && !tripNow.wrongPlace ? null : tripNow;
       const leave = me.status === "safe" || st.phase === "done" ? null : C.leaveBy(me.lastTrain);
       if (trip) info.appendChild(el("div", { class: trip.warn ? "warn" : "note", text: `🏠 ${trip.text}` }));
@@ -1416,7 +1459,7 @@
       }
       card.appendChild(info);
     } else if (going) {
-      const trip = C.homeTrip(sched[sched.length - 1], me.home, me.transport, me.lastTrain, rec.date);
+      const trip = tripFor(sched[sched.length - 1], me.home, me.transport, me.lastTrain, rec.date);
       if (trip) card.appendChild(el("div", { class: trip.warn ? "warn" : "note", text: `🏠 On the night: ${trip.text}` }));
       else if (C.leaveBy(me.lastTrain)) card.appendChild(el("div", { class: "note", text: `🚆 On the night: leave by ${C.leaveBy(me.lastTrain)} for your ${me.lastTrain} train.` }));
     }

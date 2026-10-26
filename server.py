@@ -184,6 +184,110 @@ def _nominatim_wait():
         time.sleep(wait)
 
 
+# ---- Last train home (Transitous: free, keyless journey planner built on
+# open timetable data — GB National Rail, TfL, buses, trams). Fair use: one
+# request a second from this server, results cached, short queue.
+TRANSIT_URL = "https://api.transitous.org/api/v1/plan"
+RAIL_MODES = {"RAIL", "LONG_DISTANCE", "HIGHSPEED_RAIL", "REGIONAL_RAIL", "REGIONAL_FAST_RAIL",
+              "NIGHT_RAIL", "SUBURBAN", "SUBWAY", "METRO", "TRAM", "FUNICULAR"}
+BUS_MODES = {"BUS", "COACH", "TROLLEYBUS"}
+_transit_lock = threading.Lock()
+_transit_next = [0.0]
+_transit_cache = {}
+
+
+def _transit_wait():
+    with _transit_lock:
+        now = time.monotonic()
+        wait = _transit_next[0] - now
+        if wait > 6:
+            raise RuntimeError("transit queue full")
+        _transit_next[0] = max(now, _transit_next[0]) + 1.0
+    if wait > 0:
+        time.sleep(wait)
+
+
+def _hhmm(iso, tz_min):
+    """'2026-10-31T23:06:00Z' -> local 'HH:MM' and minutes since the event
+    day's midnight (so after-midnight times are > 1440)."""
+    import datetime
+    t = datetime.datetime.strptime(iso[:16], "%Y-%m-%dT%H:%M") + datetime.timedelta(minutes=tz_min)
+    return t.strftime("%H:%M"), t
+
+
+def last_ride_home(frm, to, date, tz_min):
+    """The last train (and last bus) home tonight from a stop to someone's
+    home. `date` is the event day, `tz_min` the local offset from UTC in
+    minutes. Returns {"found", "rail", "bus"} where rail/bus are
+    {"leave", "depart", "arrive", "station", "line", "mode"} or None —
+    or None when the planner can't be reached (the page then estimates)."""
+    import datetime
+    key = (round(frm[0], 3), round(frm[1], 3), round(to[0], 3), round(to[1], 3), date, tz_min)
+    with _suggest_lock:
+        if key in _transit_cache:
+            return _transit_cache[key]
+    day = datetime.datetime.strptime(date, "%Y-%m-%d")
+    start_local = day + datetime.timedelta(hours=20)
+    end_local = day + datetime.timedelta(days=1, hours=5)  # tonight = before 05:00
+    start_utc = start_local - datetime.timedelta(minutes=tz_min)
+    best = {"rail": None, "bus": None}
+    cursor = None
+    try:
+        for _page in range(5):
+            params = [("fromPlace", "%.5f,%.5f" % frm), ("toPlace", "%.5f,%.5f" % to),
+                      ("numItineraries", 40), ("maxTransfers", 4), ("searchWindow", 9 * 3600)]
+            params.append(("pageCursor", cursor) if cursor else ("time", start_utc.strftime("%Y-%m-%dT%H:%M:00Z")))
+            _transit_wait()
+            req = urllib.request.Request(TRANSIT_URL + "?" + urllib.parse.urlencode(params),
+                                         headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = json.loads(r.read())
+            its = data.get("itineraries") or []
+            past_end = False
+            for it in its:
+                leave, leave_t = _hhmm(it["startTime"], tz_min)
+                if leave_t >= end_local:
+                    past_end = True
+                    continue
+                rides = [l for l in it.get("legs", []) if l.get("mode") not in ("WALK", "BIKE", "CAR")]
+                if not rides:
+                    continue
+                modes = {l.get("mode") for l in rides}
+                # Rail = trains / tube / tram only. Bus = buses only, and only
+                # before 03:00 — a 05:10 coach isn't a way home from the pub.
+                kind = "rail" if modes <= RAIL_MODES else "bus" if modes <= BUS_MODES else None
+                if not kind or (kind == "bus" and leave_t >= day + datetime.timedelta(days=1, hours=3)):
+                    continue
+                # Name the journey by its main ride (the longest), not a short
+                # tram hop to the station: "last train 00:58 from Manchester
+                # Victoria", not "00:49 from Piccadilly Gardens (Purple Line)".
+                main = max(rides, key=lambda l: l.get("duration") or 0)
+                cand = {
+                    "leave": leave,
+                    "depart": _hhmm(main.get("startTime") or it["startTime"], tz_min)[0],
+                    "arrive": _hhmm(it["endTime"], tz_min)[0],
+                    "station": _s((main.get("from") or {}).get("name"), 60),
+                    "line": _s(main.get("routeShortName") or main.get("agencyName") or "", 30),
+                    "mode": main.get("mode"),
+                    "changes": len(rides) - 1,
+                    "_t": leave_t,
+                }
+                if not best[kind] or cand["_t"] > best[kind]["_t"]:
+                    best[kind] = cand
+            cursor = data.get("nextPageCursor")
+            if past_end or not its or not cursor:
+                break
+    except Exception:
+        return None  # not cached: try again next time
+    for k in ("rail", "bus"):
+        if best[k]:
+            best[k].pop("_t", None)
+    out = {"found": bool(best["rail"] or best["bus"]), "rail": best["rail"], "bus": best["bus"], "source": "Transitous"}
+    with _suggest_lock:
+        _cache_put(_transit_cache, key, out)
+    return out
+
+
 def _cache_put(cache, key, value):
     """Store, discarding the oldest entries once the cache is full."""
     if len(cache) >= CACHE_LIMIT:
@@ -1395,6 +1499,19 @@ class Handler(SimpleHTTPRequestHandler):
             if rec is None:
                 return self._send_json({"missing": True}, code=404)
             return self._send_json(rec)
+        if parsed.path == "/api/lasttrain":
+            q = urllib.parse.parse_qs(parsed.query)
+            vals = [_num(q.get(k, [""])[0], lo, hi) for k, lo, hi in
+                    (("flat", -90, 90), ("flon", -180, 180), ("tlat", -90, 90), ("tlon", -180, 180), ("tz", -840, 840))]
+            date = q.get("date", [""])[0]
+            if any(v is None for v in vals) or not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+                return self._send_json({"error": "flat, flon, tlat, tlon, tz and date required"}, code=400)
+            if not pubs_rate_ok(self._client_ip()):
+                return self._send_json({"error": "busy"}, code=429)
+            res = last_ride_home((vals[0], vals[1]), (vals[2], vals[3]), date, int(vals[4]))
+            if res is None:
+                return self._send_json({"error": "unavailable"}, code=503)
+            return self._send_json(res)
         if parsed.path == "/api/pubs":
             if not pubs_rate_ok(self._client_ip()):
                 return self._send_json({"results": [], "error": "busy"}, code=429)

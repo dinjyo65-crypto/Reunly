@@ -183,3 +183,18 @@ test("a home thousands of miles away is flagged as the wrong place", () => {
   const t = C.homeTrip({ lat: 51.45, lon: -2.59 }, { label: "Easton, Massachusetts, United States", lat: 42.02, lon: -71.13 }, "bus", "");
   assert.ok(t.wrongPlace && t.warn && /is that the right place/.test(t.text), t.text);
 });
+
+test("a real last train from the journey planner beats the estimate", () => {
+  const stop = { lat: 51.4545, lon: -2.5879, leave: 23 * 60 + 30 };
+  const bath = { label: "Bath, United Kingdom", lat: 51.3811, lon: -2.359 };
+  const ride = { rail: { leave: "23:16", depart: "23:30", station: "Bristol Temple Meads", line: "GWR" }, bus: null };
+  const t = C.homeTrip(stop, bath, "train", "", "2026-10-31", ride);
+  assert.ok(t.real && !t.auto && t.leave === "23:16" && t.early, JSON.stringify(t));
+  assert.ok(/last train 23:30 from Bristol Temple Meads \(GWR\): leave by 23:16/.test(t.text), t.text);
+  const picked = C.homeTrip(stop, bath, "train", "23:45", "2026-10-31", ride);
+  assert.ok(!picked.real && /23:45 train/.test(picked.text), "a time the guest picked wins");
+  const none = C.homeTrip(stop, bath, "train", "", "2026-10-31", { rail: null, bus: null });
+  assert.ok(none.noTrain && none.warn, none.text);
+  const nightBus = C.homeTrip(stop, bath, "bus", "", "2026-10-31", { rail: null, bus: { leave: "02:38", depart: "02:51", station: "The Centre", line: "74" } });
+  assert.ok(/night buses run late/.test(nightBus.text), nightBus.text);
+});

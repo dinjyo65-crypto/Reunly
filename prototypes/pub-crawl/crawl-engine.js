@@ -374,11 +374,14 @@
    * One person's way home from the last stop: distance, a rough time for the
    * way they said they're travelling, and plain advice. `home` is
    * { label, lat, lon } (where they're coming from); `transport` is walk /
-   * train / bus / taxi / lift / drive / unsure. A train traveller with no
-   * last train given gets an estimate from the distance (`auto: true`), and a
-   * warning when they'd have to leave before the night ends.
+   * train / bus / taxi / lift / drive / unsure. `ride` is the journey
+   * planner's answer for tonight ({ rail, bus } with leave / depart /
+   * station / line, from /api/lasttrain) when we have it. A train traveller
+   * gets, in order: the time they picked; the real last train (`real`); an
+   * estimate from the distance (`auto`). Warns when they'd have to leave
+   * before the night ends.
    */
-  function homeTrip(lastStop, home, transport, lastTrain, date) {
+  function homeTrip(lastStop, home, transport, lastTrain, date, ride) {
     if (!lastStop || !home || !Number.isFinite(home.lat) || !Number.isFinite(home.lon)) return null;
     const miles = milesBetween(lastStop, home);
     if (miles == null) return null;
@@ -405,16 +408,35 @@
     } else if (transport === "drive" || transport === "lift") {
       text = `~${mins(far ? 45 : 22)} min ${transport === "drive" ? "drive" : "by car"} to ${place}`;
     } else if (transport === "train") {
-      const auto = toMin(lastTrain) == null;
-      const train = auto ? estimateLastTrain(miles, date) : lastTrain;
-      const leave = leaveBy(train);
+      const manual = toMin(lastTrain) != null;
+      const real = !manual && ride && ride.rail ? ride.rail : null;
+      if (!manual && ride && !ride.rail) {
+        return { miles, far, warn: true, noTrain: true, lastTrain: null, auto: false, real: false, leave: null, early: false,
+          text: `${Math.round(miles)} mi to ${place} — no train home found tonight; plan another way` };
+      }
+      const auto = !manual && !real;
+      const train = manual ? lastTrain : real ? real.depart : estimateLastTrain(miles, date);
+      const leave = real ? real.leave : leaveBy(train);
       const early = lastStop.leave != null && toMin(leave) < lastStop.leave;
-      text = `${Math.round(miles)} mi to ${place} — leave by ${leave} for the ${auto ? `last train (about ${train}, estimated)` : `${train} train`}`;
+      text = real
+        ? `${Math.round(miles)} mi to ${place} — last train ${real.depart} from ${real.station}${real.line ? ` (${real.line})` : ""}: leave by ${leave}`
+        : `${Math.round(miles)} mi to ${place} — leave by ${leave} for the ${auto ? `last train (about ${train}, estimated)` : `${train} train`}`;
       if (early) { text += ` — before the night ends at ${toHHMM(lastStop.leave)}`; warn = true; }
-      return { miles, text, warn, far, lastTrain: train, auto, leave, early };
+      return { miles, text, warn, far, lastTrain: train, auto, real: !!real, station: real ? real.station : "", leave, early };
     } else if (transport === "bus") {
-      text = `${Math.round(miles)} mi to ${place} — check the night bus times`;
-      warn = far;
+      const bus = ride && ride.bus;
+      if (bus && toMin(bus.leave) >= 26 * 60) {
+        // Still a bus after 02:00: night buses run late.
+        text = `${Math.round(miles)} mi to ${place} — night buses run late (last one we found: ${bus.depart}, the ${bus.line || "bus"} from ${bus.station})`;
+      } else if (bus) {
+        const early = lastStop.leave != null && toMin(bus.leave) < lastStop.leave;
+        text = `${Math.round(miles)} mi to ${place} — last bus ${bus.depart} from ${bus.station}${bus.line ? ` (${bus.line})` : ""}: leave by ${bus.leave}`;
+        if (early) { text += ` — before the night ends at ${toHHMM(lastStop.leave)}`; warn = true; }
+        return { miles, text, warn, far, leave: bus.leave, early, real: true };
+      } else {
+        text = `${Math.round(miles)} mi to ${place} — ${ride ? "no bus home found tonight; plan another way" : "check the night bus times"}`;
+        warn = far || !!ride;
+      }
     } else {
       text = `${Math.round(miles)} mi to ${place} — ${far ? "plan how you're getting back" : "sort a way home"}`;
       warn = far;
