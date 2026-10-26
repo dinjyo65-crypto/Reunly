@@ -60,10 +60,10 @@
   const rid = () =>
     Array.from(crypto.getRandomValues(new Uint8Array(9)), (b) => "abcdefghijkmnpqrstuvwxyz23456789"[b % 32]).join("");
 
-  async function api(path, body) {
+  async function api(path, body, headers) {
     const res = await fetch(path, body
       ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
-      : undefined);
+      : { headers: headers || {} });
     let data = null;
     try {
       data = await res.json();
@@ -215,10 +215,11 @@
     const sync = () => {
       const on = transport.value === "train";
       train.disabled = !on;
+      if (train.parentElement) train.parentElement.hidden = !on;
       if (!on) train.value = "";
       const t = on ? trip() : null;
       hint.textContent = !on ? ""
-        : !t ? "Add where you're coming from and we'll estimate your last train."
+        : !t ? "Your last train is estimated once we know where you're coming from and the route has stops."
         : t.auto ? `Last train estimated at about ${t.lastTrain} from the distance — pick the real time if you know it.`
         : "";
       hint.hidden = !hint.textContent;
@@ -375,7 +376,7 @@
     who.append(
       el("div", { class: "row" }, [
         el("div", {}, [el("label", { for: "whoSize", text: "Roughly how many" }),
-          sel("whoSize", [2, 4, 6, 8, 10, 12, 15, 20, 25, 30, 40].map((n) => [n, `${n} people`]), draft.who.size, (v) => { draft.who.size = Number(v); })]),
+          sel("whoSize", [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 20, 25, 30, 40].map((n) => [n, `${n} people`]), draft.who.size, (v) => { draft.who.size = Number(v); })]),
         el("div", {}, [el("label", { for: "whoStops", text: "How many stops" }),
           sel("whoStops", [2, 3, 4, 5, 6, 7, 8].map((n) => [n, `${n} stops`]), draft.target, (v) => { draft.target = Number(v); drawRoute(); })]),
       ]),
@@ -544,7 +545,7 @@
             el("div", { class: "dot" }),
             el("div", { class: "grow" }, [
               el("div", { class: "name", text: `${i + 1}. ${s.name}` }),
-              el("div", { class: "note", text: i ? `🚶 ${walk} min from ${sched[i - 1].name}` : "Start here" }),
+              el("div", { class: walk > 25 ? "warn" : "note", text: i ? `🚶 ${walk} min from ${sched[i - 1].name}${walk > 25 ? " — a long walk; is this the right place?" : ""}` : "Start here" }),
               s.why && s.why.length ? el("div", { class: "why", text: `Why: ${s.why.join(" · ")}` }) : null,
               el("div", { class: note.bad ? "warn" : "note", text: note.text }),
             ]),
@@ -642,7 +643,7 @@
   async function refresh() {
     let res;
     try {
-      res = await api(`/api/live?id=${encodeURIComponent(ctx.id)}`);
+      res = await api(`/api/live?id=${encodeURIComponent(ctx.id)}`, null, ctx.key ? { "X-Host-Key": ctx.key } : null);
     } catch (e) {
       // Bad signal in a pub is normal: keep showing the last known state,
       // say how old it is, and keep trying.
@@ -953,6 +954,7 @@
     return row;
   }
 
+  const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   function peopleCard(rec, sched, isHost) {
     const card = el("div", { class: "card", id: "peopleCard" });
     const people = rec.people || [];
@@ -973,9 +975,11 @@
       const planning = rec.status.phase === "planning";
       const where = !planning || p.status === "out" ? "" : j ? ` · joins at ${sched[j.stopIndex].name}` : " · misses the route";
       const window = p.status === "out" ? "" : ` (${p.from || "?"}–${p.until || "late"})`;
-      const eta = p.status === "late" && p.eta ? ` (~${p.eta} min)` : "";
+      const eta = p.status === "late" && p.eta ? ` (~${p.eta} min${p.ts ? `, at ${clock(p.ts)}` : ""})` : "";
+      const stale = rec.status.phase === "done" && ["coming", "onway", "late"].includes(p.status);
       const shown = ["late", "home", "safe", "here", "onway"].includes(p.status) ? "" : window;
-      chips.appendChild(el("span", { class: `chip ${p.status}`, text: `${p.name}: ${label[p.status] || p.status}${eta}${shown}${isHost ? where : ""}` }));
+      chips.appendChild(el("span", { class: `chip ${stale ? "late" : p.status}`,
+        text: stale ? `${p.name}: no update since "${label[p.status]}"` : `${p.name}: ${label[p.status] || p.status}${eta}${shown}${isHost ? where : ""}` }));
     });
     card.appendChild(chips);
 
@@ -996,6 +1000,21 @@
       card.append(el("label", { text: "Head count at each stop" }), bars);
       const best = C.bestStart(rec.stops, people, rec.plannedStart, rec.dwell);
       const current = rec.finalStart || rec.plannedStart;
+      if (best && best.start !== current) {
+        const moved = C.scheduleStops(rec.stops, best.start, rec.dwell);
+        const end = moved[moved.length - 1];
+        const ways = [];
+        if (rec.organizerHome) ways.push([rec.organizer || "You", rec.organizerHome, rec.organizerTransport, rec.organizerLastTrain]);
+        going.forEach((pp) => ways.push([pp.name, pp.home, pp.transport, pp.lastTrain]));
+        const missed = ways.filter(([, h, t, lt]) => {
+          const trip = C.homeTrip(end, h, t, lt, rec.date);
+          const before = C.homeTrip(sched[sched.length - 1], h, t, lt, rec.date);
+          return trip && trip.early && !(before && before.early);
+        }).map(([n]) => n);
+        card.appendChild(el("div", { class: missed.length ? "warn" : "note", id: "bestImpact",
+          text: `Starting at ${best.start} ends the night at ${end.leaveAt}` +
+            (missed.length ? ` — ${missed.join(", ")} would have to leave before the end for their last train.` : ".") }));
+      }
       if (best) {
         const nowFirst = counts[0];
         card.appendChild(
@@ -1192,7 +1211,7 @@
     if (me.status === "safe") line = "Home safe ✓ — thanks for letting everyone know.";
     card.appendChild(el("h2", { text: `Hi ${me.name}` }));
     card.appendChild(el("div", { class: "muted", text: line }));
-    const set = (status, msg, extra) => savePerson({ ...me, status, ...(extra || {}) }).then((ok) => ok && toast(msg));
+    const set = (status, msg, extra) => savePerson({ ...me, status, eta: 0, ...(extra || {}) }).then((ok) => ok && toast(msg));
 
     // The night card: everything a guest needs in one place, on the night.
     const going = me.status !== "out";
@@ -1207,10 +1226,20 @@
           st.state === "at" && st.spot ? el("div", { class: "spot", text: `Find us: ${st.spot}` }) : null,
         ].forEach((n) => n && info.appendChild(n));
       }
-      const trip = C.homeTrip(sched[sched.length - 1], me.home, me.transport, me.lastTrain, rec.date);
-      const leave = C.leaveBy(me.lastTrain);
+      // Once the night's over, "before the night ends" no longer applies.
+      const last = st.phase === "done" ? { ...sched[sched.length - 1], leave: null } : sched[sched.length - 1];
+      const trip = me.status === "safe" ? null : C.homeTrip(last, me.home, me.transport, me.lastTrain, rec.date);
+      const leave = me.status === "safe" ? null : C.leaveBy(me.lastTrain);
       if (trip) info.appendChild(el("div", { class: trip.warn ? "warn" : "note", text: `🏠 ${trip.text}` }));
       else if (leave) info.appendChild(el("div", { class: "note", text: `🚆 Leave by ${leave} for your ${me.lastTrain} train` }));
+      // They said when they have to go: which stop that means.
+      const until = C.toMin(me.until);
+      if (st.phase === "live" && until != null && me.status !== "home") {
+        const lastMine = sched.filter((x) => x.arrive < until).pop();
+        if (lastMine && lastMine !== sched[sched.length - 1]) {
+          info.appendChild(el("div", { class: "note", id: "untilNote", text: `⏱ You said until ${me.until} — that's about the end of ${lastMine.name}.` }));
+        }
+      }
       if (rec.organizerPhone) {
         info.appendChild(el("a", { class: "btn ghost sm", href: telHref(rec.organizerPhone), text: `📞 Call ${rec.organizer || "the organiser"}` }));
       }
@@ -1256,7 +1285,13 @@
       ]));
     } else if (going && st.phase !== "done" && !withGroup && !leaving) {
       card.appendChild(el("div", { class: "btns" }, [
-        el("button", { class: "btn ghost sm", id: "meCant", text: "Can't make it after all", onClick: () => set("out", "Thanks for letting them know") }),
+        el("button", { class: "btn ghost sm", id: "meCant", text: "Can't make it after all", onClick: (e) => {
+          const b = e.currentTarget;
+          if (b.dataset.armed) return set("out", "Thanks for letting them know");
+          b.dataset.armed = "1";
+          b.textContent = "Tap again to confirm you can't make it";
+          setTimeout(() => { delete b.dataset.armed; b.textContent = "Can't make it after all"; }, 4000);
+        } }),
       ]));
     }
     return card;

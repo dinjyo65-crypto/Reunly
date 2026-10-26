@@ -920,21 +920,35 @@ _live_creates = {}
 LOOPBACK = {"127.0.0.1", "::1"}
 
 
-def live_public(entry):
-    """What anyone with the link may see — never the host key or guest tokens."""
+# Where people live and how they get home is for the organiser (duty of care)
+# and for each guest's own phone — not for everyone holding the guest link.
+PRIVATE_PERSON = ("home", "transport", "lastTrain")
+PRIVATE_RECORD = ("organizerHome", "organizerTransport", "organizerLastTrain")
+
+
+def live_public(entry, host=False):
+    """What anyone with the link may see — never the host key or guest tokens.
+    Only the host (holding the key) also gets everyone's way-home details."""
     out = dict(entry["rec"])
-    out["people"] = list(entry["people"].values())
+    people = list(entry["people"].values())
+    if not host:
+        people = [{k: v for k, v in pp.items() if k not in PRIVATE_PERSON} for pp in people]
+        for k in PRIVATE_RECORD:
+            out.pop(k, None)
+    out["people"] = people
     out["rev"] = entry["rev"]
     out["serverTime"] = time.time() * 1000
     return out
 
 
-def live_get(eid):
+def live_get(eid, key=""):
+    import hmac
+    host = bool(key) and hmac.compare_digest(str(key), host_key_for(eid))
     with _live_lock:
         entry = _live.get(eid)
         if entry:
             entry["touched"] = time.time()  # evict by least recently polled
-        return live_public(entry) if entry else None
+        return live_public(entry, host) if entry else None
 
 
 def live_create(data, ip=""):
@@ -952,7 +966,7 @@ def live_create(data, ip=""):
         _live_prune()
         eid = secrets.token_urlsafe(9)
         _live[eid] = {"rec": rec, "people": {}, "tokens": {}, "rev": 1, "touched": now}
-        return eid, host_key_for(eid), live_public(_live[eid])
+        return eid, host_key_for(eid), live_public(_live[eid], True)
 
 
 def live_update(eid, key, data, people=None, base_rev=None):
@@ -975,11 +989,11 @@ def live_update(eid, key, data, people=None, base_rev=None):
         elif base_rev is not None and int(base_rev) != entry["rev"]:
             # Two co-hosts tapping "Moving on" at once used to skip a stop:
             # each sent a whole record built on the same old state.
-            raise LiveConflict(live_public(entry))
+            raise LiveConflict(live_public(entry, True))
         entry["rec"] = rec
         entry["rev"] += 1
         entry["touched"] = time.time()
-        return live_public(entry)
+        return live_public(entry, True)
 
 
 # late = running late (with eta minutes); home = heading home; safe = home safe.
@@ -1308,7 +1322,8 @@ class Handler(SimpleHTTPRequestHandler):
             )
         if parsed.path == "/api/live":
             eid = urllib.parse.parse_qs(parsed.query).get("id", [""])[0]
-            rec = live_get(eid) if _LIVE_ID.match(eid) else None
+            key = _s(self.headers.get("X-Host-Key", ""), 64)
+            rec = live_get(eid, key) if _LIVE_ID.match(eid) else None
             if rec is None:
                 return self._send_json({"missing": True}, code=404)
             return self._send_json(rec)
