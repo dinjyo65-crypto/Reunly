@@ -761,6 +761,20 @@ def _num(v, lo, hi):
     return x if math.isfinite(x) and lo <= x <= hi else None
 
 
+_PHONE = re.compile(r"^\+?[0-9 ()-]{5,20}$")
+BOOKING_STATUSES = ("none", "called", "booked", "walkin")
+
+
+def _phone(v):
+    v = _s(v, 24).strip()
+    return v if _PHONE.match(v) else ""
+
+
+def _web(v):
+    v = _s(v, 200).strip()
+    return v if re.match(r"^https?://[^\s<>\"']+$", v) else ""
+
+
 def sanitize_live(data):
     """Keep only the fields the tracker uses, each bounded. Raises on junk."""
     if not isinstance(data, dict):
@@ -772,10 +786,16 @@ def sanitize_live(data):
         lat, lon = _num(s.get("lat"), -90, 90), _num(s.get("lon"), -180, 180)
         if lat is None or lon is None or not _s(s.get("name"), 80).strip():
             continue
+        bk = s.get("booking") if isinstance(s.get("booking"), dict) else {}
         stops.append({
             "id": _s(s.get("id"), 24), "name": _s(s.get("name"), 80),
             "lat": lat, "lon": lon, "hours": _s(s.get("hours"), 160),
             "kind": _s(s.get("kind"), 20), "address": _s(s.get("address"), 120),
+            "phone": _phone(s.get("phone")), "website": _web(s.get("website")),
+            "booking": {
+                "status": bk.get("status") if bk.get("status") in BOOKING_STATUSES else "none",
+                "ref": _s(bk.get("ref"), 40),
+            },
         })
     st = data.get("status") if isinstance(data.get("status"), dict) else {}
     phase = st.get("phase") if st.get("phase") in ("planning", "live", "done") else "planning"
@@ -795,8 +815,14 @@ def sanitize_live(data):
         "finalStart": _time_or_blank(data.get("finalStart")),
         "dwell": int(_num(data.get("dwell"), 15, 180) or 50),
         "stops": stops,
+        # Optional, organiser-supplied: shown to guests as a call button.
+        "organizerPhone": _phone(data.get("organizerPhone")),
+        # The area's last train / tube, for the "ends after the last train" check.
+        "lastTrain": _time_or_blank(data.get("lastTrain")),
         "status": {"phase": phase, "stop": int(stop_n) if stop_n is not None else -1,
-                   "state": state, "since": _num(st.get("since"), 0, 1e13)},
+                   "state": state, "since": _num(st.get("since"), 0, 1e13),
+                   # "Where to find us" at the current stop (e.g. "back room").
+                   "spot": _s(st.get("spot"), 80)},
         "log": log,
     }
 
@@ -928,6 +954,11 @@ def live_update(eid, key, data, people=None, base_rev=None):
         return live_public(entry)
 
 
+# late = running late (with eta minutes); home = heading home; safe = home safe.
+LIVE_PERSON_STATUSES = ("coming", "onway", "here", "out", "late", "home", "safe")
+LIVE_TRANSPORT = ("walk", "train", "bus", "taxi", "lift", "drive", "unsure")
+
+
 def _live_person(p):
     if not isinstance(p, dict):
         return None
@@ -935,9 +966,13 @@ def _live_person(p):
     name = "".join(ch for ch in _s(p.get("name"), 40) if ch.isprintable()).strip()
     if not _LIVE_ID.match(pid) or not name:
         return None
-    status = p.get("status") if p.get("status") in ("coming", "onway", "here", "out") else "coming"
+    status = p.get("status") if p.get("status") in LIVE_PERSON_STATUSES else "coming"
+    transport = p.get("transport") if p.get("transport") in LIVE_TRANSPORT else ""
+    eta = _num(p.get("eta"), 0, 180)
     return {"id": pid, "name": name, "from": _time_or_blank(p.get("from")),
             "until": _time_or_blank(p.get("until")), "status": status,
+            "transport": transport, "lastTrain": _time_or_blank(p.get("lastTrain")),
+            "eta": int(eta) if eta is not None else 0,
             "ts": time.time() * 1000}
 
 
@@ -1035,6 +1070,11 @@ def pubs_near(lat, lon, radius_m=700):
             # What smart suggest scores on (only these, each bounded).
             "tags": {k: _s(v, 40) for k, v in (item.get("extratags") or {}).items()
                      if k in PUB_TAGS},
+            # For booking: call or check the venue. Validated, never raw.
+            "phone": _phone((item.get("extratags") or {}).get("phone")
+                            or (item.get("extratags") or {}).get("contact:phone")),
+            "website": _web((item.get("extratags") or {}).get("website")
+                            or (item.get("extratags") or {}).get("contact:website")),
         })
     out.sort(key=lambda p: p["dist"])
     with _pubs_lock:

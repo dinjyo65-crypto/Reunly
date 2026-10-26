@@ -142,3 +142,31 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
   margin: 12px 0; padding: 10px 14px; border-radius: var(--radius-sm);
   border: 1px solid var(--warn); color: var(--warn); font-size: 0.85rem;
 }
+
+/* ---- Getting home, booking, guest night card ---- */
+.spot { margin-top: 6px; font-weight: 700; color: var(--gold); }
+.nightcard {
+  margin-top: 12px; padding: 12px; border-radius: var(--radius-sm);
+  background: var(--surface-2); border: 1px solid var(--border-strong);
+  display: grid; gap: 4px;
+}
+.nightcard .name { font-weight: 800; }
+.nightcard .btn { margin-top: 6px; justify-self: start; }
+.guestbar {
+  position: sticky; bottom: 0; z-index: 5; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  margin: 12px -16px -16px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  background: rgba(8, 11, 22, 0.94); border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.guestbar .late { display: flex; gap: 6px; grid-column: 1 / -1; }
+.guestbar .late select { width: auto; flex: none; }
+.guestbar .late .btn { flex: 1; }
+.booking { margin-top: 8px; display: grid; gap: 6px; }
+.booking.flagged select { border-color: var(--warn); }
+.booking-links { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.booking-links .btn { width: auto; }
+.safety { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); display: grid; gap: 3px; }
+.safety .name { font-weight: 700; }
+.chip.late { border-color: var(--warn); }
+.chip.home { border-color: var(--accent); }
+.chip.safe { border-color: var(--good); }

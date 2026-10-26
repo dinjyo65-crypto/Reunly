@@ -119,3 +119,11 @@ Organiser + named **co-hosts** (handing over when the organiser leaves early). T
 - *Developer*: sticky guest action bar on the night; people list with status dots instead of long chips; drag-to-reorder + undo remove; total walking time; co-host recovery on a new device; accessible suggestion list (listbox + arrow keys); SSE/websocket instead of polling (later).
 - *Security*: host "remove person"; reset/revoke co-host link; host "delete event".
 - *Pro / Teams ideas*: venue booking pack (enquiry messages, status tracker, pre-orders); Teams account (recurring socials, budget/cost codes, expenses export, duty-of-care checklist); smart live ops (auto-reschedule on delay, last-train alerts, nudges).
+
+## Round 3 (2026-10-26) — getting home safely, booking each stop, guest night card
+- **Getting home safely**: guests say how they're getting home (walk / train / night bus / taxi / lift / driving) and their last train when they reply; the night card says "🚆 Leave by 23:00 for your 23:15 train". The organiser can set the area's last train — the planner and route warn when the plan ends after it. On the night guests tap **Heading home** then **I'm home safe**; the organiser's "Getting home" panel lists still out / heading home / home safe ✓, and at the end "waiting to hear from N".
+- **Booking each stop** (organiser / co-host): per-stop status (Not contacted / Called — waiting / Booked ✓ + name/ref / Walk-in is fine), tap-to-call and website from OpenStreetMap where listed; groups of 12+ get a "book an area" warning on stops not booked or walk-in.
+- **Guest night card**: where the group is (or is heading) with address, the organiser's "where to find us" note (set with each check-in, editable), directions, leave-by time, and "📞 Call <organiser>" if they added a number; a sticky bar with On my way / I'm here / Running late (~15–60 min, shown to the organiser) / Heading home.
+- Server: validated phone numbers and http(s) websites only; booking status/ref, spot note, organiser phone, last train, guest transport / last train / eta, statuses late / home / safe — all bounded.
+- Fixed in passing: a missing "find us" note printed the word "null" (Node.append(null)); the end-to-end test now fails on any stray "null"/"undefined" text (proven against the bug).
+- Tests: `npm test` 121 (14 crawl); `.qa/crawl.js` 31/31; main app 54/54.

@@ -318,9 +318,54 @@
     return chosen;
   }
 
+  // ---- Getting home ------------------------------------------------------
+  const LEAVE_BUFFER = 15; // minutes to get from the pub to the platform
+
+  /** "Leave by" for someone's last train, or null if they didn't give one. */
+  function leaveBy(lastTrain, buffer = LEAVE_BUFFER) {
+    const t = toMin(lastTrain);
+    return t == null ? null : toHHMM(t - buffer);
+  }
+
+  /**
+   * Does the plan run past the area's last train? Returns minutes over (> 0),
+   * or 0 if it ends in time, or null when no last train was given.
+   */
+  function pastLastTrain(schedule, lastTrain) {
+    const t = toMin(lastTrain);
+    if (t == null || !schedule.length) return null;
+    return Math.max(0, schedule[schedule.length - 1].leave - (t - LEAVE_BUFFER));
+  }
+
+  /**
+   * Who still needs looking after at the end of the night. Everyone who came
+   * (here / heading home) and hasn't tapped "Home safe" is still out.
+   */
+  function safetySummary(people) {
+    const came = people.filter((p) => ["here", "home", "safe", "late", "onway"].includes(p.status));
+    return {
+      out: came.filter((p) => p.status === "here" || p.status === "late" || p.status === "onway"),
+      headingHome: came.filter((p) => p.status === "home"),
+      safe: came.filter((p) => p.status === "safe"),
+    };
+  }
+
+  // ---- Booking -----------------------------------------------------------
+  const BOOK_AHEAD_AT = 12; // most pubs can't seat 12+ walk-ins together
+
+  /** Stops a group this size should book or call about, not yet sorted. */
+  function bookingNeeded(stops, groupSize) {
+    if ((groupSize || 0) < BOOK_AHEAD_AT) return [];
+    return stops
+      .map((s, i) => ({ i, status: (s.booking && s.booking.status) || "none" }))
+      .filter((x) => x.status === "none" || x.status === "called")
+      .map((x) => x.i);
+  }
+
   const api = {
     toMin, toHHMM, milesBetween, walkMinutes, scheduleStops, joinsAt,
     headcounts, bestStart, isOpenAt, closedStops, sameStop, scoreVenue, suggestRoute,
+    leaveBy, pastLastTrain, safetySummary, bookingNeeded, BOOK_AHEAD_AT,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.CrawlEngine = api;

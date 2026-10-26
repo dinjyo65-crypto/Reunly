@@ -109,3 +109,34 @@ test("a lively younger group can get the bar", () => {
   const s = C.scoreVenue(venues[1], who);
   assert.ok(s.score > 1.5 && s.reasons.includes("Shows sport"));
 });
+
+// ---- Getting home, booking ----
+test("leave-by is 15 minutes before the last train, past midnight too", () => {
+  assert.strictEqual(C.leaveBy("23:45"), "23:30");
+  assert.strictEqual(C.leaveBy("00:10"), "23:55");
+  assert.strictEqual(C.leaveBy(""), null);
+});
+
+test("a plan running past the area's last train is flagged", () => {
+  const s = C.scheduleStops(stops, "19:00", 60); // ends after 23:00
+  assert.ok(C.pastLastTrain(s, "23:00") > 0);
+  assert.strictEqual(C.pastLastTrain(s, "01:30"), 0);
+  assert.strictEqual(C.pastLastTrain(s, ""), null);
+});
+
+test("the end-of-night list shows who isn't home safe yet", () => {
+  const people = [
+    { name: "A", status: "here" }, { name: "B", status: "home" }, { name: "C", status: "safe" },
+    { name: "D", status: "out" }, { name: "E", status: "coming" },
+  ];
+  const s = C.safetySummary(people);
+  assert.deepStrictEqual(s.out.map((p) => p.name), ["A"]);
+  assert.deepStrictEqual(s.headingHome.map((p) => p.name), ["B"]);
+  assert.deepStrictEqual(s.safe.map((p) => p.name), ["C"]);
+});
+
+test("a group of 12+ is told to book stops that aren't booked or walk-in", () => {
+  const route = [{ booking: { status: "booked" } }, { booking: { status: "called" } }, {}, { booking: { status: "walkin" } }];
+  assert.deepStrictEqual(C.bookingNeeded(route, 14), [1, 2]);
+  assert.deepStrictEqual(C.bookingNeeded(route, 8), [], "small groups can walk in");
+});
