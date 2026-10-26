@@ -176,3 +176,12 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
    — white on white, unreadable. */
 :root { color-scheme: dark; }
 select option, select optgroup { background: #141a2e; color: #eef1f8; }
+
+/* Safety panel rows: who, then how to reach them */
+.saferow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--border); }
+.saferow span { flex: 1 1 100%; }
+@media (min-width: 640px) { .saferow span { flex: 1 1 auto; } }
+/* "Are you home safe?" from the organiser, on the guest's screen */
+.nudge { margin: 10px 0; padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--warn); display: grid; gap: 8px; }
+/* Organiser alerts: drop-outs and late-runners since you last looked */
+.alerts { margin: 12px 0; padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--warn); display: grid; gap: 6px; }

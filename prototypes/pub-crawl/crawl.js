@@ -233,6 +233,7 @@
   }
 
   const telHref = (phone) => `tel:${String(phone).replace(/[^0-9+]/g, "")}`;
+  const smsHref = (phone, body) => `sms:${String(phone).replace(/[^0-9+]/g, "")}?body=${encodeURIComponent(body)}`;
 
   /**
    * Copy text and say so on the button. The Clipboard API only exists on
@@ -782,7 +783,7 @@
     // The "where to find us" box belongs to one stop: carry a half-typed note
     // across a refresh only while the group is still at that same stop.
     const where = live && live.status ? `${live.status.phase}|${live.status.stop}|${live.status.state}` : "";
-    const keepIds = ["meName", "meFrom", "meUntil", "meTransport", "meLastTrain", "meHome"];
+    const keepIds = ["meName", "meFrom", "meUntil", "meTransport", "meLastTrain", "meHome", "mePhone"];
     if (where === lastWhere) keepIds.push("spotInput");
     lastWhere = where;
     keepIds.forEach((id) => {
@@ -810,6 +811,10 @@
       app.appendChild(el("div", { class: "offline", role: "status", text: `📶 Can't reach the server — showing what we knew at ${at}. Retrying…` }));
     }
     app.appendChild(statusBanner(live, sched));
+    if (isHost) {
+      const alerts = hostAlerts(live);
+      if (alerts) app.appendChild(alerts);
+    }
     const planning = live.status.phase === "planning";
     // Right after creating it, sharing the link is the organiser's only job.
     if (isHost && planning) app.appendChild(linksCard());
@@ -1068,6 +1073,44 @@
     return card;
   }
 
+  /**
+   * The organiser's alerts: someone who was coming has dropped out, or has
+   * started running late, since this phone last looked. Statuses seen are
+   * kept per event, so each change alerts once; alerts stay until "Got it".
+   */
+  let alertsShown = 0;
+  function hostAlerts(rec) {
+    const seenKey = `crawl:seen:${ctx.id}`;
+    const listKey = `crawl:alerts:${ctx.id}`;
+    const seen = store.get(seenKey);
+    const pending = store.get(listKey) || [];
+    const now = {};
+    (rec.people || []).forEach((p) => {
+      now[p.id] = p.status;
+      const was = seen && seen[p.id];
+      if (!was || was === p.status) return;
+      if (p.status === "out") pending.push({ id: p.id, kind: "out", at: p.ts || Date.now(), text: `${p.name} can't make it any more` });
+      if (p.status === "late") pending.push({ id: p.id, kind: "late", at: p.ts || Date.now(), text: `${p.name} is running late${p.eta ? ` (~${p.eta} min)` : ""}` });
+    });
+    store.set(seenKey, now);
+    store.set(listKey, pending);
+    if (pending.length > alertsShown) {
+      toast(pending[pending.length - 1].text);
+      // Phones only allow a buzz after the page has been tapped once.
+      if (navigator.vibrate && navigator.userActivation && navigator.userActivation.hasBeenActive) navigator.vibrate(200);
+    }
+    alertsShown = pending.length;
+    if (!pending.length) return null;
+    return el("div", { class: "alerts", id: "hostAlerts", role: "alert" }, [
+      ...pending.map((a) => el("div", { class: a.kind === "out" ? "warn" : "note", text: `${a.kind === "out" ? "⚠️" : "⏰"} ${a.text} · ${clock(a.at)}` })),
+      el("button", { class: "btn ghost sm", id: "alertsOk", text: "Got it", onClick: () => {
+        store.set(listKey, []);
+        alertsShown = 0;
+        renderEvent(true);
+      } }),
+    ]);
+  }
+
   // The "where to find us" box, read at the moment a check-in is tapped.
   const spotNow = () => ((document.getElementById("spotInput") || {}).value || "").trim();
   function hostControls(rec, sched) {
@@ -1137,41 +1180,84 @@
       ways.forEach(([who, t]) => box.appendChild(el("div", { class: t.warn ? "warn" : "note", text: `${who}: ${t.text}` })));
       card.appendChild(box);
     }
-    // Duty of care: who's still out, who's heading home, who's home safe.
+    // Duty of care: who's still out, who's heading home, who's home safe —
+    // the organiser included, with a way to reach anyone not home yet.
     if (st.phase !== "planning") {
       const s = C.safetySummary(rec.people || [], st.phase === "done");
+      const me = { name: `${rec.organizer || "You"} (you)` };
+      const orgSafe = rec.organizerStatus === "safe";
+      const safe = orgSafe ? [me, ...s.safe] : s.safe;
       const names = (list) => list.map((p) => p.name).join(", ") || "—";
-      card.appendChild(el("div", { class: "safety", id: "safetyPanel" }, [
+      const panel = el("div", { class: "safety", id: "safetyPanel" }, [
         el("div", { class: "name", text: st.phase === "done" ? "Getting everyone home" : "Getting home" }),
-        el("div", { class: "note", text: `${st.phase === "done" ? "Not home safe yet" : "Still out"}: ${names(s.out)}` }),
-        el("div", { class: "note", text: `Heading home: ${names(s.headingHome)}` }),
-        el("div", { class: "note", text: `Home safe ✓: ${names(s.safe)}` }),
-        st.phase === "done" && (s.out.length || s.headingHome.length)
-          ? el("div", { class: "warn", text: `Waiting to hear from ${s.out.length + s.headingHome.length} — guests tap "Home safe" on their link.` })
+      ]);
+      // The organiser's own status.
+      const setOrg = (v, msg) => hostUpdate((r) => { r.organizerStatus = v; }).then((ok) => ok && toast(msg));
+      panel.appendChild(el("div", { class: "saferow", id: "orgSafeRow" }, [
+        el("span", { text: `${me.name}: ${orgSafe ? "home safe ✓" : rec.organizerStatus === "home" ? "heading home" : "still out"}` }),
+        !orgSafe && rec.organizerStatus !== "home"
+          ? el("button", { class: "btn ghost sm", id: "orgHeadingHome", text: "🏠 I'm heading home", onClick: () => setOrg("home", "Get home safe") })
+          : null,
+        !orgSafe
+          ? el("button", { class: "btn ghost sm", id: "orgSafe", text: "✅ I'm home safe", onClick: () => setOrg("safe", "Guests can see you're home") })
           : null,
       ]));
+      const nudges = rec.nudges || {};
+      const row = (p, what) => {
+        const n = nudges[p.id];
+        const msg = `Hi ${p.name}, it's ${rec.organizer || "the organiser"} — did you get home OK? Tap "Home safe" on the link when you're in.`;
+        return el("div", { class: "saferow" }, [
+          el("span", { text: `${p.name}: ${what}` }),
+          p.phone ? el("a", { class: "btn ghost sm", href: telHref(p.phone), text: "📞 Call" }) : null,
+          p.phone ? el("a", { class: "btn ghost sm", href: smsHref(p.phone, msg), text: "💬 Text" }) : null,
+          el("button", {
+            class: "btn ghost sm", id: `nudge_${p.id}`,
+            text: n ? `🔔 Nudged ${clock(n)} — again` : "🔔 Nudge",
+            "aria-label": `Ask ${p.name} if they're home safe`,
+            onClick: () => hostUpdate((r) => { r.nudges = { ...(r.nudges || {}), [p.id]: Date.now() }; })
+              .then((ok) => ok && toast(`${p.name} will see "${rec.organizer || "The organiser"} is checking you got home OK"`)),
+          }),
+        ]);
+      };
+      const label = { here: "with the group", late: "running late", onway: "on the way", coming: "no update", home: "heading home" };
+      s.out.forEach((p) => panel.appendChild(row(p, st.phase === "done" ? `not home safe yet (${label[p.status]})` : label[p.status])));
+      s.headingHome.forEach((p) => panel.appendChild(row(p, "heading home")));
+      panel.appendChild(el("div", { class: "note", text: `Home safe ✓: ${names(safe)}` }));
+      const waiting = s.out.length + s.headingHome.length + (orgSafe ? 0 : 1);
+      if (st.phase === "done" && waiting) {
+        panel.appendChild(el("div", { class: "warn", text: `Waiting to hear from ${waiting}${orgSafe ? "" : " (you included)"} — guests tap "Home safe" on their link; Nudge asks them on their screen.` }));
+      }
+      if (!(rec.people || []).some((p) => p.phone)) {
+        panel.appendChild(el("div", { class: "muted", text: "Call / Text appear for guests who added a phone number when they replied." }));
+      }
+      card.appendChild(panel);
     }
     return card;
   }
 
   let pickedHome = null; // the guest's "coming from" pick, survives re-renders
+  let editing = false; // a guest changing their reply
   function guestPanel(rec, sched, me) {
     const card = el("div", { class: "card", id: "guestPanel" });
-    if (!me) {
-      card.appendChild(el("h2", { text: rec.organizer ? `${rec.organizer} invited you` : "You're invited" }));
-      card.appendChild(el("div", { class: "muted", text: "Say when you can make it — you can join the group at any stop." }));
-      const name = el("input", { id: "meName", placeholder: "Your first name", autocomplete: "given-name" });
+    if (!me || editing) {
+      // The same form for a first reply and for changing it later.
+      const was = editing && me ? me : null;
+      card.appendChild(el("h2", { text: was ? "Change your reply" : rec.organizer ? `${rec.organizer} invited you` : "You're invited" }));
+      card.appendChild(el("div", { class: "muted", text: was ? "Update anything that's changed — the organiser sees it within 15 seconds." : "Say when you can make it — you can join the group at any stop." }));
+      const name = el("input", { id: "meName", placeholder: "Your first name", autocomplete: "given-name", value: was ? was.name : "" });
       const from = el("select", { id: "meFrom" });
-      timeOptions(from, rec.finalStart || rec.plannedStart);
+      timeOptions(from, was && was.from ? was.from : rec.finalStart || rec.plannedStart);
       const until = el("select", { id: "meUntil" });
-      timeOptions(until, "", true);
+      timeOptions(until, was ? was.until : "", true);
       const transport = el("select", { id: "meTransport" });
-      TRANSPORT.forEach(([v, t]) => transport.appendChild(el("option", { value: v, text: t })));
+      TRANSPORT.forEach(([v, t]) => transport.appendChild(el("option", { value: v, text: t, selected: !!was && v === was.transport })));
       const myTrain = el("select", { id: "meLastTrain" });
-      trainOptions(myTrain, "", "Auto (estimated)");
+      trainOptions(myTrain, was ? was.lastTrain : "", "Auto (estimated)");
+      if (was && !pickedHome && was.home) pickedHome = was.home;
       const trainHint = el("div", { class: "note", id: "meTrainHint" });
       const homeWrap = el("div", { class: "ac" });
-      const myHome = el("input", { id: "meHome", placeholder: "Town or area — so we can check your way home", autocomplete: "off" });
+      const myHome = el("input", { id: "meHome", placeholder: "Town or area — so we can check your way home", autocomplete: "off",
+        value: pickedHome ? pickedHome.label : "" });
       homeWrap.appendChild(myHome);
       let syncTrain = () => {};
       attachSuggest(myHome, (pl) => { pickedHome = { label: pl.label, lat: pl.lat, lon: pl.lon }; syncTrain(); homeWrap.dispatchEvent(new Event("picked")); }, "area",
@@ -1192,8 +1278,10 @@
         ]),
         trainHint
       );
-      const stepFree = el("input", { type: "checkbox", id: "meStepFree" });
+      const stepFree = el("input", { type: "checkbox", id: "meStepFree", checked: !!(was && was.stepFree) });
       card.appendChild(el("div", { class: "checks" }, [el("label", { class: "check", for: "meStepFree" }, [stepFree, "I need step-free access"])]));
+      const phone = el("input", { id: "mePhone", type: "tel", autocomplete: "tel", placeholder: "Optional — only the organiser sees it", value: was && was.phone ? was.phone : "" });
+      card.append(el("label", { for: "mePhone", text: "Your phone (so the organiser can check you got home)" }), phone);
       const homeCheck = el("div", { class: "warn", id: "meHomeCheck", hidden: true });
       homeWrap.after(homeCheck);
       const checkHome = () => {
@@ -1204,25 +1292,45 @@
       homeWrap.addEventListener("picked", checkHome);
       syncTrain = wireTrain(transport, myTrain, trainHint,
         () => C.homeTrip(sched[sched.length - 1], pickedHome, transport.value, myTrain.value, rec.date));
+      const details = () => ({
+        name: name.value.trim(), from: from.value, until: until.value,
+        transport: transport.value, lastTrain: transport.value === "train" ? myTrain.value : "", home: pickedHome,
+        stepFree: stepFree.checked, phone: phone.value.trim(),
+      });
       const join = (status) => {
         if (!name.value.trim()) {
           toast("Add your name first");
           name.focus();
           return;
         }
-        savePerson({
-          id: rid(), token: rid() + rid() + rid(), name: name.value.trim(), from: from.value, until: until.value, status,
-          transport: transport.value, lastTrain: transport.value === "train" ? myTrain.value : "", home: pickedHome,
-          stepFree: stepFree.checked,
-        }).then((ok) => {
+        savePerson({ id: rid(), token: rid() + rid() + rid(), status, ...details() }).then((ok) => {
           if (ok) toast(status === "out" ? "Thanks — the organiser will see you can't make it" : "You're on the list 🍻");
         });
       };
+      const saveEdit = () => {
+        if (!name.value.trim()) {
+          toast("Add your name first");
+          name.focus();
+          return;
+        }
+        // Same id and token: it's still you, with your status kept.
+        savePerson({ ...was, ...details() }).then((ok) => {
+          if (!ok) return;
+          editing = false;
+          toast("Reply updated ✓");
+          renderEvent(true);
+        });
+      };
       card.appendChild(
-        el("div", { class: "btns" }, [
-          el("button", { class: "btn", id: "meIn", text: "I'm in", onClick: () => join("coming") }),
-          el("button", { class: "btn ghost", id: "meOut", text: "Can't make it", onClick: () => join("out") }),
-        ])
+        el("div", { class: "btns" }, was
+          ? [
+              el("button", { class: "btn", id: "meSaveEdit", text: "Save changes", onClick: saveEdit }),
+              el("button", { class: "btn ghost", id: "meCancelEdit", text: "Cancel", onClick: () => { editing = false; pickedHome = null; renderEvent(true); } }),
+            ]
+          : [
+              el("button", { class: "btn", id: "meIn", text: "I'm in", onClick: () => join("coming") }),
+              el("button", { class: "btn ghost", id: "meOut", text: "Can't make it", onClick: () => join("out") }),
+            ])
       );
       card.appendChild(
         el("div", { class: "muted", style: "margin-top:10px",
@@ -1257,6 +1365,18 @@
           (unsure.length ? ` Not confirmed step-free: ${unsure.join(", ")}.` : " Every stop is listed as step-free.") }));
     }
     const set = (status, msg, extra) => savePerson({ ...me, status, eta: 0, ...(extra || {}) }).then((ok) => ok && toast(msg));
+    // Nudged since my last update? Ask plainly, with the one button that answers it.
+    const mine = (rec.people || []).find((p) => p.id === me.id);
+    const nudgedAt = (rec.nudges || {})[me.id];
+    const nudged = nudgedAt && me.status !== "safe" && me.status !== "out" && (!mine || !mine.ts || nudgedAt > mine.ts);
+    if (nudged) {
+      card.appendChild(el("div", { class: "nudge", id: "meNudge", role: "alert" }, [
+        el("div", { class: "name", text: `🔔 ${rec.organizer || "The organiser"} is checking you got home OK` }),
+        el("div", { class: "note", text: `Asked at ${clock(nudgedAt)}.` }),
+        el("button", { class: "btn", id: "meNudgeSafe", text: "✅ I'm home safe", onClick: () => set("safe", "Thanks — the organiser can see you're home") }),
+        rec.organizerPhone ? el("a", { class: "btn ghost sm", href: telHref(rec.organizerPhone), text: `📞 Call ${rec.organizer || "the organiser"}` }) : null,
+      ]));
+    }
 
     // The night card: everything a guest needs in one place, on the night.
     const going = me.status !== "out";
@@ -1291,6 +1411,9 @@
       if (rec.organizerPhone) {
         info.appendChild(el("a", { class: "btn ghost sm", href: telHref(rec.organizerPhone), text: `📞 Call ${rec.organizer || "the organiser"}` }));
       }
+      if (st.phase === "done" && rec.organizerStatus === "safe") {
+        info.appendChild(el("div", { class: "note", id: "orgIsSafe", text: `${rec.organizer || "The organiser"} is home safe ✓` }));
+      }
       card.appendChild(info);
     } else if (going) {
       const trip = C.homeTrip(sched[sched.length - 1], me.home, me.transport, me.lastTrain, rec.date);
@@ -1324,6 +1447,11 @@
     if (going && (leaving || st.phase === "done")) {
       card.appendChild(el("div", { class: "btns" }, [
         el("button", { class: "btn", id: "meSafe", text: me.status === "safe" ? "Home safe ✓" : "✅ I'm home safe", disabled: me.status === "safe", onClick: () => set("safe", "Thanks — the organiser can see you're home") }),
+      ]));
+    }
+    if (st.phase !== "done" && me.status !== "safe") {
+      card.appendChild(el("div", { class: "btns" }, [
+        el("button", { class: "btn ghost sm", id: "meEdit", text: "✏️ Change my reply", onClick: () => { editing = true; pickedHome = me.home || null; renderEvent(true); } }),
       ]));
     }
     // Pulling out only makes sense before you've joined and before the end.

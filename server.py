@@ -876,6 +876,12 @@ def sanitize_live(data):
             log.append({"stop": int(e["stop"]), "arrived": _num(e.get("arrived"), 0, 1e13),
                         "left": _num(e.get("left"), 0, 1e13)})
     date = _s(data.get("date"), 10)
+    # "Are you home safe?" nudges from the organiser: person id -> when.
+    nudges = {}
+    raw = data.get("nudges") if isinstance(data.get("nudges"), dict) else {}
+    for pid, ts in list(raw.items())[:LIVE_MAX_PEOPLE]:
+        if _LIVE_ID.match(str(pid)) and _num(ts, 0, 1e13) is not None:
+            nudges[str(pid)] = _num(ts, 0, 1e13)
     return {
         "name": _s(data.get("name"), 80) or "Evening out",
         "organizer": _s(data.get("organizer"), 40),
@@ -890,6 +896,9 @@ def sanitize_live(data):
         "organizerHome": _place(data.get("organizerHome")),
         "organizerTransport": data.get("organizerTransport") if data.get("organizerTransport") in LIVE_TRANSPORT else "",
         "organizerLastTrain": _time_or_blank(data.get("organizerLastTrain")),
+        # The organiser gets home too: "" / "home" (heading home) / "safe".
+        "organizerStatus": data.get("organizerStatus") if data.get("organizerStatus") in ("home", "safe") else "",
+        "nudges": nudges,
         # The area's last train / tube, for the "ends after the last train" check.
         "lastTrain": _time_or_blank(data.get("lastTrain")),
         "status": {"phase": phase, "stop": int(stop_n) if stop_n is not None else -1,
@@ -971,7 +980,7 @@ LOOPBACK = {"127.0.0.1", "::1"}
 
 # Where people live and how they get home is for the organiser (duty of care)
 # and for each guest's own phone — not for everyone holding the guest link.
-PRIVATE_PERSON = ("home", "transport", "lastTrain", "stepFree")
+PRIVATE_PERSON = ("home", "transport", "lastTrain", "stepFree", "phone")
 PRIVATE_RECORD = ("organizerHome", "organizerTransport", "organizerLastTrain")
 
 
@@ -1068,6 +1077,8 @@ def _live_person(p):
             # Which stop they said "I'm here" / "on my way" at (-1 = not given).
             "at": int(_num(p.get("at"), -1, LIVE_MAX_STOPS) if _num(p.get("at"), -1, LIVE_MAX_STOPS) is not None else -1),
             "stepFree": p.get("stepFree") is True,
+            # Optional, so the organiser can call them if they don't check in.
+            "phone": _phone(p.get("phone")),
             "ts": time.time() * 1000}
 
 
