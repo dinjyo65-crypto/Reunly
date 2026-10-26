@@ -1,6 +1,6 @@
 # PROGRESS — Reunly
 
-_Last updated: 2026-10-22 — v8 live on Render. **v0.9 prototype working** (pub crawl / work social live tracker) on branch `v0.9-dev`, not pushed — see `PLAN-v0.9.md`._
+_Last updated: 2026-10-26 — **v8 friends test starting** (live https://reunly.onrender.com, re-verified today). Kit in `testing/`. v0.9 pub-crawl prototype on `v0.9-dev` (local)._
 
 ## Goal
 Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla HTML/CSS/JS + a stdlib-only Python server, deployable as a Render Blueprint. Full target spec is in `REBUILD_PROMPT.md`. Done = a real group can plan, vote, lock, cost, settle up and remember a trip end to end on separate devices, with every estimate honestly labelled. v8 goal: a working app that a security expert, travel expert, travel planner, app developer and app user all broadly agree on, with Reunly Pro (monetisation) in mind.
@@ -14,15 +14,15 @@ Mobile-first group-planning PWA ("decide when, where and how to meet"): vanilla 
 - Tests: `npm test` 106/106; `.qa/walk2.js` 54/54; `.qa/city.js` 9/9; `.qa/hero.js` 8/8; `.qa/v8fixes.js` 6/6 (all git-ignored except engine tests)
 
 ## In progress
-- Real-device testing with friends (steps below). Render deploys from `v0.7-dev` (GitHub default branch) — keep it level with `master`, or switch Render to `master`.
+- **v8 friends test (from 2026-10-26)**: plan + paste-ready messages in `testing/FRIENDS-TEST-PLAN.md` and `testing/message-to-friends.txt` (5–8 friends, mixed iPhone/Android/abroad, one week: invite → replies → vote → lock → costs). Live site re-verified 2026-10-26: v8 footer, hero video plays, city search, fares, `.git` 404; cold start ~23 s (suggest an uptime pinger for the week). iPhone testers asked to stay in Safari (home-screen storage risk). Render deploys from `v0.7-dev` — keep it level with `master`.
 - **v0.9** (`PLAN-v0.9.md`, branch `v0.9-dev`, local only): decisions made (organiser + co-hosts check in; pubs + any place; taps only, no GPS; standalone prototype). **Prototype built and passing**: `prototypes/pub-crawl/` + `/api/live*` + `/api/pubs` (Nominatim; Overpass proved unreliable). Tests: `npm test` 113 (incl. 7 crawl), `.qa/crawl.js` 18/18; main app suites unchanged (54/9/8/9). Open at http://localhost:4175/prototypes/pub-crawl/ . Next: try on phones, 5-expert review, then integrate as an "evening" mode.
 
 - Round 2 (all 5 re-verified): travel SHIP, security SHIP, developer/planner/user SHIP after one fix each — fixed: keep-alive leaking the media Cache-Control onto app.js/API; notify token not saved until a later edit (every guest reply lost after the organiser reloaded); guest never prompted to send after Done (send bar now above the tabs + send window opens on Done); bell refreshes when opened; XFF last hop + 5 s cap on the Nominatim queue; passport/visa before a 150-day peak booking; Malaysia off the slow-roads list; Dubai Christmas ×1.6; server fare mode always "flight". Tests: engine 106, walk2 54, city 9, hero 8, v8fixes 9.
 
 ## Next up
-1. Real-device test — start with the iPhone home-screen vs Safari return-link check
-3. Real-device test (steps below) — **first check on iPhone that a home-screen-installed app and Safari share data when opening return links** (planner's risk #9)
-4. v9 backlog from the reviews: deposit tracker with due dates + nudges and live shared sync (the two things organisers said they'd pay Pro for); reply-by dates; re-broadcast prompt after merges; join-by-code without a link; multiple events; shorter post-confirm form; hide vote/confirm after lock; passport country + visa hints; long-haul fare levels, nonstop table, home-country holidays; real Pro entitlements (server-signed, Stripe, persistent storage); invite-link auth; split app.js; Python tests for server.py
+1. Run the friends test (`testing/FRIENDS-TEST-PLAN.md`); at the end of the week paste the feedback into a session → triage into fixes here
+2. v0.9: try the pub-crawl prototype on phones, 5-expert review, then integrate as an "evening" mode (`PLAN-v0.9.md`)
+3. v9 backlog from the reviews: deposit tracker with due dates + nudges and live shared sync (the two things organisers said they'd pay Pro for); reply-by dates; re-broadcast prompt after merges; join-by-code without a link; multiple events; shorter post-confirm form; hide vote/confirm after lock; passport country + visa hints; long-haul fare levels, nonstop table, home-country holidays; real Pro entitlements (server-signed, Stripe, persistent storage); invite-link auth; split app.js; Python tests for server.py
 
 ## Testing steps (as an app)
 1. Render dashboard → service `reunly` → Events: confirm the deploy finished for the pushed commit. Open the `https://…onrender.com` URL (first load after idle ~30–60 s).

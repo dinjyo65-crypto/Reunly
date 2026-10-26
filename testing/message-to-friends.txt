@@ -1,0 +1,29 @@
+=== 1. First message (paste into the WhatsApp group) ===
+
+Hi all 👋 I'm testing an app I've been building — Reunly — that helps a group agree on when and where to meet. Could you give me 10 minutes this week? 🙏
+
+I'll send you an invite link next. Here's all you need to do:
+
+1. Open the link (the first time it can take up to a minute to load — it's on a free server, just wait).
+2. Sign up: name, email, and pick your home city FROM THE LIST that pops up.
+3. Answer "Does this work for you?" — say yes, no, or "I can't make it". Be honest, it's a real test!
+4. Fill in anything else you like, tap Done.
+5. IMPORTANT: tap "Send your answers to [my name]" and send it back to me (WhatsApp is easiest). Your answers stay on your phone until you do this.
+
+iPhone: please just use Safari — don't "Add to Home Screen" for this test.
+
+Later in the week I'll send a vote, then the final plan. Feedback in this group please 👇
+
+=== 2. Feedback template (pin it in the group) ===
+
+📱 Phone:
+👉 What I was trying to do:
+😕 What happened:
+✅ What I expected:
+📸 Screenshot (if you can)
+
+Anything goes — "I didn't understand this word" is just as useful as "it broke".
+
+=== 3. Reminder (day 2–3, for anyone who hasn't sent answers back) ===
+
+Quick nudge 🙂 — if you opened Reunly, could you tap "📤 Send my answers" and send me the link? Your answers only reach me once you do. Thanks!
