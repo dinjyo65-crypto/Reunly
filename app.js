@@ -74,6 +74,10 @@
   let notifPollTimer = null;
 
   const isMe = (p) => p.id === state.me;
+  // Today's date where the person is. toISOString() gives UTC's date, which is
+  // already tomorrow on a US evening and still yesterday on a Pacific morning.
+  const localISO = (d = new Date()) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const canEdit = (p) => state.role === "organizer" || isMe(p);
   const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -466,7 +470,7 @@
       // participant id IS included — it's a random local token, not PII, and
       // without it the same person re-appears as a duplicate on every merge.
       p: state.participants.map((p) => ({
-        id: p.id, n: p.name, c: p.city, d: p.dates, x: p.destinations,
+        id: p.id, n: p.name, c: p.city, d: p.dates, x: matchedDestinations(p),
         pr: p.prefs, rsvp: p.rsvp, dc: p.dateConfirmed, xc: p.destConfirmed,
         // Their own checklist, so the organiser sees everyone's progress.
         pp: p.prep || {},
@@ -838,6 +842,7 @@
     try {
       if (navigator.share) {
         await navigator.share({ title: `Join ${state.reunion.name || "our reunion"} on Reunly`, url });
+        markInvited();
         return;
       }
     } catch (e) {
@@ -877,12 +882,6 @@
     const to = state.reunion.organizer || "the organiser";
     $("#inviteTitle").textContent = guest ? `Send your answers to ${to}` : "Invite people";
     $("#inviteEyebrow").textContent = guest ? "One last step" : "Bring everyone in";
-    if (guest) {
-      // Opening the sheet is as close to "sent" as we can know.
-      state.reunion.answersSentAt = Date.now();
-      saveState();
-      renderNowBar();
-    }
     // An invite sent before the organiser's own dates carries none.
     const me = state.participants.find(isMe);
     const noDates = !guest && !state.reunion.fixed && !state.demoMode && me && !me.dates.some(E.isValidRange);
@@ -906,14 +905,19 @@
   }
   // The organiser has invited people once a link actually leaves the phone,
   // not when the sheet merely opens.
+  // A guest's answers count as sent the same way.
   function markInvited() {
-    if (state.role !== "organizer" || state.reunion.invitedAt) return;
-    state.reunion.invitedAt = Date.now();
+    if (state.role !== "organizer") state.reunion.answersSentAt = Date.now();
+    else if (!state.reunion.invitedAt) state.reunion.invitedAt = Date.now();
+    else return;
     saveState();
     renderNowBar();
   }
   function closeInviteModal() {
     $("#inviteModal").hidden = true;
+    // The "copied" toast belongs to the sheet; left up, it sat over People.
+    const t = document.getElementById("toast");
+    if (t) t.classList.remove("show");
     if (inviteOpener && inviteOpener.focus) inviteOpener.focus();
   }
   function wireInviteModal() {
@@ -1160,7 +1164,24 @@
         // list over whatever they tap next: a late "Lisb" list sat over Done,
         // and that tap picked "Sabaudia, Italy" for them.
         if (document.activeElement !== input) return close();
-        items = (data.results || []).slice(0, 6);
+        let results = data.results || [];
+        const ql = q.toLowerCase();
+        const starts = (s) => (s.label || "").toLowerCase().startsWith(ql);
+        // The general place search can answer "Lisb" with Sabaudia and Yemen;
+        // the city index knows Lisbon. Ask it too when nothing starts right.
+        if (!opts.kind && !results.some(starts)) {
+          try {
+            const r2 = await fetch(`/api/geosuggest?q=${encodeURIComponent(q)}&kind=city`, { headers: { Accept: "application/json" } });
+            const more = (await r2.json()).results || [];
+            const seen = new Set(results.map((s) => s.label.toLowerCase()));
+            results = results.concat(more.filter((s) => !seen.has(s.label.toLowerCase())));
+          } catch (e) {
+            /* the first answer stands */
+          }
+          if (input.value.trim() !== q || document.activeElement !== input) return;
+        }
+        results = results.filter(starts).concat(results.filter((s) => !starts(s)));
+        items = results.slice(0, 6);
         active = -1;
         if (items.length) render();
         else close();
@@ -1249,7 +1270,11 @@
     if (!banner) return;
     banner.textContent = "";
     banner.hidden = !state.fromInvite;
-    $("#regSubmit").textContent = state.fromInvite ? "Add my dates →" : "Get started →";
+    const fixedInvite = state.fromInvite && !!(state.reunion.fixed || state.lockedPlan);
+    $("#regSubmit").textContent = !state.fromInvite ? "Get started →" : fixedInvite ? "Continue to RSVP →" : "Add my dates →";
+    // An invitation is about one event: the general pitch only got in its way.
+    document.querySelectorAll("#screen-register .hero-card, #screen-register .how-steps")
+      .forEach((n) => { n.hidden = !!state.fromInvite; });
     if (!state.fromInvite) return;
     // The default name reads badly in an invitation.
     const named = state.reunion.name && state.reunion.name !== "Untitled get-together";
@@ -1267,7 +1292,7 @@
       el("div", {
         class: "invite-banner-sub",
         text: plan
-          ? `${plan.destination} · ${plan.dateLabel} — add your details below to say if you're in.`
+          ? `${plan.dateLabel} · ${plan.destination}. Add your name below, then say if you're coming.`
           : "Add your details below, then say which dates and places work for you.",
       })
     );
@@ -1558,7 +1583,7 @@
       $(id).removeAttribute("aria-invalid");
     });
     setupWherePick = null;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localISO();
     $("#setupStart").min = today;
     $("#setupEnd").min = today;
     $("#setupName").placeholder =
@@ -1603,7 +1628,7 @@
       const end = $("#setupEnd").value || start;
       const where = (setupWherePick && setupWherePick.label) || $("#setupWhere").value.trim();
       if (!start) return fieldError($("#setupStart"), err, "Pick the date.");
-      if (start < new Date().toISOString().slice(0, 10)) return fieldError($("#setupStart"), err, "That date has already passed.");
+      if (start < localISO()) return fieldError($("#setupStart"), err, "That date has already passed.");
       if (end < start) return fieldError($("#setupEnd"), err, "The end can't be before the start.");
       if (!where) return fieldError($("#setupWhere"), err, "Say where it is — a town or city is enough.");
       plan = { destination: where, dateStart: start, dateEnd: end, dateLabel: E.rangeLabel({ start, end }) };
@@ -1756,6 +1781,14 @@
     });
   }
 
+  // "+ partner, 2 kids": who comes along, in words.
+  function partyExtra(prefs) {
+    const kids = Math.max(0, parseInt((prefs && prefs.kids) || 0, 10) || 0);
+    const bits = [];
+    if (prefs && prefs.partner === true) bits.push("partner");
+    if (kids) bits.push(`${kids} kid${kids === 1 ? "" : "s"}`);
+    return bits.length ? `+ ${bits.join(", ")}` : "";
+  }
   /** One person's party: them, their partner if coming, and any kids. */
   function partySize(prefs) {
     return 1 + (prefs && prefs.partner === true ? 1 : 0) + Math.max(0, parseInt((prefs && prefs.kids) || 0, 10) || 0);
@@ -1782,12 +1815,17 @@
     const chips = [];
     const firstDate = p.dates.find((d) => E.isValidRange(d));
     chips.push(chip("home", p.city || "no city"));
-    chips.push(chip("calendar", firstDate ? E.rangeLabel(firstDate) : "no dates"));
-    chips.push(
-      p.destinations[0]
-        ? chip(D.cityEmoji(p.destinations[0]), p.destinations[0])
-        : chip("pin", "no destination")
-    );
+    // On a fixed event the date and place are the organiser's, not each person's.
+    if (!state.reunion.fixed) {
+      chips.push(chip("calendar", firstDate ? E.rangeLabel(firstDate) : "no dates"));
+      chips.push(
+        p.destinations[0]
+          ? chip(D.cityEmoji(p.destinations[0]), p.destinations[0])
+          : chip("pin", "no destination")
+      );
+    }
+    const extra = partyExtra(p.prefs);
+    if (extra) chips.push(chip(null, extra));
     return chips;
   }
 
@@ -1835,7 +1873,9 @@
           }
           // A guest finishing their own card is the moment to send it — their
           // answers are on this phone only until the organiser opens the link.
-          if (state.role !== "organizer" && isMe(p)) openInviteModal();
+          if (state.role !== "organizer" && isMe(p)) {
+            toast(state.reunion.fixed ? "Saved. Check Before you go on Plan, then send your answers" : "Saved. Send your answers from the top bar when you're ready");
+          }
         },
       })
     );
@@ -2018,10 +2058,10 @@
     const row2 = el("div", { class: "row" });
     // Kids
     const kWrap = el("div");
-    kWrap.appendChild(el("label", { text: "Kids attending" }));
+    kWrap.appendChild(el("label", { text: "Kids attending", for: `kids-${p.id}` }));
     kWrap.appendChild(
       el("input", {
-        type: "number", min: "0", inputmode: "numeric", value: pr.kids || 0,
+        id: `kids-${p.id}`, type: "number", min: "0", inputmode: "numeric", value: pr.kids || 0,
         onInput: (e) => { pr.kids = Math.max(0, parseInt(e.target.value || "0", 10)); scheduleRecompute(p); },
       })
     );
@@ -2152,7 +2192,7 @@
       // A trip can't be planned into the past. Without this the picker happily
       // accepted a window that has already gone, which could then be locked —
       // and the countdown just read "Past".
-      min: new Date().toISOString().slice(0, 10),
+      min: localISO(),
       value: p.dates[idx][end] || "",
       onInput: (e) => {
         p.dates[idx][end] = e.target.value;
@@ -2167,14 +2207,38 @@
       placeholder: "Type a city or place…",
       autocomplete: "off",
       onInput: (e) => {
+        const v = e.target.value.trim();
         p.destinations[idx] = e.target.value;
+        // Typed, not picked: kept as written but not ranked or priced until
+        // it is matched to a real place. A pick re-fires "input" with the
+        // chosen label, and a lookup that's down can't offer one, so neither
+        // counts as unmatched.
+        const rest = (p.unmatched || []).filter((u) => u !== v);
+        const typed = v && v !== picked && !E.resolveCity(v) && !ac.serviceDown();
+        p.unmatched = typed ? rest.concat(v) : rest;
+        flag();
         scheduleRecompute(p);
       },
     });
-    attachAutocomplete(input, (label) => {
+    const note = el("div", { class: "field-note unmatched-note", role: "status" });
+    const flag = () => {
+      const v = (p.destinations[idx] || "").trim();
+      const bad = !!v && (p.unmatched || []).includes(v);
+      input.setAttribute("aria-invalid", bad ? "true" : "false");
+      note.textContent = bad ? "Not matched yet: pick a place from the list so we can compare it." : "";
+    };
+    let picked = null;
+    const ac = attachAutocomplete(input, (label) => {
+      picked = label.trim();
       p.destinations[idx] = label;
+      p.unmatched = (p.unmatched || []).filter((u) => u !== picked);
+      flag();
     });
-    return input;
+    flag();
+    const wrap = el("div", { class: "dest-field" });
+    wrap.appendChild(input);
+    wrap.appendChild(note);
+    return wrap;
   }
 
   // Single source of truth for how a participant's name + meta line read.
@@ -2199,11 +2263,14 @@
     if (state.role === "organizer" && others.length === 0 && !state.demoMode) {
       const cta = el("div", { class: "card empty-cta" });
       cta.appendChild(el("div", { class: "empty-emoji", icon: "sparkle", text: "" }));
-      cta.appendChild(el("div", { class: "empty-title", text: "It's just you so far" }));
+      const invited = !!state.reunion.invitedAt;
+      cta.appendChild(el("div", { class: "empty-title", text: invited ? "Invites sent: waiting for replies" : "It's just you so far" }));
       cta.appendChild(
         el("div", {
           class: "empty-sub",
-          text: "Invite your group, or explore with a sample group to see how Reunly decides.",
+          text: invited
+            ? "Each person appears here when they send their answers back."
+            : "Invite your group, or explore with a sample group to see how Reunly decides.",
         })
       );
       const row = el("div", { class: "btn-row" });
@@ -2211,6 +2278,18 @@
       row.appendChild(el("button", { class: "btn secondary", text: "Explore sample group", onClick: loadDemo }));
       cta.appendChild(row);
       list.appendChild(cta);
+    }
+
+    // The head count, partners and kids included, once anyone brings company
+    // or the event is a fixed one where numbers are the point.
+    const coming = state.participants.filter((p) => p.rsvp === "in");
+    if (state.reunion.fixed || coming.some((p) => partySize(p.prefs) > 1)) {
+      const heads = coming.reduce((n, p) => n + partySize(p.prefs), 0);
+      list.appendChild(el("div", {
+        class: "people-going",
+        icon: "check",
+        text: `Going: ${heads} ${heads === 1 ? "person" : "people"} · ${coming.length} of ${state.participants.length} replied yes`,
+      }));
     }
 
     // Own card first, then the rest.
@@ -2500,6 +2579,12 @@
     combosCache = null;
     pricingWindowCache = null;
   }
+  // A place someone typed but never matched to a real one (R2-09: "Lisb") is
+  // not ranked, priced or sent on — it would come back as an invented city.
+  function matchedDestinations(p) {
+    const bad = p.unmatched || [];
+    return bad.length ? p.destinations.filter((d) => !bad.includes((d || "").trim())) : p.destinations;
+  }
   function rankedCombos() {
     if (combosCache) return combosCache;
     // Someone who has said they can't make it shouldn't still be steering the
@@ -2510,8 +2595,10 @@
     // windows are derived from overlapping availability, so a locked window
     // stops being generated as soon as anyone widens their dates — and the
     // hero would then quietly show a different trip as the "Top pick".
+    const pool = (relevant.length ? relevant : state.participants).map((p) =>
+      p.unmatched && p.unmatched.length ? { ...p, destinations: matchedDestinations(p) } : p);
     combosCache = E.rankCombinations(
-      relevant.length ? relevant : state.participants,
+      pool,
       undefined,
       fareProvider,
       state.lockedPlan
@@ -2839,7 +2926,8 @@
     // With one set of answers there is nothing to rank: 100% across the board
     // just echoes that person back as a "winner".
     const solo = !locked && !state.demoMode && state.participants.filter(hasResponded).length < 2;
-    addRecPhoto(card, c.destination, locked ? "Agreed" : solo ? "Your pick so far" : "Top pick");
+    const fixedEvent = !!state.reunion.fixed;
+    addRecPhoto(card, c.destination, fixedEvent ? (state.reunion.name || "The plan") : locked ? "Agreed" : solo ? "Your pick so far" : "Top pick");
 
     const body = el("div", { class: "winner-body" });
     const whenLine = el("div", { class: "winner-when", icon: "calendar", text: `${c.dateLabel}` });
@@ -2849,13 +2937,18 @@
       whenLine.appendChild(el("span", { class: "when-tag", text: "overlap" }));
     }
     body.appendChild(whenLine);
-    body.appendChild(el("div", { class: "winner-reason", text: winnerReason(c) }));
+    body.appendChild(el("div", {
+      class: "winner-reason",
+      text: fixedEvent
+        ? `Date and place set by ${state.role === "organizer" ? "you" : state.reunion.organizer || "the organiser"}`
+        : solo ? "Based on your answers only" : winnerReason(c),
+    }));
     // Seasonality shown pre-lock, so nobody commits to monsoon season blind.
     const wNote = weatherNote(c.destination, c.dateRange.start, c.dateRange.end);
     if (wNote) body.appendChild(el("div", { class: "winner-weather", text: wNote }));
 
     const grid = el("div", { class: "score-grid" });
-    grid.hidden = solo;
+    grid.hidden = solo || fixedEvent;
     grid.appendChild(scoreCell("Date", pct(c.dateScore), c.dateScore));
     grid.appendChild(scoreCell("Place", pct(c.destScore), c.destScore));
     grid.appendChild(scoreCell("Cost", pct(c.costScore), c.costScore));
@@ -2972,7 +3065,7 @@
 
     // Deciding is the organiser's job. Guests seeing "Lock this plan" (and a
     // Lock on every alternative) worried they might break the plan.
-    if (state.role === "organizer") {
+    if (state.role === "organizer" && !fixedEvent) {
       body.appendChild(
         el("button", {
           class: locked ? "btn secondary u-w-full u-mt-4" : "btn u-w-full u-mt-4",
@@ -3934,7 +4027,7 @@
       // The pack is printed and re-read weeks later, so it has to carry enough
       // for its reader to judge the numbers: when it was made, what currency
       // they're in, and how old the fares and exchange rates behind them are.
-      `<div class="foot">Generated by Reunly on ${escapeHtml(new Date().toISOString().slice(0, 10))} · ` +
+      `<div class="foot">Generated by Reunly on ${escapeHtml(localISO())} · ` +
       `estimates only. "Travel + stay" covers return travel plus an estimated stay for these ` +
       `dates; it excludes ${escapeHtml(COST_EXCLUSIONS)}. Amounts in ` +
       `${escapeHtml(displayCode())}, converted at rates set ${escapeHtml(D.RATES_AS_OF)}; ` +
@@ -3966,7 +4059,10 @@
     if (days == null || days <= 0) return; // it's today, or been and gone
     const international = E.isInternationalTrip(state.participants, plan.destination);
     const season = E.seasonFactorFor({ start: plan.dateStart, end: plan.dateEnd }, plan.destination);
-    const steps = E.prepStepsFor(days, international, { peak: season.lodging > 1 });
+    const local = state.reunion.category === "birthday";
+    const TRAVEL_ONLY = ["passport", "visa", "entry-permit", "book-travel", "insurance"];
+    const steps = E.prepStepsFor(days, international, { peak: season.lodging > 1 })
+      .filter((st) => !local || !TRAVEL_ONLY.includes(st.id));
     // Everyone ticks their own list; "NR" = not required for them.
     const me = state.participants.find(isMe);
     const mark = (p, id) => (p && p.prep && p.prep[id]) || "";
@@ -3998,6 +4094,8 @@
       touchParticipant(me);
       saveState();
       renderPlan();
+      renderNowBar();
+      renderParticipants();
     };
     steps.forEach((st) => {
       const m = mark(me, st.id);
@@ -4016,7 +4114,7 @@
       const body = el("div", { class: "prep-body" });
       const title = el("div", { class: "prep-title" });
       title.appendChild(el("span", { text: st.title }));
-      if (!m && st.urgency !== "later") {
+      if (!m && st.urgency !== "later" && !local) {
         title.appendChild(
           el("span", {
             class: `badge ${st.urgency === "overdue" ? "warn" : ""}`,
@@ -5033,6 +5131,21 @@
     // first — on a fixed-date event there was otherwise no prompt at all.
     if (!organiser) {
       const me = people.find(isMe);
+      if (me && state.reunion.fixed && plan && me.rsvp === "no_response" && !["evening", "after"].includes(currentPhase())) {
+        const answer = (val) => () => {
+          me.rsvp = val;
+          touchParticipant(me);
+          saveState();
+          renderAll();
+        };
+        return {
+          eyebrow: `${plan.dateLabel} · ${plan.destination.split(",")[0]}`,
+          headline: `Are you coming to ${state.reunion.name || "the event"}?`,
+          sub: `${state.reunion.organizer || "The organiser"} would like to know. You can add a partner or kids next.`,
+          action: { label: "✓ I'm in", run: answer("in") },
+          action2: { label: "Can't make it", run: answer("out") },
+        };
+      }
       const answered = me && (hasResponded(me) || me.rsvp !== "no_response" || Object.keys(me.prep || {}).length > 0);
       const unsent = answered && (me.updatedAt || 0) > (state.reunion.answersSentAt || 0);
       const to = state.reunion.organizer || "the organiser";
@@ -5227,6 +5340,9 @@
     }
     if (copy.action) {
       row.appendChild(el("button", { class: "btn nowbar-action", text: copy.action.label, onClick: copy.action.run }));
+    }
+    if (copy.action2) {
+      row.appendChild(el("button", { class: "btn secondary nowbar-action2", text: copy.action2.label, onClick: copy.action2.run }));
     }
     if (row.childNodes.length) bar.appendChild(row);
     host.appendChild(bar);

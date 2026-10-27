@@ -1462,3 +1462,12 @@ input:focus, select:focus, textarea:focus {
   border-radius: var(--radius-control); font-size: var(--text-sm);
   background: var(--color-warning-bg); color: var(--color-fg-default);
 }
+.nowbar-action2 { width: auto; }
+.people-going {
+  display: flex; align-items: center; gap: var(--space-2);
+  margin: 0 0 var(--space-3); font-size: var(--text-sm); font-weight: var(--font-semibold);
+  color: var(--color-fg-default);
+}
+.dest-field { min-width: 0; flex: 1 1 auto; }
+.unmatched-note:empty { display: none; }
+.unmatched-note { color: var(--color-warning); margin-top: var(--space-1); }
