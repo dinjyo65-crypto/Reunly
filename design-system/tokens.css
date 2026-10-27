@@ -1,0 +1,307 @@
+/* design-system/tokens.css — Reunly's design tokens. Load FIRST, before
+   styles.css (or a prototype's stylesheet).
+
+   Everything that is a value lives here; the stylesheets only use them.
+   Names follow the shared design rules: --color-bg-*, --color-fg-*,
+   --color-border-*, --color-brand*, success / warning / danger, plus the
+   scales below. Looks are attribute overrides on <html>:
+     data-theme     light | dark        (the person's toggle)
+     data-look      ember | deeper      (the visual direction; ember default)
+     data-lifecycle gathering | deciding | locked | evening | after
+                    (where the event is; evening = one-day event, on the day)
+
+   Role tokens (--radius-card, --radius-control, --shadow-card,
+   --layout-*) name what a value is FOR; they will point at the scale
+   values in the next step (collapsing the scales). */
+
+/* ---- Scales (from the shared rules; adopted component by component) ---- */
+:root {
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-12: 48px; --space-16: 64px;
+
+  --text-xs: 0.75rem;  --text-sm: 0.875rem; --text-base: 1rem;   --text-lg: 1.125rem;
+  --text-xl: 1.25rem;  --text-2xl: 1.5rem;  --text-3xl: 1.875rem; --text-4xl: 2.25rem; --text-5xl: 3rem;
+  --font-regular: 400; --font-medium: 500; --font-semibold: 600; --font-bold: 700;
+  --leading-tight: 1.15; --leading-normal: 1.5;
+
+  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px; --radius-xl: 12px; --radius-2xl: 16px; --radius-full: 9999px;
+
+  --duration-fast: 100ms; --duration-base: 150ms; --duration-slow: 300ms;
+  --transition-colors: color var(--duration-base) ease, background-color var(--duration-base) ease, border-color var(--duration-base) ease;
+  --transition-base: all var(--duration-base) ease;
+
+  --z-base: 0; --z-raised: 10; --z-dropdown: 100; --z-sticky: 200;
+  --z-overlay: 300; --z-modal: 400; --z-toast: 500; --z-tooltip: 600;
+
+  /* Ember's two signature type styles */
+  --eyebrow-size: 0.62rem; --eyebrow-tracking: 0.22em;
+  --display-weight: 300;   --display-tracking: 0.015em;
+
+  /* The gold bar: the one dated thing on a screen. Same in every look. */
+  --gradient-deadline: linear-gradient(100deg, #5e4a17 0%, #c9922f 46%, #8a6b22 100%);
+  --color-on-deadline: #fff9eb;
+  --color-on-deadline-muted: #f3e3c2;
+  /* Warm note colour ("Find us: back room") */
+  --color-highlight: #fcd34d;
+  /* Previously used without being defined (a fallback decided them). */
+  --color-warning-bg: rgba(245, 158, 11, 0.12);
+  --color-danger-bg: rgba(251, 113, 133, 0.14);
+  /* On a brand-filled control */
+  --color-fg-on-brand: #ffffff;
+}
+
+/* ---- Looks ---- */
+/* Default look: dark (the original Reunly palette). */
+:root {
+  --color-bg-page: #080b16;
+  --color-bg-subtle: #0c1122;
+  --color-bg-glass: rgba(255, 255, 255, 0.045);
+  --color-bg-surface: #141a2e;
+  --color-bg-muted: rgba(255, 255, 255, 0.06);
+  --color-border-default: rgba(255, 255, 255, 0.09);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
+  --color-fg-default: #eef1f8;
+  --color-fg-muted: #9aa3b8;
+  --color-brand: #8b8cf9;
+  --color-accent-violet: #c084fc;
+  --color-accent-pink: #f472b6;
+  --color-brand-subtle: rgba(139, 140, 249, 0.16);
+  --gradient-brand: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+  --gradient-brand-subtle: linear-gradient(135deg, rgba(99,102,241,0.22), rgba(236,72,153,0.18));
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #fb7185;
+  --radius-card: 18px;
+  --radius-control: 12px;
+  --layout-gap: 14px;
+  --layout-max-w: 720px;
+  --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+/* ---- Light theme ---- */
+[data-theme="light"] {
+  --color-bg-page: #eef1f8;
+  --color-bg-subtle: #ffffff;
+  --color-bg-glass: rgba(255, 255, 255, 0.75);
+  --color-bg-surface: #ffffff;
+  --color-bg-muted: rgba(20, 26, 46, 0.05);
+  --color-border-default: rgba(20, 26, 46, 0.12);
+  --color-border-strong: rgba(20, 26, 46, 0.22);
+  --color-fg-default: #161c2e;
+  --color-fg-muted: #5b6478;
+  --shadow-card: 0 10px 30px rgba(60, 70, 120, 0.14);
+}
+
+/* Amber-on-near-white fails WCAG badly, and these carry the warnings that
+   matter most (over budget, estimated figures). Darken for light mode. */
+[data-theme="light"] {
+  --color-warning: #92620b;
+  --color-success: #0f7a52;
+  --color-danger: #b3243c;
+}
+
+/* ---- Lifecycle phase palettes ----
+   applyPhase() sets data-lifecycle on <html>: gathering | deciding | locked |
+   evening | after. Named for the lifecycle, NOT the dashboard tab — .phase-tab
+   and .phase already use data-phase for which tab is showing, and two meanings
+   on one attribute name would be a trap for whoever reads this next.
+
+   Two layers, deliberately separate:
+     1. The hue tokens below are always applied, but nothing in this stylesheet
+        consumes them yet, so adding this changes nothing on screen.
+     2. The surface tints apply only to the Deeper look (data-look="deeper"). Turn that on
+        once the header band, duotone hero and Now bar exist; until then the app
+        keeps its current ground and only the new tokens are available to build
+        against.
+
+   Specificity: the light-theme block above is [data-theme="light"] (0,1,0), so
+   anything here that has to beat it is written :root[…][…]. */
+
+:root[data-lifecycle="gathering"] {
+  --phase-a: #ff7a1a;
+  --phase-b: #d6177a;
+  --phase-ink: #b32f08;      /* accent on a light ground — 5.7:1 */
+  --phase-ink-dark: #ff9a5b; /* accent on a dark ground */
+  --phase-action: linear-gradient(100deg, #c2420a, #a8185f);
+  --phase-band: linear-gradient(125deg, #ffe0c2, #ffcdc6 42%, #f8cee2 74%, #ebd0f0);
+}
+
+:root[data-lifecycle="deciding"] {
+  --phase-a: #f0387f;
+  --phase-b: #6b2fd6;
+  --phase-ink: #8e1250;
+  --phase-ink-dark: #ff8ab8;
+  --phase-action: linear-gradient(100deg, #b01068, #5a21c4);
+  --phase-band: linear-gradient(125deg, #ffd3e3, #f6cce6 42%, #e6cdf4 74%, #d6d2fb);
+}
+
+:root[data-lifecycle="locked"] {
+  --phase-a: #a41c9e;
+  --phase-b: #1e6fe8;
+  --phase-ink: #5a21c4;
+  --phase-ink-dark: #b98cff;
+  --phase-action: linear-gradient(100deg, #8b2fd6, #1a56c4);
+  --phase-band: linear-gradient(125deg, #ebcef5, #dcd0fa 42%, #cdd6fb 74%, #c6e2fa);
+}
+
+:root[data-lifecycle="evening"] {
+  --phase-a: #2b1b6b;
+  --phase-b: #0e7f8c;
+  --phase-ink: #0e6b78;
+  --phase-ink-dark: #2ed3a0;
+  --phase-action: linear-gradient(100deg, #1e7f8c, #0e9f7a);
+  --phase-band: linear-gradient(125deg, #2e2466, #263f7e 50%, #14616b);
+}
+
+:root[data-lifecycle="after"] {
+  --phase-a: #1e6fe8;
+  --phase-b: #07a878;
+  --phase-ink: #07754f;
+  --phase-ink-dark: #4ade9e;
+  --phase-action: linear-gradient(100deg, #1a56c4, #07754f);
+  --phase-band: linear-gradient(125deg, #cbddfa, #cfe6e8 50%, #cfe7d6);
+}
+
+/* Layer 2 — surfaces, for the Deeper look only (data-look="deeper"). */
+:root[data-look="deeper"][data-lifecycle] {
+  --color-brand: var(--phase-ink-dark);
+  --gradient-brand: var(--phase-action);
+  --color-brand-subtle: color-mix(in srgb, var(--phase-a) 16%, transparent);
+}
+
+:root[data-theme="light"][data-look="deeper"][data-lifecycle] {
+  --color-brand: var(--phase-ink);
+}
+
+:root[data-theme="light"][data-look="deeper"][data-lifecycle="gathering"] {
+  --color-bg-page: #fcf0e6; --color-bg-subtle: #fff8f1; --color-bg-surface: #fff8f1;
+  --color-border-default: #f3dac8; --color-border-strong: #e6c4ac;
+  --color-fg-default: #1c1a17; --color-fg-muted: #74594a;
+}
+
+:root[data-theme="light"][data-look="deeper"][data-lifecycle="deciding"] {
+  --color-bg-page: #fceff5; --color-bg-subtle: #fef5f9; --color-bg-surface: #fef5f9;
+  --color-border-default: #efd3e2; --color-border-strong: #e0b9ce;
+  --color-fg-default: #1c1a17; --color-fg-muted: #6e5a66;
+}
+
+:root[data-theme="light"][data-look="deeper"][data-lifecycle="locked"] {
+  --color-bg-page: #f2f1fd; --color-bg-subtle: #f8f6ff; --color-bg-surface: #f8f6ff;
+  --color-border-default: #e0daf5; --color-border-strong: #cbc2ec;
+  --color-fg-default: #1c1a17; --color-fg-muted: #605a78;
+}
+
+:root[data-theme="light"][data-look="deeper"][data-lifecycle="after"] {
+  --color-bg-page: #eff4f0; --color-bg-subtle: #f6faf7; --color-bg-surface: #f6faf7;
+  --color-border-default: #d5e5da; --color-border-strong: #bcd4c4;
+  --color-fg-default: #1c1a17; --color-fg-muted: #4f6b5b;
+}
+
+:root[data-theme="dark"][data-look="deeper"][data-lifecycle="gathering"] {
+  --color-bg-page: #16100c; --color-bg-subtle: #1e1711; --color-bg-surface: #241b14;
+  --color-border-default: rgba(255, 200, 160, 0.12); --color-border-strong: rgba(255, 200, 160, 0.22);
+  --color-fg-default: #f6eee7; --color-fg-muted: #b8a698;
+}
+
+:root[data-theme="dark"][data-look="deeper"][data-lifecycle="deciding"] {
+  --color-bg-page: #150c18; --color-bg-subtle: #1c1222; --color-bg-surface: #22162a;
+  --color-border-default: rgba(255, 170, 215, 0.12); --color-border-strong: rgba(255, 170, 215, 0.22);
+  --color-fg-default: #f6edf4; --color-fg-muted: #b6a3b4;
+}
+
+:root[data-theme="dark"][data-look="deeper"][data-lifecycle="locked"] {
+  --color-bg-page: #0d0d1c; --color-bg-subtle: #141327; --color-bg-surface: #1a1930;
+  --color-border-default: rgba(180, 185, 255, 0.12); --color-border-strong: rgba(180, 185, 255, 0.22);
+  --color-fg-default: #efeffa; --color-fg-muted: #a5a3be;
+}
+
+:root[data-theme="dark"][data-look="deeper"][data-lifecycle="after"] {
+  --color-bg-page: #08140f; --color-bg-subtle: #0e1c16; --color-bg-surface: #13241c;
+  --color-border-default: rgba(150, 230, 190, 0.12); --color-border-strong: rgba(150, 230, 190, 0.22);
+  --color-fg-default: #e9f5ef; --color-fg-muted: #9bb5a8;
+}
+
+/* Evening is dark in both themes — it is night, and the screen is at arm's
+   length in a pub. Listed last so it wins over the light block above. */
+:root[data-look="deeper"][data-lifecycle="evening"],
+:root[data-theme="light"][data-look="deeper"][data-lifecycle="evening"] {
+  --color-bg-page: #140f22; --color-bg-subtle: #1a142b; --color-bg-glass: #1e182e; --color-bg-surface: #1e182e; --color-bg-muted: rgba(255, 255, 255, 0.06);
+  --color-border-default: #332b4a; --color-border-strong: #4a4068;
+  --color-fg-default: #f2effa; --color-fg-muted: #b3aacb;
+  --color-brand: var(--phase-ink-dark);
+  --phase-action: linear-gradient(100deg, #0d7560, #126a85); /* white text 5.6:1 */
+  /* the light theme darkens these for paper; at night they need their light cut back */
+  --color-warning: #fbbf24; --color-success: #34d399; --color-danger: #fb7185;
+}
+
+/* ---- Deeper: the edge-to-edge phase band ----
+   One band per screen, full bleed and under the status bar (the page uses
+   viewport-fit=cover): the top bar, then on the dashboard the Now bar, then
+   a wave cut into the ground. Everything else sits on the tinted ground with
+   the safe-area insets as its gutters, so nothing hides behind a notch, a
+   rounded corner or the home indicator. */
+:root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --gutter-l: max(16px, var(--safe-l));
+  --gutter-r: max(16px, var(--safe-r));
+}
+
+/* The pastel bands are drawn for paper; on a dark ground the same two hues
+   come through deep and low. */
+:root[data-theme="dark"][data-look="deeper"]:not([data-lifecycle="evening"]) {
+  --phase-band: linear-gradient(125deg,
+    color-mix(in srgb, var(--phase-a) 30%, var(--color-bg-page)),
+    color-mix(in srgb, var(--phase-b) 28%, var(--color-bg-page)));
+}
+
+/* ===== Ember: warm paper, one plum accent, gold only for a date =====
+   After the "Ember" boards (Reunly Layout Exploration canvas): ivory ground,
+   white cards with a warm hairline, ink type; plum spent on the action, the
+   active tab and the live dot; destination photos carry the colour. No band
+   gradient and no wave: a white top bar with a hairline, and the Now bar
+   sits on the paper. Evening turns the paper to ink, same rules. */
+:root[data-look="ember"] {
+  --color-bg-page: #f7f3ec;
+  --color-bg-subtle: #fffdf9;
+  --color-bg-glass: #fffdf9;
+  --color-bg-surface: #fffdf9;
+  --color-bg-muted: #f1ebe0;
+  --color-border-default: #e6ded0;
+  --color-border-strong: #dbd1c0;
+  --color-fg-default: #1c1a17;
+  --color-fg-muted: #6e6761;      /* 5.1:1 on the ground */
+  --color-brand: #a8185f;        /* plum: 6.9:1 on the ground */
+  --color-brand-ink: #8e1250;
+  --color-brand-subtle: #fbebf2;
+  --phase-action: #a8185f;  /* white type 7.3:1 */
+  --gradient-brand: #a8185f;
+  --phase-band: var(--color-bg-page);
+  --color-success: #3f6b52;
+  --color-warning: #8a5a12;
+  --color-danger: #b3243c;
+  --gradient-deadline: linear-gradient(100deg, #5e4a17, #c9922f 46%, #8a6b22);
+  --shadow-card: none;
+}
+
+:root[data-look="ember"][data-theme="dark"],
+:root[data-look="ember"][data-lifecycle="evening"] {
+  --color-bg-page: #15120f;
+  --color-bg-subtle: #1b1714;
+  --color-bg-glass: #211d19;
+  --color-bg-surface: #211d19;
+  --color-bg-muted: #2a2520;
+  --color-border-default: #3a342d;
+  --color-border-strong: #4a4239;
+  --color-fg-default: #f4eee4;
+  --color-fg-muted: #b3a999;
+  --color-brand: #e8689f;
+  --color-brand-ink: #f29bc0;
+  --color-brand-subtle: rgba(232, 104, 159, 0.14);
+  --phase-band: var(--color-bg-page);
+  --color-success: #6fbf8e;
+  --color-warning: #e0b45a;
+  --color-danger: #f08a9c;
+}

@@ -127,6 +127,7 @@ MAX_DRAIN = 1 << 20
 STATIC_FILES = {
     "index.html", "styles.css", "data.js", "engine.js", "fares.js",
     "globe-land.js", "app.js", "service-worker.js", "manifest.json", "icon.svg",
+    "design-system/tokens.css",
     # v0.9 prototype (pub crawl / work social live tracker)
     "prototypes/pub-crawl/index.html", "prototypes/pub-crawl/crawl.css",
     "prototypes/pub-crawl/crawl.js", "prototypes/pub-crawl/crawl-engine.js",

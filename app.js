@@ -5909,9 +5909,9 @@
     const ember = root.getAttribute("data-look") === "ember";
     meta.setAttribute("content",
       ember
-        ? getComputedStyle(root).getPropertyValue("--surface-solid").trim() || "#fffdf9"
+        ? getComputedStyle(root).getPropertyValue("--color-bg-surface").trim() || "#fffdf9"
         : root.getAttribute("data-theme") === "dark" && phase !== "evening"
-        ? getComputedStyle(root).getPropertyValue("--bg").trim() || "#080b16"
+        ? getComputedStyle(root).getPropertyValue("--color-bg-page").trim() || "#080b16"
         : BAND_TOP[phase]);
   }
   function applyPhase() {
