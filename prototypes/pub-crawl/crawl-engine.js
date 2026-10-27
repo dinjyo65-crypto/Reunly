@@ -411,8 +411,11 @@
       const manual = toMin(lastTrain) != null;
       const real = !manual && ride && ride.rail ? ride.rail : null;
       if (!manual && ride && !ride.rail) {
-        return { miles, far, warn: true, noTrain: true, lastTrain: null, auto: false, real: false, leave: null, early: false,
-          text: `${Math.round(miles)} mi to ${place} — no train home found tonight; plan another way` };
+        const b = ride.bus;
+        return { miles, far, warn: true, noTrain: true, lastTrain: null, auto: false, real: false, leave: b ? b.leave : null, early: false,
+          text: b
+            ? `${Math.round(miles)} mi to ${place} — no train after 20:00 tonight; the last ${b.mode === "COACH" ? "coach" : "bus"} is ${b.depart} from ${b.station}${b.line ? ` (${b.line})` : ""}`
+            : `${Math.round(miles)} mi to ${place} — no train or bus home found after 20:00 tonight; plan another way` };
       }
       const auto = !manual && !real;
       const train = manual ? lastTrain : real ? real.depart : estimateLastTrain(miles, date);

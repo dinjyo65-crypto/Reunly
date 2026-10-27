@@ -198,3 +198,11 @@ test("a real last train from the journey planner beats the estimate", () => {
   const nightBus = C.homeTrip(stop, bath, "bus", "", "2026-10-31", { rail: null, bus: { leave: "02:38", depart: "02:51", station: "The Centre", line: "74" } });
   assert.ok(/night buses run late/.test(nightBus.text), nightBus.text);
 });
+
+test("no train but a late coach: say so, rather than 'no way home'", () => {
+  const stop = { lat: 51.5136, lon: -0.089, leave: 22 * 60 };
+  const brighton = { label: "Brighton", lat: 50.8225, lon: -0.1372 };
+  const t = C.homeTrip(stop, brighton, "train", "", "2026-11-06",
+    { rail: null, bus: { leave: "02:25", depart: "02:39", station: "Victoria Coach Station", line: "National Express", mode: "COACH" } });
+  assert.ok(t.noTrain && /the last coach is 02:39 from Victoria Coach Station/.test(t.text), t.text);
+});

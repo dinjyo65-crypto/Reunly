@@ -387,7 +387,7 @@
     TRANSPORT.forEach(([v, t]) => orgTransport.appendChild(el("option", { value: v, text: t, selected: v === draft.organizerTransport })));
     orgTransport.addEventListener("change", () => { draft.organizerTransport = orgTransport.value; save(); drawRoute(); });
     const orgTrain = el("select", { id: "evOrgLastTrain" });
-    trainOptions(orgTrain, draft.organizerLastTrain, "Auto (from the timetable)");
+    trainOptions(orgTrain, draft.organizerLastTrain, "Auto (timetable)");
     orgTrain.addEventListener("change", () => { draft.organizerLastTrain = orgTrain.value; save(); drawRoute(); });
     const orgTrainHint = el("div", { class: "note", id: "evOrgTrainHint" });
     // The organiser's own trip home from the last stop of the current route.
@@ -398,7 +398,7 @@
     basics.append(
       el("label", { for: "evOrgPhone", text: "Your phone (optional)" }), orgPhone,
       el("label", { for: "evOrgHome", text: "You're coming from" }), homeWrap,
-      el("div", { class: "row" }, [
+      el("div", { class: "row stack" }, [
         el("div", {}, [el("label", { for: "evOrgTransport", text: "Getting home" }), orgTransport]),
         el("div", {}, [el("label", { for: "evOrgLastTrain", text: "Your last train" }), orgTrain]),
       ]),
@@ -900,7 +900,9 @@
     if (st.phase === "planning") {
       box.append(
         el("div", { class: "big", text: `${when} · starts ${rec.finalStart || rec.plannedStart}` }),
-        el("div", { class: "muted", text: rec.finalStart ? "Start time confirmed." : "Start time not confirmed yet — say when you can make it." })
+        el("div", { class: "muted", text: rec.finalStart ? "Start time confirmed."
+          : store.get(`crawl:me:${ctx.id}`) ? "Start time not confirmed yet — this page updates when it is."
+          : "Start time not confirmed yet — say when you can make it." })
       );
     } else if (st.phase === "done") {
       box.append(el("div", { class: "big", text: "That's a wrap 🍻" }), el("div", { class: "muted", text: "Get home safe!" }));
@@ -963,13 +965,17 @@
     wrap.appendChild(el("div", { class: "count", text: done
       ? `${n(["safe"])} of ${total} home safe so far`
       : `${n(["here"])} of ${total} here` }));
-    wrap.appendChild(el("div", { class: "legend" }, [
+    // After the end, "here / on the way" is history: only who's home matters.
+    wrap.appendChild(el("div", { class: "legend" }, done ? [
+      el("span", { class: "k-onway", text: `${n(["home"])} heading home` }),
+      el("span", { class: "k-quiet", text: `${n(["here", "onway", "late", "coming"])} not heard from` }),
+    ] : [
       el("span", { class: "k-here", text: `${n(["here"])} here` }),
       el("span", { class: "k-onway", text: `${n(["onway", "late"])} on the way` }),
       el("span", { class: "k-quiet", text: `${n(["coming"])} no update` }),
-      el("span", { class: "k-safe", text: `${n(["home", "safe"])} heading or home safe` }),
+      el("span", { class: "k-home", text: `${n(["home"])} heading home` }),
+      el("span", { class: "k-safe", text: `${n(["safe"])} home safe` }),
     ]));
-    if (!done) wrap.appendChild(el("div", { class: "muted", text: `Home safe so far: ${n(["safe"])} of ${total}` }));
     return wrap;
   }
 
@@ -1013,7 +1019,7 @@
             el("div", { class: "name", text: s.name }),
             el("div", { class: "note", text: note }),
             warn.bad ? el("div", { class: "warn", text: warn.text }) : null,
-            isHost ? bookingRow(rec, i, needBooking.includes(i)) : null,
+            isHost && st.phase !== "done" ? bookingRow(rec, i, needBooking.includes(i)) : null,
           ]),
           el("div", { class: "time", text: s.arriveAt }),
         ])
@@ -1086,10 +1092,13 @@
     card.appendChild(chips);
     const access = going.filter((p) => p.stepFree);
     if (isHost && access.length) {
-      const unsure = sched.filter((x) => x.stepFree !== "yes").map((x) => `${x.name}${x.stepFree === "no" ? " (not step-free)" : ""}`);
-      card.appendChild(el("div", { class: unsure.length ? "warn" : "note", id: "accessNote",
+      const no = sched.filter((x) => x.stepFree === "no").map((x) => x.name);
+      const unknown = sched.filter((x) => x.stepFree !== "yes" && x.stepFree !== "no").map((x) => x.name);
+      card.appendChild(el("div", { class: no.length || unknown.length ? "warn" : "note", id: "accessNote",
         text: `♿ ${access.map((p) => p.name).join(", ")} need${access.length === 1 ? "s" : ""} step-free access` +
-          (unsure.length ? ` — check: ${unsure.join(", ")}.` : " — every stop is listed as step-free.") }));
+          (no.length ? ` — not step-free: ${no.join(", ")} (worth swapping).` : "") +
+          (unknown.length ? ` Not confirmed either way: ${unknown.join(", ")} — worth a call.` : "") +
+          (!no.length && !unknown.length ? " — every stop is listed as step-free." : "") }));
     }
 
     if (isHost && rec.status.phase === "planning") {
@@ -1169,6 +1178,12 @@
     const now = {};
     (rec.people || []).forEach((p) => {
       now[p.id] = p.status;
+      now[`${p.id}:until`] = p.until || "";
+      const wasUntil = seen && seen[`${p.id}:until`];
+      if (seen && wasUntil !== undefined && wasUntil !== (p.until || "") && p.status !== "out") {
+        pending.push({ id: p.id, kind: "late", at: p.ts || Date.now(),
+          text: `${p.name} now has to leave ${p.until ? `at ${p.until}` : "— no, now staying all night"}` });
+      }
       const was = seen && seen[p.id];
       if (!was || was === p.status) return;
       if (p.status === "out") pending.push({ id: p.id, kind: "out", at: p.ts || Date.now(), text: `${p.name} can't make it any more` });
@@ -1318,6 +1333,7 @@
   }
 
   let pickedHome = null; // the guest's "coming from" pick, survives re-renders
+  let cantArmedUntil = 0; // "Can't make it after all" second tap, survives re-renders
   let editing = false; // a guest changing their reply
   function guestPanel(rec, sched, me) {
     const card = el("div", { class: "card", id: "guestPanel" });
@@ -1334,7 +1350,7 @@
       const transport = el("select", { id: "meTransport" });
       TRANSPORT.forEach(([v, t]) => transport.appendChild(el("option", { value: v, text: t, selected: !!was && v === was.transport })));
       const myTrain = el("select", { id: "meLastTrain" });
-      trainOptions(myTrain, was ? was.lastTrain : "", "Auto (from the timetable)");
+      trainOptions(myTrain, was ? was.lastTrain : "", "Auto (timetable)");
       if (was && !pickedHome && was.home) pickedHome = was.home;
       const trainHint = el("div", { class: "note", id: "meTrainHint" });
       const homeWrap = el("div", { class: "ac" });
@@ -1354,7 +1370,7 @@
           el("div", {}, [el("label", { for: "meUntil", text: "Until" }), until]),
         ]),
         el("label", { for: "meHome", text: "Coming from" }), homeWrap,
-        el("div", { class: "row" }, [
+        el("div", { class: "row stack" }, [
           el("div", {}, [el("label", { for: "meTransport", text: "Getting home" }), transport]),
           el("div", {}, [el("label", { for: "meLastTrain", text: "My last train" }), myTrain]),
         ]),
@@ -1526,7 +1542,7 @@
           ])
         );
       }
-      bar.push(el("button", { class: withGroup ? "btn" : "btn ghost", id: "meHome", text: "🏠 Heading home", onClick: () => set("home", "Get home safe — tap Home safe when you're in") }));
+      if (withGroup) bar.push(el("button", { class: "btn", id: "meHome", text: "🏠 Heading home", onClick: () => set("home", "Get home safe — tap Home safe when you're in") }));
       guestbar = el("div", { class: "guestbar" }, bar);
     }
     if (going && (leaving || st.phase === "done")) {
@@ -1546,13 +1562,16 @@
       ]));
     } else if (going && st.phase !== "done" && !withGroup && !leaving) {
       card.appendChild(el("div", { class: "btns" }, [
-        el("button", { class: "btn ghost sm", id: "meCant", text: "Can't make it after all", onClick: (e) => {
-          const b = e.currentTarget;
-          if (b.dataset.armed) return set("out", "Thanks for letting them know");
-          b.dataset.armed = "1";
-          b.textContent = "Tap again to confirm you can't make it";
-          setTimeout(() => { delete b.dataset.armed; b.textContent = "Can't make it after all"; }, 10000);
-        } }),
+        el("button", { class: "btn ghost sm", id: "meCant",
+          text: Date.now() < cantArmedUntil ? "Tap again to confirm you can't make it" : "Can't make it after all",
+          onClick: (e) => {
+            // Kept outside the button: the 15 s refresh rebuilds it, and a
+            // DOM flag reset after ~2 s, so the second tap did nothing.
+            if (Date.now() < cantArmedUntil) { cantArmedUntil = 0; return set("out", "Thanks for letting them know"); }
+            cantArmedUntil = Date.now() + 10000;
+            e.currentTarget.textContent = "Tap again to confirm you can't make it";
+            setTimeout(() => { if (Date.now() >= cantArmedUntil) renderEvent(true); }, 10050);
+          } }),
       ]));
     }
     if (guestbar) card.appendChild(guestbar);

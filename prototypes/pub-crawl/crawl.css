@@ -233,3 +233,16 @@ select option, select optgroup { background: #211d19; color: #f4eee4; }
 .pin.here { background: var(--live); color: var(--live-ink); box-shadow: 0 0 0 6px rgba(168, 24, 95, 0.35); }
 .logo { background: var(--live); color: var(--live-ink); }
 .top { padding-bottom: 12px; }
+
+/* ---- Ember cycle 1: readability in a dark pub ----
+   Text already clears 7:1; what read as dim was size and hairlines. Form
+   controls get a 3:1 edge, small labels grow, the two getting-home selects
+   stack so neither is cut off, and the map's bright tiles are toned down. */
+input, select { border-color: #6a6055; }
+.eyebrow { font-size: 0.7rem; }
+.legend { font-size: 0.8rem; }
+.row.stack { flex-direction: column; gap: 0; }
+.legend .k-quiet { --dot: transparent; }
+.legend .k-quiet::before { box-shadow: inset 0 0 0 1.5px var(--text); }
+.legend .k-home { --dot: var(--warn); opacity: 0.85; }
+.leaflet-tile-pane { filter: brightness(0.72) saturate(0.75) contrast(1.05); }

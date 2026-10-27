@@ -253,10 +253,14 @@ def last_ride_home(frm, to, date, tz_min):
                 if not rides:
                     continue
                 modes = {l.get("mode") for l in rides}
-                # Rail = trains / tube / tram only. Bus = buses only, and only
-                # before 03:00 — a 05:10 coach isn't a way home from the pub.
-                kind = "rail" if modes <= RAIL_MODES else "bus" if modes <= BUS_MODES else None
-                if not kind or (kind == "bus" and leave_t >= day + datetime.timedelta(days=1, hours=3)):
+                main_mode = max(rides, key=lambda l: l.get("duration") or 0).get("mode")
+                # Rail = the main ride is a train / tube / tram (a bus to the
+                # station or from it is fine). Bus = buses or coaches only.
+                kind = ("rail" if main_mode in RAIL_MODES and modes <= RAIL_MODES | BUS_MODES
+                        else "bus" if modes <= BUS_MODES else None)
+                # Tonight means before 03:00: a 04:44 train is tomorrow's
+                # first, not tonight's last.
+                if not kind or leave_t >= day + datetime.timedelta(days=1, hours=3):
                     continue
                 # Name the journey by its main ride (the longest), not a short
                 # tram hop to the station: "last train 00:58 from Manchester
