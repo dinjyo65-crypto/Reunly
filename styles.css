@@ -695,7 +695,9 @@ a:focus-visible {
 }
 /* Set here as well as through --grad, so the phase reads on the action even
    while data-surface-tint is off. */
-.nowbar-action { flex: 0 0 auto; min-height: 44px; background: var(--phase-action, var(--grad)); }
+/* .btn.nowbar-action, not .nowbar-action: it is also .btn.sm (min-height 38px),
+   and a phone tap target needs 44px. */
+.btn.nowbar-action { flex: 0 0 auto; min-height: 44px; background: var(--phase-action, var(--grad)); }
 
 /* ---- Countdown ---- */
 .countdown {

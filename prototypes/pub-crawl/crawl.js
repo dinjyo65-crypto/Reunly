@@ -1468,6 +1468,9 @@
     // Each one only while it still makes sense: "On my way" and "Running
     // late" until you've caught up with the group; once you're heading home
     // the only thing left is "Home safe".
+    // The sticky bar bleeds to the card's bottom edge, so it has to be the
+    // card's last child — anything after it slid under the bar.
+    let guestbar = null;
     const withGroup = me.status === "here";
     const leaving = me.status === "home" || me.status === "safe";
     if (going && st.phase === "live" && !leaving) {
@@ -1485,7 +1488,7 @@
         );
       }
       bar.push(el("button", { class: withGroup ? "btn" : "btn ghost", id: "meHome", text: "🏠 Heading home", onClick: () => set("home", "Get home safe — tap Home safe when you're in") }));
-      card.appendChild(el("div", { class: "guestbar" }, bar));
+      guestbar = el("div", { class: "guestbar" }, bar);
     }
     if (going && (leaving || st.phase === "done")) {
       card.appendChild(el("div", { class: "btns" }, [
@@ -1513,6 +1516,7 @@
         } }),
       ]));
     }
+    if (guestbar) card.appendChild(guestbar);
     return card;
   }
 
