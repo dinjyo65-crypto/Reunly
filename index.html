@@ -125,6 +125,11 @@
            saw it and closed the app thinking they were done. -->
       <div id="sendBackBar" hidden></div>
 
+      <!-- The one next move for this phase. Scaffold: the countdown and the
+           send-back bar above still render their own copy until it moves in
+           here and they are retired. -->
+      <div id="nowBar" hidden></div>
+
       <!-- Lifecycle tabs -->
       <nav class="phasebar" id="phasebar" role="tablist" aria-label="Sections">
         <button class="phase-tab active" role="tab" aria-selected="true" data-phase="decide" id="tab-decide">Decide</button>

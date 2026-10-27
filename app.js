@@ -4661,6 +4661,127 @@
     host.appendChild(bar);
   }
 
+  // ---- Now bar: the one next move ----
+  // Scaffold. The copy per phase lives in nowBarCopy() so it can be edited in
+  // one place; the countdown and send-back bar still render above it and are
+  // retired once their jobs have moved in here.
+  //
+  // One verb per phase. Where two things are urgent the earlier deadline wins
+  // and the other belongs on its tab as a badge, not a second button here.
+  function nowBarCopy() {
+    const organiser = state.role === "organizer";
+    const people = state.participants;
+    const total = people.length;
+    const plan = state.lockedPlan;
+
+    switch (currentPhase()) {
+      case "gathering": {
+        if (!organiser) {
+          const me = people.find(isMe);
+          const answered = me && (hasResponded(me) || me.rsvp === "out");
+          return answered
+            ? {
+                eyebrow: "Gathering replies",
+                headline: "Your answers are only on this device",
+                sub: "They don't reach the organiser until you send them",
+                action: { label: "📤 Send my answers", run: openInviteModal },
+              }
+            : {
+                eyebrow: "Gathering replies",
+                headline: "Add your dates and budget",
+                sub: "Then send them back — the group can't be scored without you",
+              };
+        }
+        const replied = people.filter(hasResponded).length;
+        const waiting = total - replied;
+        return {
+          eyebrow: "Gathering replies",
+          headline: waiting === 0 ? `All ${total} have replied` : `${replied} of ${total} have replied`,
+          sub:
+            waiting === 0
+              ? "Open the vote whenever you're ready"
+              : `Waiting on ${waiting} ${waiting === 1 ? "person" : "people"}`,
+          action: waiting === 0 ? null : { label: "📨 Invite people", run: openInviteModal },
+        };
+      }
+
+      case "deciding": {
+        const b = state.ballot;
+        if (!b || !b.options || !b.options.length) {
+          return { eyebrow: "Deciding", headline: "The vote is open" };
+        }
+        const { counts, totalVotes } = E.tallyBallot(people, b);
+        const leader = [...b.options].sort(
+          (a, c) => (counts[c.id] || 0) - (counts[a.id] || 0) || c.seedTotal - a.seedTotal
+        )[0];
+        return {
+          eyebrow: "Deciding",
+          headline: `${leader.destination} is ahead`,
+          sub: `${totalVotes} ${totalVotes === 1 ? "vote" : "votes"} cast · ${leader.dateLabel}`,
+          action: { label: "See the vote", run: () => showPhase("decide") },
+        };
+      }
+
+      case "locked": {
+        const days = E.daysUntil(plan.dateStart);
+        return {
+          eyebrow: `${plan.destination} · ${plan.dateLabel}`,
+          headline: days == null ? "The plan is locked" : days === 1 ? "1 day to go" : `${days} days to go`,
+          sub: "Book while the fares are still close to what you were quoted",
+          action: { label: "Your costs", run: () => showPhase("costs") },
+        };
+      }
+
+      case "evening":
+        return {
+          eyebrow: `${plan.destination} · today`,
+          headline: "It's happening",
+          sub: plan.dateLabel,
+          action: { label: "The plan", run: () => showPhase("decide") },
+        };
+
+      case "after":
+        return {
+          eyebrow: `${plan.destination} · ${plan.dateLabel}`,
+          headline: "Settle up and add your photos",
+          sub: "Square the money while everyone still remembers who paid",
+          action: { label: "Settle up", run: () => showPhase("costs") },
+        };
+
+      default:
+        return null;
+    }
+  }
+
+  function renderNowBar() {
+    const host = $("#nowBar");
+    if (!host) return;
+    host.textContent = "";
+    const copy = nowBarCopy();
+    if (!copy) {
+      host.hidden = true;
+      return;
+    }
+    host.hidden = false;
+    const bar = el("div", { class: "nowbar" });
+    const txt = el("div", { class: "nowbar-text" });
+    txt.appendChild(el("div", { class: "nowbar-eyebrow", text: copy.eyebrow }));
+    txt.appendChild(el("div", { class: "nowbar-head", text: copy.headline }));
+    if (copy.sub) txt.appendChild(el("div", { class: "nowbar-sub", text: copy.sub }));
+    bar.appendChild(txt);
+    if (copy.action) {
+      bar.appendChild(
+        el("button", {
+          class: "btn sm nowbar-action",
+          style: "width:auto",
+          text: copy.action.label,
+          onClick: copy.action.run,
+        })
+      );
+    }
+    host.appendChild(bar);
+  }
+
   function renderMeta() {
     $("#inviteChip").textContent = `Invite code: ${state.reunion.code}`;
     const going = state.participants.filter((p) => p.rsvp === "in").length;
@@ -5228,6 +5349,8 @@
   function renderAll() {
     clearTimeout(recomputeTimer); // a structural render supersedes any pending debounce
     invalidateCombos(); // state may have changed since the last pass
+    applyPhase(); // before the panels, so they can read the phase tokens
+    renderNowBar();
     renderMeta();
     renderCountdown();
     renderPlan();
@@ -5342,6 +5465,7 @@
     }
     initOnboarding();
     startNotifPolling(); // no-ops until state.role === "organizer" with a real code
+    applyPhase(); // the register and choose screens need a palette too
   }
 
   // ---- Theme (light/dark) ----
@@ -5369,6 +5493,41 @@
         /* ignore */
       }
     });
+  }
+
+  // ---- Lifecycle phase (drives the per-phase palette) ----
+  // Which part of the event's life we are in. Derived on every render and
+  // never stored, so it cannot drift from the data it describes. Distinct
+  // from state.phase, which is the dashboard tab.
+  function lifecycleDay(iso) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
+    if (!m) return null;
+    // Built from parts, not new Date(iso): the string form parses as UTC, so
+    // a morning in a negative offset lands on the day before.
+    const d = new Date(+m[1], +m[2] - 1, +m[3]);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  function currentPhase() {
+    const plan = state.lockedPlan;
+    if (plan) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const start = lifecycleDay(plan.dateStart);
+      const end = lifecycleDay(plan.dateEnd) || start;
+      if (start && end) {
+        if (today > end) return "after";
+        if (today >= start) return "evening";
+      }
+      return "locked"; // locked but undated, or dates we could not parse
+    }
+    const b = state.ballot;
+    if (b && (b.open || Object.keys(b.votesByParticipant || {}).length > 0)) {
+      return "deciding";
+    }
+    return "gathering";
+  }
+  function applyPhase() {
+    document.documentElement.setAttribute("data-lifecycle", currentPhase());
   }
 
   // ---- First-run onboarding carousel ----
