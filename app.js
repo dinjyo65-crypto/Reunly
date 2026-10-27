@@ -1143,6 +1143,11 @@
     document.querySelectorAll(".screen").forEach((s) => s.classList.remove("active"));
     $(`#screen-${id}`).classList.add("active");
     $("#restartBtn").hidden = id === "register";
+    renderNowBar(); // dashboard only
+    if (id !== "dashboard") {
+      $("#topbarSub").textContent = "Reconnect. We'll handle the rest.";
+      document.body.classList.remove("in-event");
+    }
     if (id === "register") renderInviteBanner();
     // The hero video only belongs to the registration screen.
     const hero = $("#heroVideo");
@@ -2693,45 +2698,6 @@
   }
 
   // -------------------------------------------------------------------------
-  // Dashboard: countdown (shown once a plan is locked)
-  // -------------------------------------------------------------------------
-  function renderCountdown() {
-    const box = $("#countdown");
-    const plan = state.lockedPlan;
-    if (!plan) {
-      box.hidden = true;
-      box.textContent = "";
-      return;
-    }
-    box.hidden = false;
-    box.textContent = "";
-    const days = E.daysUntil(plan.dateStart);
-    const big =
-      days == null ? "Locked" : days > 0 ? `${days}` : days === 0 ? "Today" : "Past";
-    box.appendChild(el("div", { class: "cd-emoji", text: D.cityEmoji(plan.destination) }));
-    const mid = el("div", { class: "cd-mid" });
-    mid.appendChild(
-      el("div", {
-        class: "cd-line",
-        text:
-          days > 0
-            ? `${plan.destination} in`
-            : days === 0
-            ? `It's today — ${plan.destination}!`
-            : plan.destination,
-      })
-    );
-    if (days > 0) {
-      const big2 = el("div", { class: "cd-big" });
-      big2.appendChild(el("span", { class: "cd-num", text: big }));
-      big2.appendChild(el("span", { class: "cd-days", text: days === 1 ? "day" : "days" }));
-      mid.appendChild(big2);
-    }
-    mid.appendChild(el("div", { class: "cd-sub", text: `📅 ${plan.dateLabel}` }));
-    box.appendChild(mid);
-  }
-
-  // -------------------------------------------------------------------------
   // Dashboard: group insights (preference roll-up)
   // -------------------------------------------------------------------------
   function statTile(big, label) {
@@ -3626,7 +3592,7 @@
    */
   function renderPrep(panel, plan) {
     const days = E.daysUntil(plan.dateStart);
-    if (days == null || days < 0) return; // the trip has been and gone
+    if (days == null || days <= 0) return; // it's today, or been and gone
     const international = E.isInternationalTrip(state.participants, plan.destination);
     const season = E.seasonFactorFor({ start: plan.dateStart, end: plan.dateEnd }, plan.destination);
     const steps = E.prepStepsFor(days, international, { peak: season.lodging > 1 });
@@ -4520,6 +4486,9 @@
   }
 
   function renderVote() {
+    // A vote or opening the ballot moves the Now bar's count (and the phase).
+    applyPhase();
+    renderNowBar();
     const panel = $("#votePanel");
     if (!panel) return;
     panel.textContent = "";
@@ -4635,39 +4604,16 @@
    * app in and the organiser's roster was still empty. Meanwhile a push
    * notification told the organiser they had responded.
    */
-  function renderSendBack() {
-    const host = $("#sendBackBar");
-    if (!host) return;
-    host.textContent = "";
-    const me = state.participants.find(isMe);
-    const show = state.role !== "organizer" && me && (hasResponded(me) || me.rsvp === "out");
-    host.hidden = !show;
-    if (!show) return;
-    const bar = el("div", { class: "sendback" });
-    bar.appendChild(
-      el("div", {
-        class: "sendback-text",
-        text: "Your answers are only on this device — send them to the organiser.",
-      })
-    );
-    bar.appendChild(
-      el("button", {
-        class: "btn sm",
-        style: "width:auto",
-        text: "📤 Send my answers",
-        onClick: openInviteModal,
-      })
-    );
-    host.appendChild(bar);
-  }
 
   // ---- Now bar: the one next move ----
-  // Scaffold. The copy per phase lives in nowBarCopy() so it can be edited in
-  // one place; the countdown and send-back bar still render above it and are
-  // retired once their jobs have moved in here.
+  // The copy per phase lives in nowBarCopy() so it can be edited in one
+  // place. It took over the countdown (locked: the days) and the guest's
+  // send-back bar (gathering: "Send my answers").
   //
   // One verb per phase. Where two things are urgent the earlier deadline wins
   // and the other belongs on its tab as a badge, not a second button here.
+  const countWord = (n) =>
+    ["no one", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"][n] || String(n);
   function nowBarCopy() {
     const organiser = state.role === "organizer";
     const people = state.participants;
@@ -4679,12 +4625,14 @@
         if (!organiser) {
           const me = people.find(isMe);
           const answered = me && (hasResponded(me) || me.rsvp === "out");
+          // The guest's Now bar IS the send-back prompt: a guest who finished
+          // on People and closed the app never saw it on Decide alone.
           return answered
             ? {
                 eyebrow: "Gathering replies",
                 headline: "Your answers are only on this device",
                 sub: "They don't reach the organiser until you send them",
-                action: { label: "📤 Send my answers", run: openInviteModal },
+                action: { label: "Send my answers", run: openInviteModal },
               }
             : {
                 eyebrow: "Gathering replies",
@@ -4696,12 +4644,16 @@
         const waiting = total - replied;
         return {
           eyebrow: "Gathering replies",
-          headline: waiting === 0 ? `All ${total} have replied` : `${replied} of ${total} have replied`,
+          headline: waiting === 0 ? `All ${countWord(total)} have replied` : `${countWord(replied)} of ${countWord(total)} have replied`,
           sub:
             waiting === 0
               ? "Open the vote whenever you're ready"
               : `Waiting on ${waiting} ${waiting === 1 ? "person" : "people"}`,
-          action: waiting === 0 ? null : { label: "📨 Invite people", run: openInviteModal },
+          progress: { done: replied, total },
+          // "Nudge" re-sends the invite link: the reply lives behind it.
+          action: waiting === 0
+            ? { label: "Open a vote", run: () => { showPhase("decide"); scrollToVote(); } }
+            : { label: `Nudge the ${countWord(waiting)}`, run: openInviteModal },
         };
       }
 
@@ -4714,35 +4666,43 @@
         const leader = [...b.options].sort(
           (a, c) => (counts[c.id] || 0) - (counts[a.id] || 0) || c.seedTotal - a.seedTotal
         )[0];
+        const me = people.find(isMe);
+        const voted = me && b.votesByParticipant && b.votesByParticipant[me.id];
         return {
           eyebrow: "Deciding",
           headline: `${leader.destination} is ahead`,
-          sub: `${totalVotes} ${totalVotes === 1 ? "vote" : "votes"} cast · ${leader.dateLabel}`,
-          action: { label: "See the vote", run: () => showPhase("decide") },
+          sub: `${totalVotes} of ${total} ${total === 1 ? "vote" : "votes"} in · ${leader.dateLabel}`,
+          progress: { done: totalVotes, total },
+          action: organiser
+            ? { label: `Lock ${leader.destination.split(",")[0]} in`, run: () => lockBallotOption(leader) }
+            : voted
+            ? { label: "See the vote", run: () => { showPhase("decide"); scrollToVote(); } }
+            : { label: "Cast your vote", run: () => { showPhase("decide"); scrollToVote(); } },
         };
       }
 
       case "locked": {
         const days = E.daysUntil(plan.dateStart);
         return {
-          eyebrow: `${plan.destination} · ${plan.dateLabel}`,
-          headline: days == null ? "The plan is locked" : days === 1 ? "1 day to go" : `${days} days to go`,
+          eyebrow: `Locked · ${plan.dateLabel}`,
+          headline: plan.destination.split(",")[0],
           sub: "Book while the fares are still close to what you were quoted",
+          days: days == null || days < 1 ? null : { num: days, unit: days === 1 ? "day" : "days" },
           action: { label: "Your costs", run: () => showPhase("costs") },
         };
       }
 
       case "evening":
         return {
-          eyebrow: `${plan.destination} · today`,
-          headline: "It's happening",
-          sub: plan.dateLabel,
-          action: { label: "The plan", run: () => showPhase("decide") },
+          eyebrow: `Today · ${plan.dateLabel}`,
+          headline: plan.destination.split(",")[0],
+          sub: "It's happening — have a brilliant time",
+          action: { label: "Today's plan", run: () => showPhase("decide") },
         };
 
       case "after":
         return {
-          eyebrow: `${plan.destination} · ${plan.dateLabel}`,
+          eyebrow: `After · ${plan.dateLabel}`,
           headline: "Settle up and add your photos",
           sub: "Square the money while everyone still remembers who paid",
           action: { label: "Settle up", run: () => showPhase("costs") },
@@ -4753,36 +4713,71 @@
     }
   }
 
+  function scrollToVote() {
+    const v = $("#votePanel");
+    if (v) setTimeout(() => v.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+  }
+  // Lives in the edge-to-edge band above the tabs, on the dashboard only:
+  // eyebrow, one big headline, a progress strip where there's a count to
+  // show, and one action.
   function renderNowBar() {
     const host = $("#nowBar");
     if (!host) return;
     host.textContent = "";
-    const copy = nowBarCopy();
+    const onDash = $("#screen-dashboard").classList.contains("active");
+    const copy = onDash ? nowBarCopy() : null;
     if (!copy) {
       host.hidden = true;
       return;
     }
     host.hidden = false;
     const bar = el("div", { class: "nowbar" });
-    const txt = el("div", { class: "nowbar-text" });
-    txt.appendChild(el("div", { class: "nowbar-eyebrow", text: copy.eyebrow }));
-    txt.appendChild(el("div", { class: "nowbar-head", text: copy.headline }));
-    if (copy.sub) txt.appendChild(el("div", { class: "nowbar-sub", text: copy.sub }));
-    bar.appendChild(txt);
-    if (copy.action) {
-      bar.appendChild(
-        el("button", {
-          class: "btn sm nowbar-action",
-          style: "width:auto",
-          text: copy.action.label,
-          onClick: copy.action.run,
-        })
-      );
+    bar.appendChild(el("div", { class: "nowbar-eyebrow", text: copy.eyebrow }));
+    bar.appendChild(el("h2", { class: "nowbar-head", text: copy.headline }));
+    if (copy.sub) bar.appendChild(el("div", { class: "nowbar-sub", text: copy.sub }));
+    if (copy.progress && copy.progress.total > 0) {
+      const strip = el("div", {
+        class: "nowbar-progress",
+        role: "img",
+        "aria-label": `${copy.progress.done} of ${copy.progress.total}`,
+      });
+      for (let i = 0; i < Math.min(copy.progress.total, 24); i++) {
+        strip.appendChild(el("span", { class: i < copy.progress.done ? "on" : "" }));
+      }
+      bar.appendChild(strip);
     }
+    const row = el("div", { class: "nowbar-row" });
+    if (copy.days) {
+      const d = el("div", { class: "nowbar-days" });
+      d.appendChild(el("span", { class: "nowbar-days-num", text: String(copy.days.num) }));
+      d.appendChild(el("span", { class: "nowbar-days-unit", text: `${copy.days.unit} to go` }));
+      row.appendChild(d);
+    }
+    if (copy.action) {
+      row.appendChild(el("button", { class: "btn nowbar-action", text: copy.action.label, onClick: copy.action.run }));
+    }
+    if (row.childNodes.length) bar.appendChild(row);
     host.appendChild(bar);
   }
 
   function renderMeta() {
+    // The event's name heads the top bar (as an event switcher would) and the
+    // folded details panel; the tagline is for the welcome screens.
+    const name = (state.reunion.name || "").trim() || "Untitled get-together";
+    $("#eventMetaTitle").textContent = name;
+    // A brand-new event's first job is naming it and inviting people, so its
+    // details start unfolded; after that they stay out of the way.
+    // Folds itself once people join — unless you opened or closed it yourself.
+    const meta = $("#eventMeta");
+    if (meta) {
+      if (!meta.dataset.init) {
+        meta.dataset.init = "1";
+        meta.addEventListener("click", (e) => { if (e.target.closest("summary")) meta.dataset.user = "1"; });
+      }
+      if (!meta.dataset.user) meta.open = state.role === "organizer" && state.participants.length <= 1;
+    }
+    $("#topbarSub").textContent = name;
+    document.body.classList.add("in-event");
     $("#inviteChip").textContent = `Invite code: ${state.reunion.code}`;
     const going = state.participants.filter((p) => p.rsvp === "in").length;
     $("#countChip").textContent = `${going} in · ${state.participants.length} invited`;
@@ -4792,7 +4787,6 @@
     const proBadge = $("#proBadge");
     if (proBadge) proBadge.hidden = !state.pro;
     renderDemoBanner();
-    renderSendBack();
     const notifWrap = $("#notifWrap");
     if (notifWrap) notifWrap.hidden = state.role !== "organizer";
     // The event's name, type and invitations belong to the organiser; a guest
@@ -5313,8 +5307,9 @@
   // inputs untouched so focus/caret isn't lost while typing.
   function recomputeDerived() {
     invalidateCombos(); // state may have changed since the last pass
+    applyPhase(); // a reply or a vote can move the phase, and the Now bar's count
+    renderNowBar();
     renderMeta();
-    renderCountdown();
     renderPlan();
     // NOTE: renderWinner() is deliberately NOT called here (same reasoning as
     // renderParticipants() below) — its confirm-step can contain live text
@@ -5352,7 +5347,6 @@
     applyPhase(); // before the panels, so they can read the phase tokens
     renderNowBar();
     renderMeta();
-    renderCountdown();
     renderPlan();
     renderWinner();
     renderVote();
@@ -5472,13 +5466,14 @@
   const LS_THEME = "reunly_theme";
   function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
+    syncThemeColor();
     const b = $("#themeToggle");
     if (b) b.textContent = theme === "light" ? "☀️" : "🌙";
   }
   function initTheme() {
-    let t = "dark";
+    let t = "light"; // Deeper is drawn light; dark keeps the same hues, deeper
     try {
-      t = localStorage.getItem(LS_THEME) || "dark";
+      t = localStorage.getItem(LS_THEME) || "light";
     } catch (e) {
       /* ignore */
     }
@@ -5526,8 +5521,37 @@
     }
     return "gathering";
   }
+  // Tabs that have nothing to say yet in this phase: dashed, still tappable,
+  // so nobody wonders where they went.
+  const QUIET_TABS = {
+    gathering: ["costs", "memories"],
+    deciding: ["memories"],
+    locked: ["memories"],
+    evening: ["memories"],
+    after: [],
+  };
+  // The status bar / browser chrome takes the top of the band.
+  const BAND_TOP = { gathering: "#ffe0c2", deciding: "#ffd3e3", locked: "#ebcef5", evening: "#2e2466", after: "#cbddfa" };
+  function syncThemeColor() {
+    const meta = $("#themeColor");
+    if (!meta) return;
+    const root = document.documentElement;
+    const phase = root.getAttribute("data-lifecycle") || "gathering";
+    meta.setAttribute("content",
+      root.getAttribute("data-theme") === "dark" && phase !== "evening"
+        ? getComputedStyle(root).getPropertyValue("--bg").trim() || "#080b16"
+        : BAND_TOP[phase]);
+  }
   function applyPhase() {
-    document.documentElement.setAttribute("data-lifecycle", currentPhase());
+    const phase = currentPhase();
+    document.documentElement.setAttribute("data-lifecycle", phase);
+    document.querySelectorAll(".phase-tab").forEach((t) => {
+      t.classList.toggle("quiet", (QUIET_TABS[phase] || []).includes(t.getAttribute("data-phase")));
+    });
+    // Once there's a plan, the first tab is the plan.
+    const first = $("#tab-decide");
+    if (first) first.textContent = state.lockedPlan ? "Plan" : "Decide";
+    syncThemeColor();
   }
 
   // ---- First-run onboarding carousel ----

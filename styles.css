@@ -335,7 +335,7 @@ a:focus-visible {
 
 /* Toast */
 .toast {
-  position: fixed; left: 50%; bottom: 26px;
+  position: fixed; left: 50%; bottom: calc(26px + var(--safe-b));
   transform: translate(-50%, 20px);
   background: var(--surface-solid);
   border: 1px solid var(--border-strong);
@@ -465,7 +465,7 @@ a:focus-visible {
 /* ---- Onboarding carousel ---- */
 .onboard {
   position: fixed; inset: 0; z-index: 300;
-  display: grid; place-items: center; padding: 20px;
+  display: grid; place-items: center; padding: max(20px, var(--safe-t)) max(20px, var(--safe-r)) max(20px, var(--safe-b)) max(20px, var(--safe-l));
   background: rgba(6, 9, 18, 0.7); backdrop-filter: blur(10px);
   transition: opacity 0.3s ease;
 }
@@ -640,83 +640,119 @@ a:focus-visible {
    length in a pub. Listed last so it wins over the light block above. */
 :root[data-surface-tint="on"][data-lifecycle="evening"],
 :root[data-theme="light"][data-surface-tint="on"][data-lifecycle="evening"] {
-  --bg: #0b1118; --bg-2: #111a22; --surface-solid: #16202a;
-  --border: rgba(140, 220, 230, 0.13); --border-strong: rgba(140, 220, 230, 0.24);
-  --text: #eaf4f5; --text-dim: #9bb0b6;
+  --bg: #140f22; --bg-2: #1a142b; --surface: #1e182e; --surface-solid: #1e182e; --surface-2: rgba(255, 255, 255, 0.06);
+  --border: #332b4a; --border-strong: #4a4068;
+  --text: #f2effa; --text-dim: #b3aacb;
   --accent: var(--phase-ink-dark);
+  --phase-action: linear-gradient(100deg, #1e9f80, #1784a0);
+  /* the light theme darkens these for paper; at night they need their light cut back */
+  --warn: #fbbf24; --good: #34d399; --danger: #fb7185;
 }
+:root[data-surface-tint="on"][data-lifecycle="evening"] input,
+:root[data-surface-tint="on"][data-lifecycle="evening"] select { background: rgba(255, 255, 255, 0.06); color: var(--text); }
 
-/* ---- Now bar ----
-   The one next move, pinned above the tabs on every phase. The rule along the
-   top is the phase gradient, so the colour system is visible before the
-   surface tint is switched on. */
-.nowbar {
+/* ---- Deeper: the edge-to-edge phase band ----
+   One band per screen, full bleed and under the status bar (the page uses
+   viewport-fit=cover): the top bar, then on the dashboard the Now bar, then
+   a wave cut into the ground. Everything else sits on the tinted ground with
+   the safe-area insets as its gutters, so nothing hides behind a notch, a
+   rounded corner or the home indicator. */
+:root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --gutter-l: max(16px, var(--safe-l));
+  --gutter-r: max(16px, var(--safe-r));
+}
+.band {
   position: relative;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  margin-top: 14px;
-  padding: 15px 16px;
-  border-radius: var(--radius);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background: var(--phase-band, var(--grad-soft));
+  padding-top: var(--safe-t);
+  transition: background 0.6s ease;
 }
-.nowbar::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 3px;
-  background: var(--phase-action, var(--grad));
+/* The pastel bands are drawn for paper; on a dark ground the same two hues
+   come through deep and low. */
+:root[data-theme="dark"][data-surface-tint="on"]:not([data-lifecycle="evening"]) {
+  --phase-band: linear-gradient(125deg,
+    color-mix(in srgb, var(--phase-a) 30%, var(--bg)),
+    color-mix(in srgb, var(--phase-b) 28%, var(--bg)));
 }
-.nowbar-text { flex: 1 1 190px; min-width: 0; }
+.band .topbar {
+  position: static;
+  background: transparent;
+  border-bottom: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  padding-left: var(--gutter-l);
+  padding-right: var(--gutter-r);
+}
+[data-theme="light"] .band .topbar { background: transparent; }
+.band .topbar .btn.ghost {
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
+  border-color: color-mix(in srgb, var(--text) 14%, transparent);
+}
+/* In an event the top bar names it; the tagline is for the welcome screens. */
+body.in-event .topbar .sub { display: block; font-size: 0.8rem; font-weight: 600; color: var(--text); }
+.band-wave { display: block; width: 100%; height: 34px; margin-top: 10px; }
+.band-wave path { fill: var(--bg); transition: fill 0.6s ease; }
+.band-wave .w1 { opacity: 0.4; }
+.app {
+  padding-left: var(--gutter-l);
+  padding-right: var(--gutter-r);
+  padding-bottom: calc(110px + var(--safe-b));
+}
+.screen { padding-top: 6px; }
+
+/* ---- Now bar (inside the band) ----
+   The one next move: an eyebrow, one big light headline, a progress strip
+   where there is a count, one action. Dark ink on the pastel band, never
+   white on bright. */
+#nowBar {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 6px max(18px, var(--safe-r)) 0 max(18px, var(--safe-l));
+}
 .nowbar-eyebrow {
-  font-size: 0.67rem;
+  font-size: 0.62rem;
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: var(--text-dim);
+  color: var(--accent);
 }
 .nowbar-head {
-  margin-top: 5px;
-  font-size: 1.04rem;
-  font-weight: 600;
-  line-height: 1.3;
+  margin: 8px 0 0;
+  font-size: 1.6rem;
+  font-weight: 300;
+  letter-spacing: 0.015em;
+  text-transform: uppercase;
+  line-height: 1.16;
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
-.nowbar-sub {
-  margin-top: 4px;
-  font-size: 0.78rem;
-  line-height: 1.45;
-  color: var(--text-dim);
+.nowbar-sub { margin-top: 6px; font-size: 0.8rem; line-height: 1.45; color: var(--text-dim); }
+.nowbar-progress { display: flex; gap: 4px; margin-top: 14px; }
+.nowbar-progress span {
+  flex: 1 1 0; height: 4px; border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 17%, transparent);
 }
-/* Set here as well as through --grad, so the phase reads on the action even
-   while data-surface-tint is off. */
-/* .btn.nowbar-action, not .nowbar-action: it is also .btn.sm (min-height 38px),
-   and a phone tap target needs 44px. */
-.btn.nowbar-action { flex: 0 0 auto; min-height: 44px; background: var(--phase-action, var(--grad)); }
-
-/* ---- Countdown ---- */
-.countdown {
-  display: flex; align-items: center; gap: 14px; margin-top: 18px;
-  padding: 18px; border-radius: var(--radius);
-  background: var(--grad-soft); border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow);
-  animation: pop 0.45s cubic-bezier(0.22,1,0.36,1) both;
+.nowbar-progress span.on { background: var(--phase-action, var(--grad)); }
+.nowbar-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+.nowbar-days {
+  display: flex; flex-direction: column; align-items: center; padding-right: 12px;
+  border-right: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
 }
-.countdown .cd-emoji { font-size: 2.4rem; flex: 0 0 auto; }
-.countdown .cd-mid { min-width: 0; }
-.countdown .cd-line { font-size: 0.9rem; color: var(--text-dim); font-weight: 600; }
-.countdown .cd-big { display: flex; align-items: baseline; gap: 8px; }
-.countdown .cd-num {
-  font-size: 2.6rem; font-weight: 820; letter-spacing: -0.03em;
-  background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+.nowbar-days-num { font-size: 1.9rem; font-weight: 300; line-height: 1; letter-spacing: -0.02em; }
+.nowbar-days-unit {
+  font-size: 0.56rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-dim); margin-top: 4px;
 }
-.countdown .cd-days { font-size: 1rem; font-weight: 700; color: var(--text); }
-.countdown .cd-sub { font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
+/* .btn.nowbar-action, not .nowbar-action: a phone tap target needs 44px. */
+.btn.nowbar-action {
+  flex: 1 1 auto; width: auto; min-height: 46px; border-radius: 10px;
+  background: var(--phase-action, var(--grad)); color: #fff;
+  box-shadow: none;
+}
 
 /* ---- Group insights ---- */
 .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9px; }
@@ -759,7 +795,7 @@ a:focus-visible {
 /* ---- Modal (invite) ---- */
 .modal {
   position: fixed; inset: 0; z-index: 250;
-  display: grid; place-items: center; padding: 20px;
+  display: grid; place-items: center; padding: max(20px, var(--safe-t)) max(20px, var(--safe-r)) max(20px, var(--safe-b)) max(20px, var(--safe-l));
   background: rgba(6, 9, 18, 0.7); backdrop-filter: blur(10px);
   animation: fadeUp 0.25s ease both;
 }
@@ -1070,11 +1106,6 @@ a:focus-visible {
 .itin-fixed { cursor: default; opacity: 0.85; }
 /* "Your answers are only on this device" — the one prompt that closes the
    invite loop, so it has to be visible rather than tucked away. */
-.sendback { display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; flex-wrap: wrap; margin-bottom: 12px; padding: 12px 14px;
-  border-radius: var(--radius); background: var(--accent-soft);
-  border: 1px solid var(--accent); }
-.sendback-text { font-size: 0.84rem; font-weight: 600; line-height: 1.4; flex: 1 1 200px; }
 
 /* Closing the books: who actually carried the trip, which the netted
    settle-up list deliberately hides. */
@@ -1313,3 +1344,86 @@ a:focus-visible {
 }
 .invite-banner-title { font-weight: 750; font-size: 0.95rem; color: var(--text); }
 .invite-banner-sub { margin-top: 3px; font-size: 0.8rem; color: var(--text-dim); }
+
+/* ===== Deeper: the tinted ground, cards and tabs =====
+   Every surface comes from the phase tokens (data-lifecycle, above); this
+   block only changes shape: flat paper instead of glass, wide light capitals
+   for names, dashed tabs for what isn't earned yet. */
+:root[data-surface-tint="on"] body::before,
+:root[data-surface-tint="on"] body::after { display: none; }
+:root[data-surface-tint="on"] .card {
+  background: var(--surface-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 6%, transparent);
+}
+/* A phase change repaints the whole app: fade it rather than jolt. */
+html, body, .card, .phase-tab {
+  transition: background-color 0.6s ease, border-color 0.6s ease, color 0.6s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  html, body, .card, .phase-tab, .band, .band-wave path { transition: none; }
+}
+
+/* Folded event details: name, type and invite code are set once. */
+.event-meta summary {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  min-height: 44px; cursor: pointer; list-style: none; font-weight: 650;
+}
+.event-meta summary::-webkit-details-marker { display: none; }
+.event-meta summary::after { content: "\25BE"; margin-left: auto; color: var(--text-dim); }
+.event-meta[open] summary::after { content: "\25B4"; }
+.event-meta-hint { font-size: 0.72rem; font-weight: 500; color: var(--text-dim); }
+
+/* Tabs: sticky under the status bar on the ground colour; the active one
+   takes the phase action, unearned ones are dashed. */
+:root[data-surface-tint="on"] .phasebar {
+  top: var(--safe-t);
+  gap: 5px;
+  margin: 8px calc(-1 * var(--gutter-r)) 16px calc(-1 * var(--gutter-l));
+  padding: 8px var(--gutter-r) 8px var(--gutter-l);
+  border: none;
+  border-radius: 0;
+  background: var(--bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root[data-surface-tint="on"] .phase-tab {
+  min-height: 44px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+:root[data-surface-tint="on"] .phase-tab.active {
+  border-color: transparent;
+  background: var(--phase-action);
+  color: #fff;
+  font-weight: 700;
+}
+:root[data-surface-tint="on"] .phase-tab.quiet:not(.active) {
+  border-style: dashed;
+  background: transparent;
+}
+
+/* Small tracked capitals for section heads. */
+:root[data-surface-tint="on"] .section-head h2 {
+  font-size: 0.66rem; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: var(--text-dim);
+}
+/* The top pick's photo goes duotone in the phase's own two hues, and its
+   name takes the wide light capitals. */
+#winnerHero .rec-photo.has-photo::before,
+#winnerHero .rec-photo.has-photo::after { content: ""; position: absolute; inset: 0; pointer-events: none; }
+#winnerHero .rec-photo.has-photo::before {
+  background: linear-gradient(150deg, var(--phase-a, #6366f1), var(--phase-b, #ec4899));
+  mix-blend-mode: color; opacity: 0.85;
+}
+#winnerHero .rec-photo.has-photo::after {
+  background: linear-gradient(to top, rgba(26, 8, 4, 0.75) 0%, rgba(26, 8, 4, 0.2) 55%, transparent 100%);
+}
+#winnerHero .rec-photo-label { position: relative; z-index: 1; }
+#winnerHero .rec-photo-pin { z-index: 1; }
+:root[data-surface-tint="on"] #winnerHero .rec-photo-label {
+  font-weight: 300; text-transform: uppercase; letter-spacing: 0.08em; font-size: 1.5rem;
+}

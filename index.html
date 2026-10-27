@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-surface-tint="on" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <!-- Defense-in-depth: no remote script/connect origins; external links open in new tabs. -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; img-src 'self' data: blob: https://upload.wikimedia.org https://thumb.wikimedia.org https://api.qrserver.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#080b16" />
+  <meta name="theme-color" content="#ffe0c2" id="themeColor" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -18,6 +18,10 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <!-- The phase band: edge to edge, under the status bar. It carries the top
+       bar and, on the dashboard, the Now bar, and ends in the wave. Its
+       colours come from data-lifecycle (styles.css). -->
+  <div class="band" id="phaseBand">
   <header class="topbar">
     <div class="logo">R</div>
     <div>
@@ -34,6 +38,13 @@
     <button class="btn ghost sm" id="themeToggle" aria-label="Toggle theme" title="Toggle light/dark">🌙</button>
     <button class="btn ghost sm" id="restartBtn" hidden>Restart</button>
   </header>
+    <!-- The one next move for this phase (dashboard only). -->
+    <div id="nowBar" hidden></div>
+    <svg class="band-wave" viewBox="0 0 390 44" preserveAspectRatio="none" aria-hidden="true">
+      <path class="w1" d="M0 20 C 62 2, 126 38, 198 23 C 268 9, 324 33, 390 15 L390 44 L0 44 Z" />
+      <path class="w2" d="M0 29 C 72 12, 132 44, 204 31 C 272 19, 326 41, 390 26 L390 44 L0 44 Z" />
+    </svg>
+  </div>
 
   <main class="app">
     <!-- ============ Screen: Register ============ -->
@@ -91,8 +102,9 @@
 
     <!-- ============ Screen: Dashboard ============ -->
     <section class="screen" id="screen-dashboard">
-      <!-- Event meta (pinned above the tabs) -->
-      <div class="card tight">
+      <!-- Event details: set once, so folded away under the band -->
+      <details class="card tight event-meta" id="eventMeta">
+        <summary><span id="eventMetaTitle">Event details</span><span class="event-meta-hint">name · type · invite code</span></summary>
         <div class="row">
           <div>
             <label for="reunionName">Event name</label>
@@ -108,27 +120,13 @@
           <span class="chip" id="countChip">0 invited</span>
         </div>
         <button class="btn secondary sm" id="shareBtn" style="width:auto;margin-top:10px">📨 Invite people</button>
-      </div>
+      </details>
 
       <!-- Demo-mode banner -->
       <div class="demo-banner" id="demoBanner" hidden></div>
       <!-- Shown only when localStorage refuses writes, so a silent loss of
            every later change becomes visible. -->
       <div class="storage-warning" id="storageWarning" role="status" hidden></div>
-
-      <!-- Countdown (pinned once a plan is locked) -->
-      <div class="countdown" id="countdown" hidden></div>
-
-      <!-- Standing prompt for participants: their answers live on their own
-           device until they send a link back. Above the tabs, so it shows on
-           every tab — on Decide alone, a guest who finished on People never
-           saw it and closed the app thinking they were done. -->
-      <div id="sendBackBar" hidden></div>
-
-      <!-- The one next move for this phase. Scaffold: the countdown and the
-           send-back bar above still render their own copy until it moves in
-           here and they are retired. -->
-      <div id="nowBar" hidden></div>
 
       <!-- Lifecycle tabs -->
       <nav class="phasebar" id="phasebar" role="tablist" aria-label="Sections">
