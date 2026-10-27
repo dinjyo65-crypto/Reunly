@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#080b16" />
+  <meta name="theme-color" content="#2e2466" />
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'" />
   <!-- Origin only: OSM tiles want a referrer; the #e=…&k=… part is never sent. -->
@@ -14,13 +14,22 @@
   <link rel="stylesheet" href="crawl.css" />
 </head>
 <body>
-  <header class="top">
-    <div class="logo">R</div>
-    <div>
-      <div class="brand">Reunly <span class="tag">Evening out · prototype</span></div>
-      <div class="sub" id="topSub">Work socials &amp; pub crawls</div>
-    </div>
-  </header>
+  <!-- Edge to edge: the band runs under the status bar and to both edges. -->
+  <div class="band">
+    <header class="top">
+      <div class="logo">R</div>
+      <div class="top-text">
+        <div class="brand">Reunly <span class="tag">Evening out · prototype</span></div>
+        <div class="sub" id="topSub">Work socials &amp; pub crawls</div>
+      </div>
+      <span class="live-dot" id="liveDot" hidden aria-hidden="true"></span>
+      <span class="clock" id="clock" hidden></span>
+    </header>
+    <svg class="band-wave" viewBox="0 0 390 44" preserveAspectRatio="none" aria-hidden="true">
+      <path class="w1" d="M0 20 C 62 2, 126 38, 198 23 C 268 9, 324 33, 390 15 L390 44 L0 44 Z" />
+      <path class="w2" d="M0 29 C 72 12, 132 44, 204 31 C 272 19, 326 41, 390 26 L390 44 L0 44 Z" />
+    </svg>
+  </div>
   <main id="app"></main>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="vendor/leaflet.js"></script>

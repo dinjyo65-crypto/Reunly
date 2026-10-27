@@ -848,6 +848,10 @@
     const sched = scheduleOf(live);
     const me = store.get(`crawl:me:${ctx.id}`);
     $("#topSub").textContent = `${live.name}${live.organizer ? " · by " + live.organizer : ""}`;
+    const isLive = live.status && live.status.phase === "live";
+    $("#liveDot").hidden = !isLive;
+    $("#clock").hidden = !isLive;
+    if (isLive) $("#clock").textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
     if (offline) {
       const at = lastOk ? new Date(lastOk).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
@@ -903,6 +907,19 @@
     } else {
       const here = sched[st.stop];
       const since = st.since ? new Date(st.since).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+      // Stop N of M, and a segment per stop: done, now, still to come.
+      const n = st.state === "moving" ? st.stop + 2 : st.stop + 1;
+      const ago = st.since ? Math.max(0, Math.round((Date.now() - st.since) / 60000)) : null;
+      box.appendChild(el("div", { class: "eyebrow", id: "stopOf" }, [
+        el("span", { text: `Stop ${Math.min(n, sched.length)} of ${sched.length}` }),
+        ago != null ? el("span", { class: "muted", text: st.state === "moving" ? `left ${ago} min ago` : `here ${ago} min` }) : null,
+      ]));
+      const segs = el("div", { class: "segs", "aria-hidden": "true" });
+      sched.forEach((_, i) => {
+        const done = i < st.stop || (i === st.stop && st.state === "moving");
+        const now = st.state === "moving" ? i === st.stop + 1 : i === st.stop;
+        segs.appendChild(el("span", { class: done ? "done" : now ? "now" : "" }));
+      });
       if (st.state === "moving") {
         const next = sched[st.stop + 1];
         const walk = here && next ? C.walkMinutes(here, next) : 0;
@@ -917,6 +934,7 @@
         );
         if (st.spot) box.appendChild(el("div", { class: "spot", text: `Find us: ${st.spot}` }));
       }
+      box.appendChild(segs);
       const target = st.state === "moving" ? sched[st.stop + 1] : here;
       if (target) {
         box.appendChild(
@@ -931,7 +949,28 @@
         );
       }
     }
+    if (st.phase !== "planning") box.appendChild(headcount(rec));
     return box;
+  }
+
+  /** "Six of eight here", keyed by colour, and home safe so far. */
+  function headcount(rec) {
+    const people = (rec.people || []).filter((p) => p.status !== "out");
+    const n = (sts) => people.filter((p) => sts.includes(p.status)).length;
+    const total = people.length;
+    const done = rec.status.phase === "done";
+    const wrap = el("div", { class: "headcount", id: "headcount" });
+    wrap.appendChild(el("div", { class: "count", text: done
+      ? `${n(["safe"])} of ${total} home safe so far`
+      : `${n(["here"])} of ${total} here` }));
+    wrap.appendChild(el("div", { class: "legend" }, [
+      el("span", { class: "k-here", text: `${n(["here"])} here` }),
+      el("span", { class: "k-onway", text: `${n(["onway", "late"])} on the way` }),
+      el("span", { class: "k-quiet", text: `${n(["coming"])} no update` }),
+      el("span", { class: "k-safe", text: `${n(["home", "safe"])} heading or home safe` }),
+    ]));
+    if (!done) wrap.appendChild(el("div", { class: "muted", text: `Home safe so far: ${n(["safe"])} of ${total}` }));
+    return wrap;
   }
 
   function trackerCard(rec, sched, isHost) {

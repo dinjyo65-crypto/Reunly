@@ -644,7 +644,7 @@ a:focus-visible {
   --border: #332b4a; --border-strong: #4a4068;
   --text: #f2effa; --text-dim: #b3aacb;
   --accent: var(--phase-ink-dark);
-  --phase-action: linear-gradient(100deg, #1e9f80, #1784a0);
+  --phase-action: linear-gradient(100deg, #0d7560, #126a85); /* white text 5.6:1 */
   /* the light theme darkens these for paper; at night they need their light cut back */
   --warn: #fbbf24; --good: #34d399; --danger: #fb7185;
 }
