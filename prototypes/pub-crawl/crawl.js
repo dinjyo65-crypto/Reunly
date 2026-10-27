@@ -419,7 +419,7 @@
       node.addEventListener("change", () => { onChange(node.value); save(); });
       return node;
     };
-    const ages = [18, 21, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70].map((a) => [a, String(a)]);
+    const ages = [18, 20, 22, 25, 28, 30, 35, 40, 45, 50, 55, 60, 65, 70].map((a) => [a, String(a)]);
     who.append(
       el("div", { class: "row" }, [
         el("div", {}, [el("label", { for: "whoSize", text: "Roughly how many" }),
@@ -971,7 +971,7 @@
     wrap.appendChild(el("div", { class: "count", text: done
       ? safeAll === total + 1 ? `Everyone's home safe ✓ (${total + 1} of ${total + 1}, ${rec.organizer || "the organiser"} included)`
         : `${safeAll} of ${total + 1} home safe so far, ${rec.organizer || "the organiser"} included`
-      : `${n(["here"])} of ${total} here` }));
+      : rec.status.state === "moving" ? `${n(["here"])} of ${total} with the group, walking` : `${n(["here"])} of ${total} here` }));
     // After the end, "here / on the way" is history: only who's home matters.
     wrap.appendChild(el("div", { class: "legend" }, done ? [
       el("span", { class: "k-onway", text: `${n(["home"])} heading home` }),
@@ -1449,7 +1449,7 @@
       );
       card.appendChild(
         el("div", { class: "muted", style: "margin-top:10px",
-          text: "🔒 Everyone with this link sees first names, times and which stop the group is at — never anyone's location. The event is deleted after 2 days." })
+          text: `🔒 Everyone with this link sees first names, times and which stop the group is at. Where you're coming from, how you get home, your phone and step-free needs go to ${rec.organizer || "the organiser"} only. The event is deleted after 2 days.` })
       );
       return card;
     }
@@ -1519,9 +1519,12 @@
       const until = C.toMin(me.until);
       if (st.phase === "live" && until != null && me.status !== "home") {
         const lastMine = sched.filter((x) => x.arrive < until).pop();
-        if (lastMine && lastMine !== sched[sched.length - 1]) {
-          info.appendChild(el("div", { class: "note", id: "untilNote", text: `⏱ You said until ${me.until} — that's about the end of ${lastMine.name}.` }));
-        }
+        const end = sched[sched.length - 1];
+        info.appendChild(el("div", { class: "note", id: "untilNote", text: !lastMine
+          ? `⏱ You said until ${me.until} — that's before the first stop opens; change your reply if that's changed.`
+          : lastMine !== end
+          ? `⏱ You said until ${me.until} — that's about the end of ${lastMine.name}.`
+          : `⏱ You said until ${me.until} — the route ends at ${end.leaveAt}, so you'll make every stop.` }));
       }
       if (rec.organizerPhone && !nudged) {
         info.appendChild(el("a", { class: "btn ghost sm", href: telHref(rec.organizerPhone), text: `📞 Call ${rec.organizer || "the organiser"}` }));
@@ -1549,13 +1552,17 @@
       const bar = [];
       if (!withGroup) {
         const eta = el("select", { id: "meEta", "aria-label": "How late" });
-        [15, 30, 45, 60].forEach((m) => eta.appendChild(el("option", { value: m, text: `~${m} min`, selected: m === (me.eta || 30) })));
+        eta.appendChild(el("option", { value: "", text: "How late?", selected: !me.eta }));
+        [15, 30, 45, 60].forEach((m) => eta.appendChild(el("option", { value: m, text: `~${m} min`, selected: m === me.eta })));
         bar.push(
           el("button", { class: "btn secondary", id: "meOnWay", text: "🚶 On my way", disabled: me.status === "onway", onClick: () => set("onway", "The group knows you're coming", { at: st.state === "moving" ? st.stop + 1 : st.stop }) }),
           el("button", { class: "btn", id: "meHere", text: "📍 I'm here", onClick: () => set("here", "Welcome! 🍻", { at: st.state === "moving" ? st.stop + 1 : st.stop }) }),
           el("div", { class: "late" }, [
             eta,
-            el("button", { class: "btn ghost", id: "meLate", text: "⏰ Running late", onClick: () => set("late", "The group knows you're running late", { eta: Number(eta.value) }) }),
+            el("button", { class: "btn ghost", id: "meLate", text: "⏰ Running late", onClick: () => {
+              if (!eta.value) { toast("Pick roughly how late first"); eta.focus(); return; }
+              set("late", "The group knows you're running late", { eta: Number(eta.value) });
+            } }),
           ])
         );
       }
@@ -1624,7 +1631,8 @@
     card.append(
       el("h2", { text: "Share" }),
       row("guestLink", "Invite link — for everyone", guest, "People say when they can come and follow the group on the night."),
-      row("cohostLink", "Co-host link — keep it private", cohost, "Can move the group along. Give it to one or two people in case you leave early.")
+      row("cohostLink", "Organiser & co-host link — keep it private", cohost,
+        "Opens the event as host on any phone — save it for yourself (this phone remembers you, a new one won't), and give it to one or two people in case you leave early.")
     );
     return card;
   }
