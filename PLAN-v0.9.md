@@ -164,3 +164,15 @@ User asked: last train only for train/tube/tram and filled in automatically; On 
 - **3 agent cycles** (organiser / 6 guests / observer; City of London Friday, Edinburgh Saturday, Leeds Thursday with a co-host). Logs in `.qa/sim/e1..e3/`. Fixed along the way: drop-out confirm survived refresh; trains with a bus leg count, 'tonight' ends 03:00, last coach named; headcount split + end view counting the organiser; 'Everyone's home safe'; one Home safe / Call when nudged; find-us note saves on blur; venue search de-duplicated and pulled to the route; step-free yes / limited / no / not confirmed; Until-change alert; Until note always shown; Running late asks how late; private organiser link labelled; guests told what only the organiser sees; form edges 3:1, stacked selects, dimmed map tiles; place suggestions no longer reopen after a pick (main app). Also found: two server processes on one port during testing (restarted cleanly).
 - **Verdict (all three agents, cycle 3):** ready for a real friends test. Before folding it in as the evening takeover: an organiser-private link that isn't the co-host's, co-host nudge/safe-marking checked, real-device test of the 15 s polling, a delete-now control.
 - Tests: `npm test` 128; crawl 52/52; evening 3/3; phases 31/31; walk2 54/54; city 9/9; v8fixes 9/9.
+
+## Round 9 (2026-10-27) — the user's amendments to the Ember page designs
+- Get started by category (trip or reunion, family get-together, birthday, wedding, evening out → pub-crawl planner, something else) or join with a code; "Try it" = sample group.
+- Set up: event name only (category sets the type). Birthday/wedding: date (+ end) and town → a fixed event, locked from the start; guests only RSVP (no date ranges, no "does this work?" vote). "Something else" asks if the date is set.
+- No "gathering replies" before anyone is invited: "Add your dates, then invite the group" / "Invite your guests"; opening the invite sheet starts gathering.
+- Availability: date ranges (+ another range), partner (husband/wife) and kids; party size counts the partner.
+- Checklist for everyone, own ticks + NR (not required); travels with answers; organiser-only "Everyone's progress" with Nudge per step.
+- People: everyone sees it; others read "Awaiting response"; only the organiser can Nudge.
+- Guests asked to send answers whenever they have unsent changes, in any phase.
+- Gold bar on Costs: book travel by / square up by. Invite = Ember bottom sheet. Dark evening mode only for one-day events; a trip under way is "Day N of M". One-day ranges read "Dec 11".
+- Canvas: new row "Round 2 — your amendments, as built" (welcome refined, Get started v2, Set up fixed, checklist).
+- Tests: npm test 129; walk2 54; city 9; v8fixes 9; phases 32; crawl 52; evening 3; new amend.js 16.
