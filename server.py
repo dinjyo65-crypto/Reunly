@@ -468,7 +468,9 @@ def suggest_venues(q, near=None):
     key = q.strip().lower()
     if len(key) < 3:
         return []
-    bias = [("lat", round(near[0], 3)), ("lon", round(near[1], 3)), ("location_bias_scale", 0.5)] if near else []
+    # A strong pull to the route: a pub name is rarely unique ("Last Drop"
+    # is in Kentucky, Lombardy and Tanzania too).
+    bias = [("lat", round(near[0], 3)), ("lon", round(near[1], 3)), ("location_bias_scale", 0.1), ("zoom", 14)] if near else []
     ckey = "venue:" + key + (":%s,%s" % (bias[0][1], bias[1][1]) if bias else "")
     with _suggest_lock:
         if ckey in _suggest_cache:
@@ -490,14 +492,24 @@ def suggest_venues(q, near=None):
         street = " ".join(x for x in (p.get("housenumber"), p.get("street")) if x)
         parts = [name] + [x for x in (street, p.get("city") or p.get("county")) if x and x != name]
         label = ", ".join(parts)
-        if label.lower() in seen:
+        lon, lat = f["geometry"]["coordinates"]
+        # One entry per venue: the same name within ~150 m is the same pub
+        # mapped twice (or one per door number).
+        key = (name.lower(), round(float(lat), 3), round(float(lon), 3))
+        if label.lower() in seen or key in seen:
             continue
         seen.add(label.lower())
-        lon, lat = f["geometry"]["coordinates"]
+        seen.add(key)
         results.append({"label": label, "lat": float(lat), "lon": float(lon),
                         "cc": (p.get("countrycode") or "").lower(), "venue": True})
-        if len(results) == 6:
-            break
+    if near and results:
+        # Nearest first, and nothing from another region when there is
+        # something within a night out's reach (50 km).
+        dist = lambda r: math.hypot(r["lat"] - near[0], (r["lon"] - near[1]) * math.cos(math.radians(near[0]))) * 111
+        results.sort(key=dist)
+        close = [r for r in results if dist(r) <= 50]
+        results = close or results
+    results = results[:6]
     with _suggest_lock:
         _cache_put(_suggest_cache, ckey, results)
     return results

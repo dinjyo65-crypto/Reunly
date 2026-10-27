@@ -563,7 +563,8 @@
         toast(`${place.name} is already on the route`);
         return;
       }
-      draft.stops.push({ id: rid(), name: place.name, lat: s.lat, lon: s.lon, hours: "", kind: "place", address: s.label });
+      draft.stops.push({ id: rid(), name: place.name, lat: s.lat, lon: s.lon, hours: "", kind: "place",
+        address: s.label.split(",").slice(1).join(",").trim() });
       save();
       anyPlace.value = "";
       drawRoute();
@@ -584,7 +585,9 @@
     function drawRoute() {
       route.textContent = "";
       const n = draft.stops.length;
-      route.appendChild(el("h2", { text: `4 · Route — ${n} of ${draft.target} stop${draft.target === 1 ? "" : "s"}` }));
+      route.appendChild(el("h2", { text: n > draft.target
+        ? `4 · Route — ${n} stops (you planned ${draft.target})`
+        : `4 · Route — ${n} of ${draft.target} stop${draft.target === 1 ? "" : "s"}` }));
       if (!draft.stops.length) {
         route.appendChild(el("div", { class: "muted", text: "Add at least two stops." }));
       }
@@ -962,8 +965,12 @@
     const total = people.length;
     const done = rec.status.phase === "done";
     const wrap = el("div", { class: "headcount", id: "headcount" });
+    // After the end the organiser counts too, as on their safety panel.
+    const orgSafe = rec.organizerStatus === "safe" ? 1 : 0;
+    const safeAll = n(["safe"]) + orgSafe;
     wrap.appendChild(el("div", { class: "count", text: done
-      ? `${n(["safe"])} of ${total} home safe so far`
+      ? safeAll === total + 1 ? `Everyone's home safe ✓ (${total + 1} of ${total + 1}, ${rec.organizer || "the organiser"} included)`
+        : `${safeAll} of ${total + 1} home safe so far, ${rec.organizer || "the organiser"} included`
       : `${n(["here"])} of ${total} here` }));
     // After the end, "here / on the way" is history: only who's home matters.
     wrap.appendChild(el("div", { class: "legend" }, done ? [
@@ -1093,12 +1100,14 @@
     const access = going.filter((p) => p.stepFree);
     if (isHost && access.length) {
       const no = sched.filter((x) => x.stepFree === "no").map((x) => x.name);
-      const unknown = sched.filter((x) => x.stepFree !== "yes" && x.stepFree !== "no").map((x) => x.name);
+      const limited = sched.filter((x) => x.stepFree === "limited").map((x) => x.name);
+      const unknown = sched.filter((x) => !x.stepFree).map((x) => x.name);
       card.appendChild(el("div", { class: no.length || unknown.length ? "warn" : "note", id: "accessNote",
         text: `♿ ${access.map((p) => p.name).join(", ")} need${access.length === 1 ? "s" : ""} step-free access` +
           (no.length ? ` — not step-free: ${no.join(", ")} (worth swapping).` : "") +
+          (limited.length ? ` Limited access: ${limited.join(", ")} — worth a call.` : "") +
           (unknown.length ? ` Not confirmed either way: ${unknown.join(", ")} — worth a call.` : "") +
-          (!no.length && !unknown.length ? " — every stop is listed as step-free." : "") }));
+          (!no.length && !unknown.length && !limited.length ? " — every stop is listed as step-free." : "") }));
     }
 
     if (isHost && rec.status.phase === "planning") {
@@ -1254,6 +1263,14 @@
     if (st.phase !== "done") {
       const spot = el("input", { id: "spotInput", placeholder: "Where to find us — e.g. back room, by the fireplace", value: st.phase === "live" && st.state === "at" ? st.spot || "" : "" });
       card.appendChild(el("div", {}, [el("label", { for: "spotInput", text: "Where to find us (optional)" }), spot]));
+      // Typed and walked away from: save it (while at a stop), so it isn't lost.
+      if (st.phase === "live" && st.state === "at") {
+        spot.addEventListener("change", () => {
+          const v = spot.value.trim();
+          if (v === (live.status.spot || "")) return;
+          hostUpdate((r) => { r.status = { ...r.status, spot: v }; }).then((ok) => ok && toast("Note saved — guests see it within 15 s"));
+        });
+      }
       if (st.phase === "live" && st.state === "at") {
         btns.appendChild(el("button", { class: "btn ghost", id: "saveSpot", text: "Update note", onClick: () => hostUpdate((r) => { r.status = { ...r.status, spot: spot.value.trim() }; }).then((ok) => ok && toast("Note updated — guests see it within 15 s")) }));
       }
@@ -1317,7 +1334,7 @@
         ]);
       };
       const label = { here: "with the group", late: "running late", onway: "on the way", coming: "no update", home: "heading home" };
-      s.out.forEach((p) => panel.appendChild(row(p, st.phase === "done" ? `not home safe yet (${label[p.status]})` : label[p.status])));
+      s.out.forEach((p) => panel.appendChild(row(p, st.phase === "done" ? `not home safe yet (last update: ${label[p.status]})` : label[p.status])));
       s.headingHome.forEach((p) => panel.appendChild(row(p, "heading home")));
       panel.appendChild(el("div", { class: "note", text: `Home safe ✓: ${names(safe)}` }));
       const waiting = s.out.length + s.headingHome.length + (orgSafe ? 0 : 1);
@@ -1457,7 +1474,7 @@
     card.appendChild(el("h2", { text: `Hi ${me.name}` }));
     card.appendChild(el("div", { class: "muted", text: line }));
     if (me.stepFree && me.status !== "out" && st.phase !== "done") {
-      const unsure = sched.filter((x) => x.stepFree !== "yes").map((x) => x.name);
+      const unsure = sched.filter((x) => x.stepFree !== "yes").map((x) => `${x.name}${x.stepFree === "limited" ? " (limited)" : x.stepFree === "no" ? " (not step-free)" : ""}`);
       card.appendChild(el("div", { class: "note", id: "meAccess",
         text: `♿ ${rec.organizer || "The organiser"} can see you need step-free access.` +
           (unsure.length ? ` Not confirmed step-free: ${unsure.join(", ")}.` : " Every stop is listed as step-free.") }));
@@ -1506,7 +1523,7 @@
           info.appendChild(el("div", { class: "note", id: "untilNote", text: `⏱ You said until ${me.until} — that's about the end of ${lastMine.name}.` }));
         }
       }
-      if (rec.organizerPhone) {
+      if (rec.organizerPhone && !nudged) {
         info.appendChild(el("a", { class: "btn ghost sm", href: telHref(rec.organizerPhone), text: `📞 Call ${rec.organizer || "the organiser"}` }));
       }
       if (st.phase === "done" && rec.organizerStatus === "safe") {
@@ -1545,7 +1562,7 @@
       if (withGroup) bar.push(el("button", { class: "btn", id: "meHome", text: "🏠 Heading home", onClick: () => set("home", "Get home safe — tap Home safe when you're in") }));
       guestbar = el("div", { class: "guestbar" }, bar);
     }
-    if (going && (leaving || st.phase === "done")) {
+    if (going && (leaving || st.phase === "done") && !nudged) {
       card.appendChild(el("div", { class: "btns" }, [
         el("button", { class: "btn", id: "meSafe", text: me.status === "safe" ? "Home safe ✓" : "✅ I'm home safe", disabled: me.status === "safe", onClick: () => set("safe", "Thanks — the organiser can see you're home") }),
       ]));
