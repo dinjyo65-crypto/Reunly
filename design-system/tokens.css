@@ -19,6 +19,7 @@
   --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
   --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-12: 48px; --space-16: 64px;
 
+  --text-2xs: 0.6875rem; /* 11px: Ember's tracked capitals (eyebrows, labels) */
   --text-xs: 0.75rem;  --text-sm: 0.875rem; --text-base: 1rem;   --text-lg: 1.125rem;
   --text-xl: 1.25rem;  --text-2xl: 1.5rem;  --text-3xl: 1.875rem; --text-4xl: 2.25rem; --text-5xl: 3rem;
   --font-regular: 400; --font-medium: 500; --font-semibold: 600; --font-bold: 700;
@@ -27,6 +28,7 @@
   --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px; --radius-xl: 12px; --radius-2xl: 16px; --radius-full: 9999px;
 
   --duration-fast: 100ms; --duration-base: 150ms; --duration-slow: 300ms;
+  --duration-phase: 600ms; /* a phase change repaints the app: a slow cross-fade */
   --transition-colors: color var(--duration-base) ease, background-color var(--duration-base) ease, border-color var(--duration-base) ease;
   --transition-base: all var(--duration-base) ease;
 
@@ -34,8 +36,16 @@
   --z-overlay: 300; --z-modal: 400; --z-toast: 500; --z-tooltip: 600;
 
   /* Ember's two signature type styles */
-  --eyebrow-size: 0.62rem; --eyebrow-tracking: 0.22em;
+  --eyebrow-size: var(--text-2xs); --eyebrow-tracking: 0.22em;
   --display-weight: 300;   --display-tracking: 0.015em;
+
+  /* Elevation: one scale, its colour set by the look (--shadow-color). */
+  --shadow-xs: 0 1px 2px var(--shadow-color);
+  --shadow-sm: 0 4px 12px var(--shadow-color);
+  --shadow-md: 0 8px 20px var(--shadow-color);
+  --shadow-lg: 0 12px 32px var(--shadow-color);
+  --shadow-xl: 0 24px 60px var(--shadow-color);
+  --shadow-focus: 0 0 0 3px color-mix(in srgb, var(--color-brand) 35%, transparent);
 
   /* The gold bar: the one dated thing on a screen. Same in every look. */
   --gradient-deadline: linear-gradient(100deg, #5e4a17 0%, #c9922f 46%, #8a6b22 100%);
@@ -53,6 +63,7 @@
 /* ---- Looks ---- */
 /* Default look: dark (the original Reunly palette). */
 :root {
+  --shadow-color: rgba(0, 0, 0, 0.35);
   --color-bg-page: #080b16;
   --color-bg-subtle: #0c1122;
   --color-bg-glass: rgba(255, 255, 255, 0.045);
@@ -71,9 +82,9 @@
   --color-success: #34d399;
   --color-warning: #fbbf24;
   --color-danger: #fb7185;
-  --radius-card: 18px;
-  --radius-control: 12px;
-  --layout-gap: 14px;
+  --radius-card: var(--radius-2xl);
+  --radius-control: var(--radius-xl);
+  --layout-gap: var(--space-4);
   --layout-max-w: 720px;
   --shadow-card: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
@@ -263,7 +274,9 @@
    active tab and the live dot; destination photos carry the colour. No band
    gradient and no wave: a white top bar with a hairline, and the Now bar
    sits on the paper. Evening turns the paper to ink, same rules. */
+[data-theme="light"] { --shadow-color: rgba(60, 70, 120, 0.14); }
 :root[data-look="ember"] {
+  --shadow-color: rgba(28, 26, 23, 0.08);
   --color-bg-page: #f7f3ec;
   --color-bg-subtle: #fffdf9;
   --color-bg-glass: #fffdf9;
