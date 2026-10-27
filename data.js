@@ -183,6 +183,22 @@ const EVENT_TYPES = [
   "Other",
 ];
 
+/**
+ * What the organiser picks on "What are we getting together for?". A category
+ * decides the event's type and whether its date is fixed: a trip or reunion
+ * collects everyone's free dates and ranks where to go; a birthday or wedding
+ * already has a date and a place, so guests only RSVP. "Other" asks. An evening
+ * out is the pub-crawl planner (prototypes/pub-crawl/).
+ */
+const EVENT_CATEGORIES = [
+  { id: "trip", title: "Trip or reunion", sub: "Everyone's free dates and budget, where to go, vote, lock it.", type: "Holiday / group trip", dates: "flexible", icon: "pin" },
+  { id: "family", title: "Family get-together", sub: "Find the weekend that works for everyone, kids and partners included.", type: "Family gathering", dates: "flexible", icon: "home" },
+  { id: "birthday", title: "Birthday", sub: "Your date and place — RSVPs, plus-ones, who's bringing what.", type: "Birthday", dates: "fixed", icon: "cake" },
+  { id: "wedding", title: "Wedding", sub: "Your date and venue — RSVPs, partners and kids, getting there.", type: "Wedding", dates: "fixed", icon: "rings" },
+  { id: "evening", title: "Evening out", sub: "Work drinks or a pub crawl: a route, who joins where, getting home safe.", href: "prototypes/pub-crawl/", icon: "glass" },
+  { id: "other", title: "Something else", sub: "Tell us whether the date is already set.", type: "Other", dates: "ask", icon: "dots" },
+];
+
 /** Dietary options collected per person and rolled up for the host. */
 const FOOD_OPTIONS = [
   "No preference",
@@ -218,6 +234,7 @@ function defaultPrefs() {
     // never touched the control.
     accommodation: null,
     kids: 0, // number of children attending
+    partner: false, // husband / wife / partner coming too
     accessibility: "", // free-text access needs
     activities: [], // subset of ACTIVITY_OPTIONS
   };
@@ -242,6 +259,9 @@ function makeParticipant(overrides = {}) {
     // their own alternative instead. Set once via the Decide-tab confirm step.
     dateConfirmed: null,
     destConfirmed: null,
+    // Their own "before you go" checklist: { stepId: "done" | "nr" }. It
+    // travels with their answers, so the organiser sees everyone's progress.
+    prep: {},
     // Last-write-wins clock for merging answers back from an invite link.
     updatedAt: 0,
     ...overrides,
@@ -282,6 +302,12 @@ function normalizeParticipant(p) {
   out.dateConfirmed = p && p.dateConfirmed !== undefined ? p.dateConfirmed : null;
   out.destConfirmed = p && p.destConfirmed !== undefined ? p.destConfirmed : null;
   out.updatedAt = (p && p.updatedAt) || 0;
+  out.prefs.partner = !!(p && p.prefs && p.prefs.partner === true);
+  const prep = p && p.prep && typeof p.prep === "object" ? p.prep : {};
+  out.prep = {};
+  Object.keys(prep).slice(0, 40).forEach((k) => {
+    if (prep[k] === "done" || prep[k] === "nr") out.prep[String(k).slice(0, 40)] = prep[k];
+  });
   return out;
 }
 
@@ -378,6 +404,7 @@ window.ReunlyData = {
   currencyForCity,
   cityEmoji,
   EVENT_TYPES,
+  EVENT_CATEGORIES,
   FOOD_OPTIONS,
   ACTIVITY_OPTIONS,
   defaultPrefs,

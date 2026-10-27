@@ -771,7 +771,8 @@
     const startYear = r.start.slice(0, 4);
     const endYear = r.end.slice(0, 4);
     const thisYear = String(new Date().getFullYear());
-    const base = `${formatDay(r.start)} – ${endLabel}`;
+    // One day reads as one day, not "Dec 11 – 11".
+    const base = r.start === r.end ? formatDay(r.start) : `${formatDay(r.start)} – ${endLabel}`;
     if (startYear !== endYear) return `${formatDay(r.start)} ${startYear} – ${formatDay(r.end)} ${endYear}`;
     return startYear === thisYear ? base : `${base}, ${startYear}`;
   }

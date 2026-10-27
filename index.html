@@ -84,18 +84,63 @@
 
     <!-- ============ Screen: Choose path ============ -->
     <section class="screen" id="screen-choose">
-      <div class="card center-card">
-        <div class="section-head"><h2 id="choiceGreeting">What would you like to do?</h2></div>
-        <div class="choice-grid">
-          <button class="btn" id="chooseSetup">Plan a get-together</button>
-          <button class="btn secondary" id="chooseJoin">Join with an invite code</button>
-        </div>
-        <div id="joinPanel" hidden>
-          <div class="divider"></div>
-          <label for="joinCode">Invitation code</label>
-          <input id="joinCode" type="text" placeholder="e.g. FAM-2026" />
+      <div class="start">
+        <div class="eyebrow" id="choiceGreeting">Hello</div>
+        <h1 class="start-title">What are we getting<br />together for?</h1>
+        <!-- One button per category (data.js EVENT_CATEGORIES), built by app.js. -->
+        <div class="cat-list" id="categoryList"></div>
+        <div class="card join-card">
+          <h2 class="card-eyebrow">Joining someone else's?</h2>
+          <label for="joinCode">Invite code</label>
+          <div class="join-row">
+            <input id="joinCode" type="text" placeholder="e.g. FAM-2026" autocomplete="off" />
+            <button class="btn secondary" id="joinSubmit">Join</button>
+          </div>
           <div class="error" id="joinError"></div>
-          <button class="btn" id="joinSubmit" style="margin-top:12px">Join reunion</button>
+          <p class="field-note">Opening the organiser's link does this for you.</p>
+        </div>
+        <div class="try-row">
+          <span>Just looking? See a sample group work through a plan.</span>
+          <button class="link-btn" id="chooseDemo" type="button">Try it</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ Screen: Set up (after picking a category) ============ -->
+    <section class="screen" id="screen-setup">
+      <div class="start">
+        <button class="link-btn back-link" id="setupBack" type="button">&larr; All event types</button>
+        <div class="eyebrow" id="setupEyebrow">Trip or reunion</div>
+        <h1 class="start-title" id="setupTitle">Name your event</h1>
+        <div class="card">
+          <label for="setupName">Event name</label>
+          <input id="setupName" type="text" autocomplete="off" placeholder="e.g. The Class of '15 Reunion" />
+          <!-- "Something else": is the date already set? -->
+          <div id="setupAsk" hidden>
+            <div class="gl" style="margin-top:14px">Is the date already set?</div>
+            <div class="chip-select" role="group" aria-label="Is the date already set?">
+              <button class="chip-toggle" id="setupFixedYes" type="button" aria-pressed="false">Yes, it's set</button>
+              <button class="chip-toggle" id="setupFixedNo" type="button" aria-pressed="false">No — find a date that suits everyone</button>
+            </div>
+          </div>
+          <!-- Fixed-date events: the organiser's date and place; guests RSVP. -->
+          <div id="setupFixed" hidden>
+            <div class="row">
+              <div>
+                <label for="setupStart">Date</label>
+                <input id="setupStart" type="date" />
+              </div>
+              <div>
+                <label for="setupEnd">Ends <span class="muted">(if more than a day)</span></label>
+                <input id="setupEnd" type="date" />
+              </div>
+            </div>
+            <label for="setupWhere">Where <span class="muted">(town or city)</span></label>
+            <input id="setupWhere" type="text" autocomplete="off" placeholder="Start typing a town or city…" />
+          </div>
+          <div class="error" id="setupError"></div>
+          <button class="btn" id="setupGo" style="margin-top:14px">Create the event</button>
+          <p class="field-note" id="setupNote"></p>
         </div>
       </div>
     </section>
@@ -104,16 +149,13 @@
     <section class="screen" id="screen-dashboard">
       <!-- Event details: set once, so folded away under the band -->
       <details class="card tight event-meta" id="eventMeta">
-        <summary><span id="eventMetaTitle">Event details</span><span class="event-meta-hint">name · type · invite code</span></summary>
-        <div class="row">
-          <div>
-            <label for="reunionName">Event name</label>
-            <input id="reunionName" type="text" placeholder="e.g. The Class of '15 Reunion" />
-          </div>
-          <div>
-            <label for="reunionType">Type</label>
-            <select id="reunionType"></select>
-          </div>
+        <summary><span id="eventMetaTitle">Event details</span><span class="event-meta-hint">name · invite code</span></summary>
+        <label for="reunionName">Event name</label>
+        <input id="reunionName" type="text" placeholder="e.g. The Class of '15 Reunion" />
+        <!-- Set by the category chosen on Get started; kept for older events. -->
+        <div hidden>
+          <label for="reunionType">Type</label>
+          <select id="reunionType"></select>
         </div>
         <div class="pcard-summary" style="margin-top:10px">
           <span class="chip" id="inviteChip">Invite code: —</span>
@@ -231,19 +273,23 @@
 
   <!-- ============ Invite modal ============ -->
   <div id="inviteModal" class="modal" role="dialog" aria-modal="true" aria-label="Invite people" hidden>
-    <div class="modal-card">
+    <div class="modal-card sheet">
+      <div class="sheet-grip" aria-hidden="true"></div>
       <div class="modal-head">
-        <h2 id="inviteTitle">Invite people</h2>
+        <div>
+          <div class="eyebrow" id="inviteEyebrow">Bring everyone in</div>
+          <h2 id="inviteTitle">Invite people</h2>
+        </div>
         <button class="icon-btn" id="inviteClose" aria-label="Close">✕</button>
       </div>
       <p class="muted" id="inviteIntro" style="font-size:.8rem;margin:0 0 12px">
         Share one link — everyone adds their dates &amp; preferences. Nothing to install.
       </p>
       <div class="invite-grid">
-        <a class="invite-opt" id="inviteWhatsApp" target="_blank" rel="noopener noreferrer"><span>💬</span>WhatsApp</a>
-        <a class="invite-opt" id="inviteSms"><span>📱</span>SMS</a>
-        <a class="invite-opt" id="inviteEmail"><span>✉️</span>Email</a>
-        <button class="invite-opt" id="inviteCopy"><span>🔗</span>Copy link</button>
+        <a class="invite-opt" id="inviteWhatsApp" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+        <a class="invite-opt" id="inviteSms">Text message</a>
+        <a class="invite-opt" id="inviteEmail">Email</a>
+        <button class="invite-opt primary" id="inviteCopy">Copy link</button>
       </div>
       <label for="inviteLink" id="inviteLinkLabel" style="margin-top:14px">Your invite link</label>
       <input id="inviteLink" type="text" readonly />

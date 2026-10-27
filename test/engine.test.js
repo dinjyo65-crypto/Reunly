@@ -1491,3 +1491,9 @@ test("only people who are coming get a vote", () => {
   assert.strictEqual(t.eligible, 3);
   assert.deepStrictEqual(t.counts, { rome: 2, lisbon: 1 });
 });
+
+test("a one-day range reads as one day", () => {
+  const y = new Date().getFullYear();
+  assert.strictEqual(E.rangeLabel({ start: `${y}-12-11`, end: `${y}-12-11` }), "Dec 11");
+  assert.strictEqual(E.rangeLabel({ start: `${y}-12-11`, end: `${y}-12-13` }), "Dec 11 – 13");
+});

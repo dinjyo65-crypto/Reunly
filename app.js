@@ -22,7 +22,10 @@
   // ---- App state (persisted to localStorage; see saveState/peekSavedState) ----
   const state = {
     user: null, // {name, email, city}
-    reunion: { name: "", type: "Friends meetup", code: "—" },
+    // category: data.js EVENT_CATEGORIES id; fixed: the organiser set the
+    // date and place (guests only RSVP); invitedAt: when the organiser first
+    // opened the invite sheet — before that there are no replies to gather.
+    reunion: { name: "", type: "Friends meetup", code: "—", category: "", fixed: false, invitedAt: 0 },
     participants: [], // starts empty — the organizer is added on entry
     me: null, // participant id of the current user
     role: null, // "organizer" | "participant"
@@ -414,6 +417,8 @@
       nt: notifyToken(),
       name: state.reunion.name,
       type: state.reunion.type,
+      cat: state.reunion.category || "",
+      fx: state.reunion.fixed ? 1 : 0,
       // Who's asking: a guest landing on the link sees "Sam invited you" and
       // sends their answers back "to Sam", not to a faceless "organiser".
       on: state.reunion.organizer || "",
@@ -463,6 +468,8 @@
       p: state.participants.map((p) => ({
         id: p.id, n: p.name, c: p.city, d: p.dates, x: p.destinations,
         pr: p.prefs, rsvp: p.rsvp, dc: p.dateConfirmed, xc: p.destConfirmed,
+        // Their own checklist, so the organiser sees everyone's progress.
+        pp: p.prep || {},
         // Last-write-wins clock so a returning link can update someone's
         // answers without a newer local edit being overwritten by a stale one.
         ts: p.updatedAt || 0,
@@ -513,6 +520,8 @@
       nt: str(data.nt, 64),
       name: str(data.name, 120),
       type: str(data.type, 60),
+      cat: str(data.cat, 20),
+      fx: data.fx === 1 ? 1 : 0,
       on: str(data.on, 60),
       p: data.p.slice(0, MAX_PEOPLE).map((x) => {
         const src = x && typeof x === "object" ? x : {};
@@ -540,12 +549,19 @@
                 ? false
                 : null,
             kids: Math.max(0, Math.min(20, parseInt(pr.kids, 10) || 0)),
+            partner: pr.partner === true,
             accessibility: str(pr.accessibility, 200),
             activities: Array.isArray(pr.activities)
               ? pr.activities.slice(0, 20).map((a) => str(a, 40)).filter(Boolean)
               : [],
           },
           rsvp: ["in", "out", "no_response"].includes(src.rsvp) ? src.rsvp : "no_response",
+          pp: Object.fromEntries(
+            Object.entries(src.pp && typeof src.pp === "object" ? src.pp : {})
+              .slice(0, 40)
+              .filter(([, v]) => v === "done" || v === "nr")
+              .map(([k, v]) => [str(k, 40), v])
+          ),
           dc: src.dc === true || src.dc === false ? src.dc : null,
           xc: src.xc === true || src.xc === false ? src.xc : null,
           // Clamp the clock. updatedAt is only ever written as Date.now(), so
@@ -676,7 +692,7 @@
   function participantFromPayload(x) {
     return D.normalizeParticipant({
       id: x.id, name: x.n, email: x.e || "", city: x.c, dates: x.d,
-      destinations: x.x, prefs: x.pr, rsvp: x.rsvp,
+      destinations: x.x, prefs: x.pr, rsvp: x.rsvp, prep: x.pp || {},
       dateConfirmed: x.dc, destConfirmed: x.xc, updatedAt: x.ts || 0,
     });
   }
@@ -689,6 +705,9 @@
       // notifications for this group.
       notifyToken: data.nt || "",
       organizer: data.on || "",
+      category: data.cat || "",
+      fixed: data.fx === 1,
+      invitedAt: 0,
     };
     state.participants = data.p.map(participantFromPayload);
     if (data.locked) state.lockedPlan = data.locked;
@@ -854,6 +873,18 @@
     const guest = state.role !== "organizer";
     const to = state.reunion.organizer || "the organiser";
     $("#inviteTitle").textContent = guest ? `Send your answers to ${to}` : "Invite people";
+    $("#inviteEyebrow").textContent = guest ? "One last step" : "Bring everyone in";
+    if (guest) {
+      // Opening the sheet is as close to "sent" as we can know.
+      state.reunion.answersSentAt = Date.now();
+      saveState();
+      renderNowBar();
+    }
+    if (!guest && !state.reunion.invitedAt) {
+      state.reunion.invitedAt = Date.now();
+      saveState();
+      renderNowBar();
+    }
     $("#inviteModal").setAttribute("aria-label", $("#inviteTitle").textContent);
     $("#inviteIntro").textContent = guest
       ? `Send ${to} this link. When they open it, your dates and choices are added to the group plan.`
@@ -1310,7 +1341,7 @@
         enterDashboard("join", state.reunion.code);
         return;
       }
-      $("#choiceGreeting").textContent = `Hi ${name.split(" ")[0]} — what next?`;
+      $("#choiceGreeting").textContent = `Hello, ${name.split(" ")[0]}`;
       showScreen("choose");
     });
   }
@@ -1393,10 +1424,136 @@
     renderAll();
   }
 
+  // ---- Get started: a few categories; each opens Set up (or the evening planner)
+  const CATEGORY_ICONS = {
+    pin: '<circle cx="12" cy="10" r="3"/><path d="M12 21s7-6.2 7-11a7 7 0 10-14 0c0 4.8 7 11 7 11z"/>',
+    home: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>',
+    cake: '<path d="M4 20h16v-7a2 2 0 00-2-2H6a2 2 0 00-2 2z"/><path d="M4 15c2 1.5 4 1.5 6 0s4-1.5 6 0 3 1 4 .5"/><path d="M12 11V7"/><path d="M12 7c-1-1-1-2 0-3 1 1 1 2 0 3z"/>',
+    rings: '<circle cx="9" cy="14" r="5"/><circle cx="15" cy="14" r="5"/><path d="M10 5l2-2 2 2"/>',
+    glass: '<path d="M8 3h8l-1 7a3 3 0 01-6 0z"/><path d="M12 13v8M8 21h8"/>',
+    dots: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  };
+  function categoryIcon(name) {
+    // Static, trusted markup (the table above) — never data.
+    const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    s.setAttribute("viewBox", "0 0 24 24");
+    s.setAttribute("aria-hidden", "true");
+    s.innerHTML = CATEGORY_ICONS[name] || CATEGORY_ICONS.dots;
+    return s;
+  }
+  function renderCategories() {
+    const list = $("#categoryList");
+    if (!list) return;
+    list.textContent = "";
+    D.EVENT_CATEGORIES.forEach((c) => {
+      const b = el("button", { class: "cat-btn", type: "button", id: `cat-${c.id}`, onClick: () => pickCategory(c) });
+      const ic = el("span", { class: "cat-icon" });
+      ic.appendChild(categoryIcon(c.icon));
+      b.appendChild(ic);
+      const txt = el("span", { class: "cat-text" });
+      txt.appendChild(el("span", { class: "cat-title", text: c.title }));
+      txt.appendChild(el("span", { class: "cat-sub", text: c.sub }));
+      b.appendChild(txt);
+      list.appendChild(b);
+    });
+  }
+  let setupCat = null;
+  let setupFixed = false;
+  let setupWherePick = null;
+  function pickCategory(c) {
+    if (c.href) {
+      location.href = c.href; // the evening planner is its own page for now
+      return;
+    }
+    setupCat = c;
+    setupFixed = c.dates === "fixed";
+    $("#setupEyebrow").textContent = c.title;
+    $("#setupTitle").innerHTML = setupFixed ? "Name it and<br />set the date" : "Name your event";
+    $("#setupName").value = "";
+    $("#setupName").placeholder =
+      c.id === "birthday" ? "e.g. Priya's 40th" : c.id === "wedding" ? "e.g. Sam & Alex's wedding"
+      : c.id === "family" ? "e.g. Summer at Grandma's" : "e.g. The Class of '15 Reunion";
+    $("#setupAsk").hidden = c.dates !== "ask";
+    ["#setupFixedYes", "#setupFixedNo"].forEach((id) => {
+      $(id).classList.remove("on");
+      $(id).setAttribute("aria-pressed", "false");
+    });
+    $("#setupFixed").hidden = !setupFixed;
+    $("#setupError").textContent = "";
+    $("#setupNote").textContent = setupFixed
+      ? "Guests will see your date and place and just say if they're coming — with partners and kids."
+      : "Next: add when you're free and where you'd like to go, then invite the group.";
+    showScreen("setup");
+    $("#setupName").focus();
+  }
+  function setAsk(fixed) {
+    setupFixed = fixed;
+    $("#setupFixedYes").classList.toggle("on", fixed);
+    $("#setupFixedYes").setAttribute("aria-pressed", fixed ? "true" : "false");
+    $("#setupFixedNo").classList.toggle("on", !fixed);
+    $("#setupFixedNo").setAttribute("aria-pressed", fixed ? "false" : "true");
+    $("#setupFixed").hidden = !fixed;
+    $("#setupTitle").innerHTML = fixed ? "Name it and<br />set the date" : "Name your event";
+  }
+  function createFromSetup() {
+    const c = setupCat || D.EVENT_CATEGORIES[0];
+    const err = $("#setupError");
+    const name = $("#setupName").value.trim();
+    if (c.dates === "ask" && $("#setupAsk").hidden === false
+        && !$("#setupFixedYes").classList.contains("on") && !$("#setupFixedNo").classList.contains("on")) {
+      err.textContent = "Say whether the date is already set.";
+      return;
+    }
+    let plan = null;
+    if (setupFixed) {
+      const start = $("#setupStart").value;
+      const end = $("#setupEnd").value || start;
+      const where = (setupWherePick && setupWherePick.label) || $("#setupWhere").value.trim();
+      if (!start) return (err.textContent = "Pick the date.");
+      if (end < start) return (err.textContent = "The end can't be before the start.");
+      if (!where) return (err.textContent = "Say where it is — a town or city is enough.");
+      plan = { destination: where, dateStart: start, dateEnd: end, dateLabel: E.rangeLabel({ start, end }) };
+    }
+    err.textContent = "";
+    state.reunion.name = name || (c.id === "trip" ? "Untitled get-together" : c.title);
+    state.reunion.type = c.type;
+    state.reunion.category = c.id;
+    state.reunion.fixed = !!plan;
+    state.reunion.invitedAt = 0;
+    enterDashboard("setup");
+    if (plan) {
+      // A fixed event is agreed from the start: the organiser's own answers
+      // are the plan, and guests only say whether they're coming.
+      const me = state.participants.find(isMe);
+      if (me) {
+        me.dates = [{ start: plan.dateStart, end: plan.dateEnd }];
+        me.destinations = [plan.destination];
+        touchParticipant(me);
+      }
+      applyLock(plan);
+      state.editingId = null;
+      renderAll();
+    }
+  }
+
   function wireChoose() {
-    $("#chooseSetup").addEventListener("click", () => enterDashboard("setup"));
-    $("#chooseJoin").addEventListener("click", () => {
-      $("#joinPanel").hidden = !$("#joinPanel").hidden;
+    renderCategories();
+    $("#setupBack").addEventListener("click", () => showScreen("choose"));
+    $("#setupFixedYes").addEventListener("click", () => setAsk(true));
+    $("#setupFixedNo").addEventListener("click", () => setAsk(false));
+    $("#setupGo").addEventListener("click", createFromSetup);
+    attachAutocomplete($("#setupWhere"), (label, s) => { setupWherePick = s; }, { kind: "city" });
+    $("#setupWhere").addEventListener("input", () => {
+      if (setupWherePick && $("#setupWhere").value !== setupWherePick.label) setupWherePick = null;
+    });
+    $("#chooseDemo").addEventListener("click", () => {
+      state.reunion.name = "Sample group";
+      state.reunion.type = "Holiday / group trip";
+      state.reunion.category = "trip";
+      state.reunion.fixed = false;
+      enterDashboard("setup");
+      state.editingId = null;
+      loadDemo();
     });
     $("#joinSubmit").addEventListener("click", () => {
       const code = $("#joinCode").value.trim();
@@ -1461,12 +1618,39 @@
         });
       wrap.appendChild(mk("in", isMe(p) ? "✓ I'm in" : "✓ In"));
       wrap.appendChild(mk("out", isMe(p) ? "Can't make it" : "Out"));
+      const nb = isMe(p) ? null : nudgeButton(p);
+      if (nb) wrap.appendChild(nb);
     } else {
       const label =
-        p.rsvp === "in" ? "✓ Going" : p.rsvp === "out" ? "✗ Can't make it" : "… No reply yet";
+        p.rsvp === "in" ? "✓ Going" : p.rsvp === "out" ? "✗ Can't make it" : "Awaiting response";
       wrap.appendChild(el("span", { class: `rsvp-status ${p.rsvp}`, text: label }));
+      const nb = nudgeButton(p);
+      if (nb) wrap.appendChild(nb);
     }
     return wrap;
+  }
+
+  /** Everyone can see who hasn't answered; only the organiser chases them. */
+  function nudgeButton(p) {
+    if (p.rsvp !== "no_response" || state.role !== "organizer" || String(p.id).startsWith("p_seed_")) return null;
+    return el("button", {
+      class: "btn secondary sm nudge-btn", type: "button", text: "Nudge",
+      "aria-label": `Nudge ${p.name || "them"} to reply`,
+      onClick: () => nudge(`Hi ${(p.name || "").split(" ")[0] || "there"} — could you add your answers for ${state.reunion.name || "our get-together"}? It takes a minute: ${buildShareUrl()}`),
+    });
+  }
+
+  /** One person's party: them, their partner if coming, and any kids. */
+  function partySize(prefs) {
+    return 1 + (prefs && prefs.partner === true ? 1 : 0) + Math.max(0, parseInt((prefs && prefs.kids) || 0, 10) || 0);
+  }
+  /** Ask someone to do something, through whatever the phone shares with. */
+  function nudge(text) {
+    if (navigator.share) {
+      navigator.share({ text }).catch(() => {});
+      return;
+    }
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
   }
 
   function chip(emoji, text) {
@@ -1501,10 +1685,19 @@
     idGroup.appendChild(cityInput(p));
     wrap.appendChild(idGroup);
 
-    // Availability — one row to start, add as many as you like (best first).
-    wrap.appendChild(buildDatesGroup(p));
-    // Destinations — same flexible pattern, with live suggestions.
-    wrap.appendChild(buildDestGroup(p));
+    if (state.reunion.fixed && state.lockedPlan) {
+      // A fixed event: the date and place are the organiser's; nothing to rank.
+      const g = el("div", { class: "field-group" });
+      g.appendChild(el("div", { class: "gl", text: "The date and place" }));
+      g.appendChild(el("div", { class: "fixed-plan", text: `${state.lockedPlan.dateLabel} · ${state.lockedPlan.destination}` }));
+      g.appendChild(el("div", { class: "field-note", text: `Set by ${state.reunion.organizer || "the organiser"} — just say below if you're coming, and who with.` }));
+      wrap.appendChild(g);
+    } else {
+      // Availability — one date range to start, add more as you like (best first).
+      wrap.appendChild(buildDatesGroup(p));
+      // Destinations — same flexible pattern, with live suggestions.
+      wrap.appendChild(buildDestGroup(p));
+    }
 
     // Preferences (the broader "how should we meet" answers)
     wrap.appendChild(buildPrefsGroup(p));
@@ -1570,8 +1763,8 @@
   // Flexible availability rows (add/remove; top = best).
   function buildDatesGroup(p) {
     const g = el("div", { class: "field-group" });
-    g.appendChild(el("div", { class: "gl", text: "When can you make it?" }));
-    g.appendChild(el("div", { class: "field-note", text: "Add your best dates first — as many as you like." }));
+    g.appendChild(el("div", { class: "gl", text: "When are you free?" }));
+    g.appendChild(el("div", { class: "field-note", text: "Add a date range — your best one first. Add more ranges if you have them." }));
     p.dates.forEach((d, i) => {
       const r = el("div", { class: "rank-row" });
       r.appendChild(el("span", { class: "badge rank", text: ordinal(i) }));
@@ -1593,7 +1786,7 @@
     });
     g.appendChild(
       el("button", {
-        class: "btn ghost sm add-row", text: "+ Add another date",
+        class: "btn ghost sm add-row", text: "+ Add another date range",
         onClick: () => {
           p.dates.push({ start: "", end: "" });
           renderAll();
@@ -1711,6 +1904,19 @@
       })
     );
     row2.appendChild(kWrap);
+    // Partner: counted as one more in the party (stay, seats, head count).
+    const ptWrap = el("div");
+    ptWrap.appendChild(el("label", { text: "Partner" }));
+    const ptToggle = el("label", { class: "check-row" });
+    const ptCb = el("input", { type: "checkbox", id: `partner-${p.id}` });
+    ptCb.checked = pr.partner === true;
+    ptCb.addEventListener("change", (e) => { pr.partner = e.target.checked; scheduleRecompute(p); });
+    ptToggle.appendChild(ptCb);
+    ptToggle.appendChild(el("span", { text: "Husband / wife / partner coming" }));
+    ptWrap.appendChild(ptToggle);
+    row2.appendChild(ptWrap);
+    group.appendChild(row2);
+    const row3 = el("div", { class: "row" });
     // Accommodation. Phrased as an opt-OUT so the safe assumption (they need a
     // bed, and lodging is budgeted for them) is what happens when nobody
     // touches this — under-stating someone's cost is the harmful direction.
@@ -1726,8 +1932,8 @@
     toggle.appendChild(cb);
     toggle.appendChild(el("span", { text: "I'm sorted — don't budget a stay for me" }));
     aWrap.appendChild(toggle);
-    row2.appendChild(aWrap);
-    group.appendChild(row2);
+    row3.appendChild(aWrap);
+    group.appendChild(row3);
 
     // Accessibility
     const accWrap = el("div", { class: "field-group" });
@@ -2220,6 +2426,9 @@
   }
   function needsConfirmStep(p) {
     if (!p) return false;
+    // A fixed-date event's date and place aren't up for a vote: guests just
+    // say if they're coming (and who with) on their own card.
+    if (state.reunion.fixed) return false;
     // Someone who proposed other dates/places before the lock is still
     // undecided once the plan is fixed — and nothing ever asked them again, so
     // they sat at "no reply" for good. On a locked plan, ask "are you in?".
@@ -2829,7 +3038,7 @@
     // "$100–$155 · estimated" per head while the model charged $104 for the car,
     // and a searched fare carried real-fare authority over a number the cost
     // model discards. The band is right for a flight; for a drive it isn't.
-    const party = 1 + Math.max(0, parseInt((p.prefs && p.prefs.kids) || 0, 10) || 0);
+    const party = partySize(p.prefs);
     const legMiles = E.milesBetween(p.city, toCity, fareProvider);
     const leg =
       legMiles == null || fare.min === 0
@@ -2925,7 +3134,7 @@
       // Great-circle air time also isn't the journey, so say which is which.
       if (info.miles > 0) {
         const fare = fareProvider(p.city, toCity);
-        const party = 1 + Math.max(0, parseInt((p.prefs && p.prefs.kids) || 0, 10) || 0);
+        const party = partySize(p.prefs);
         const mode = fare && fare.min != null
           ? E.chooseTravel(info.miles, (fare.min + fare.max) / 2, party, E.roadProfile(p.city, toCity)).mode
           : "flight";
@@ -2959,6 +3168,42 @@
     return el("a", { href, target: "_blank", rel: "noopener noreferrer", text: label });
   }
 
+  /**
+   * Gold is only ever a date: "book travel by" three weeks before a locked
+   * trip (fares on most routes climb after that), or "square up by" a week
+   * after it while expenses are still open. Nothing else uses the colour.
+   */
+  function deadlineBar() {
+    const plan = state.lockedPlan;
+    if (!plan) return null;
+    const fmt = (d) => d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+    const start = lifecycleDay(plan.dateStart);
+    const end = lifecycleDay(plan.dateEnd) || start;
+    if (!start) return null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let title = "";
+    let sub = "";
+    if (today < start) {
+      const by = new Date(start);
+      by.setDate(by.getDate() - 21);
+      if (by < today) return null;
+      title = `Book travel by ${fmt(by)}`;
+      sub = "Fares on most routes climb in the last three weeks";
+    } else if (today > end && state.expenses.some((x) => !x.settlement)) {
+      const by = new Date(end);
+      by.setDate(by.getDate() + 7);
+      title = `Square up by ${fmt(by)}`;
+      sub = "While everyone still remembers who paid";
+    } else {
+      return null;
+    }
+    const bar = el("div", { class: "goldbar", id: "goldBar", role: "note" });
+    bar.appendChild(el("div", { class: "goldbar-title", text: title }));
+    bar.appendChild(el("div", { class: "goldbar-sub", text: sub }));
+    return bar;
+  }
+
   function renderCosts() {
     const list = $("#costList");
     list.textContent = "";
@@ -2978,6 +3223,9 @@
       ? `Getting to ${D.cityEmoji(groupBest)} ${groupBest}${state.lockedPlan ? "" : " (top pick so far)"}`
       : "Travel costs";
 
+    // The gold bar: the one dated thing on this tab — book by, or square up by.
+    const goldBar = deadlineBar();
+    if (goldBar) list.appendChild(goldBar);
     if (!groupBest) {
       list.appendChild(
         el("div", { class: "empty", text: "Add destinations on People to see travel costs." })
@@ -3604,7 +3852,10 @@
     const international = E.isInternationalTrip(state.participants, plan.destination);
     const season = E.seasonFactorFor({ start: plan.dateStart, end: plan.dateEnd }, plan.destination);
     const steps = E.prepStepsFor(days, international, { peak: season.lodging > 1 });
-    const outstanding = steps.filter((st) => !flagOn(state.prepDone, st.id));
+    // Everyone ticks their own list; "NR" = not required for them.
+    const me = state.participants.find(isMe);
+    const mark = (p, id) => (p && p.prep && p.prep[id]) || "";
+    const outstanding = steps.filter((st) => !mark(me, st.id));
 
     const card = el("div", { class: "card toolkit stagger" });
     const head = el("div", { class: "itin-head" });
@@ -3619,31 +3870,38 @@
       el("div", {
         class: "itin-sub",
         text: outstanding.length
-          ? `${outstanding.length} of ${steps.length} still to do. Lead times are typical, not rules — check the ones that apply to you.`
-          : "Everything on the list is ticked off.",
+          ? `${outstanding.length} of ${steps.length} still to do. Tick what you've done, or NR if it doesn't apply to you. Lead times are typical, not rules.`
+          : "All done — everything is ticked or not needed.",
       })
     );
 
+    const setMine = (id, val) => {
+      if (!me) return;
+      me.prep = { ...(me.prep || {}) };
+      if (val) me.prep[id] = val;
+      else delete me.prep[id];
+      touchParticipant(me);
+      saveState();
+      renderPlan();
+    };
     steps.forEach((st) => {
-      const isDone = flagOn(state.prepDone, st.id);
-      const row = el("div", { class: `prep-row${isDone ? " done" : ""}` });
+      const m = mark(me, st.id);
+      const isDone = m === "done";
+      const isNr = m === "nr";
+      const row = el("div", { class: `prep-row${isDone ? " done" : ""}${isNr ? " nr" : ""}` });
       const box = el("button", {
         type: "button",
         class: `prep-check${isDone ? " on" : ""}`,
         "aria-pressed": isDone ? "true" : "false",
         "aria-label": `${isDone ? "Undo" : "Mark done"}: ${st.title}`,
         text: isDone ? "✓" : "",
-        onClick: () => {
-          setFlag("prepDone", st.id, !isDone);
-          saveState();
-          renderPlan();
-        },
+        onClick: () => setMine(st.id, isDone ? "" : "done"),
       });
       row.appendChild(box);
       const body = el("div", { class: "prep-body" });
       const title = el("div", { class: "prep-title" });
       title.appendChild(el("span", { text: st.title }));
-      if (!isDone && st.urgency !== "later") {
+      if (!m && st.urgency !== "later") {
         title.appendChild(
           el("span", {
             class: `badge ${st.urgency === "overdue" ? "warn" : ""}`,
@@ -3657,8 +3915,44 @@
       body.appendChild(title);
       body.appendChild(el("div", { class: "prep-detail", text: st.detail }));
       row.appendChild(body);
+      row.appendChild(el("button", {
+        type: "button",
+        class: `prep-nr${isNr ? " on" : ""}`,
+        "aria-pressed": isNr ? "true" : "false",
+        "aria-label": `${isNr ? "Undo not required" : "Not required for me"}: ${st.title}`,
+        title: "Not required for me",
+        text: "NR",
+        onClick: () => setMine(st.id, isNr ? "" : "nr"),
+      }));
       card.appendChild(row);
     });
+
+    // Everyone's progress — the organiser's view, to know whom to nudge.
+    const going = state.participants.filter((p) => p.rsvp !== "out");
+    if (state.role === "organizer" && going.length > 1) {
+      card.appendChild(el("div", { class: "prep-sub", text: "Everyone's progress" }));
+      steps.forEach((st) => {
+        const done = going.filter((p) => mark(p, st.id) === "done").length;
+        const nr = going.filter((p) => mark(p, st.id) === "nr").length;
+        const waiting = going.filter((p) => !mark(p, st.id));
+        const line = el("div", { class: "prep-progress" });
+        line.appendChild(el("div", { class: "prep-progress-title", text: st.title }));
+        line.appendChild(el("div", {
+          class: "prep-progress-meta",
+          text: `${done} done${nr ? ` · ${nr} not required` : ""}` +
+            (waiting.length ? ` · waiting on ${waiting.map((p) => (p.name || "someone").split(" ")[0]).join(", ")}` : " · everyone's sorted"),
+        }));
+        const others = waiting.filter((p) => !isMe(p));
+        if (others.length) {
+          line.appendChild(el("button", {
+            class: "btn secondary sm nudge-btn", type: "button", text: "Nudge",
+            "aria-label": `Nudge about: ${st.title}`,
+            onClick: () => nudge(`Quick one for ${state.reunion.name || "the trip"}: "${st.title}" — tick it off (or mark it not needed) in Reunly: ${buildShareUrl()}`),
+          }));
+        }
+        card.appendChild(line);
+      });
+    }
 
     // Who has actually booked. The single question an organiser is asked most
     // and the one the app could never answer.
@@ -4628,6 +4922,46 @@
     const total = people.length;
     const plan = state.lockedPlan;
 
+    // A guest's answers live on their phone until they send them. Whatever the
+    // phase, unsent changes (a reply, an RSVP, a ticked checklist item) come
+    // first — on a fixed-date event there was otherwise no prompt at all.
+    if (!organiser) {
+      const me = people.find(isMe);
+      const answered = me && (hasResponded(me) || me.rsvp !== "no_response" || Object.keys(me.prep || {}).length > 0);
+      const unsent = answered && (me.updatedAt || 0) > (state.reunion.answersSentAt || 0);
+      const to = state.reunion.organizer || "the organiser";
+      if (unsent && !["evening", "after"].includes(currentPhase())) {
+        return {
+          eyebrow: state.reunion.answersSentAt ? "Changed since you sent them" : "One last step",
+          headline: "Your answers are only on this device",
+          sub: `They don't reach ${to} until you send them`,
+          action: { label: "Send my answers", run: openInviteModal },
+        };
+      }
+    }
+
+    // Nothing to gather before anyone is invited: the organiser's next move is
+    // their own answers (a flexible event), then the invite.
+    if (organiser && !state.demoMode && !state.reunion.invitedAt && people.filter((p) => !isMe(p)).length === 0) {
+      const me = people.find(isMe);
+      const hasDates = state.reunion.fixed || (me && me.dates.some((d) => E.isValidRange(d)));
+      return hasDates
+        ? {
+            eyebrow: state.reunion.fixed && plan ? `${plan.dateLabel} · ${plan.destination.split(",")[0]}` : "Getting started",
+            headline: state.reunion.fixed ? "Invite your guests" : "Now invite the group",
+            sub: state.reunion.fixed
+              ? "They'll see your date and place and say if they're coming — partners and kids too."
+              : "Everyone adds their free dates and budget; we rank the options.",
+            action: { label: "Invite people", run: openInviteModal },
+          }
+        : {
+            eyebrow: "Getting started",
+            headline: "Add your dates, then invite the group",
+            sub: "Your free date ranges and where you'd like to go come first.",
+            action: { label: "Start with your dates", run: goEditMine },
+          };
+    }
+
     switch (currentPhase()) {
       case "gathering": {
         if (!organiser) {
@@ -4638,9 +4972,9 @@
           return answered
             ? {
                 eyebrow: "Gathering replies",
-                headline: "Your answers are only on this device",
-                sub: "They don't reach the organiser until you send them",
-                action: { label: "Send my answers", run: openInviteModal },
+                headline: `Your answers are with ${state.reunion.organizer || "the organiser"}`,
+                sub: "Change anything and we'll ask you to send it again",
+                action: { label: "Send again", run: openInviteModal },
               }
             : {
                 eyebrow: "Gathering replies",
@@ -4650,6 +4984,15 @@
         }
         const replied = people.filter(hasResponded).length;
         const waiting = total - replied;
+        if (!people.some((p) => !isMe(p))) {
+          // Invited, but nobody's answers have come back yet.
+          return {
+            eyebrow: "Gathering replies",
+            headline: "Waiting for the first reply",
+            sub: "Replies appear here as people send their answers back to you.",
+            action: { label: "Invite more people", run: openInviteModal },
+          };
+        }
         return {
           eyebrow: "Gathering replies",
           headline: waiting === 0 ? `All ${countWord(total)} have replied` : `${countWord(replied)} of ${countWord(total)} have replied`,
@@ -4697,6 +5040,21 @@
           sub: "Book while the fares are still close to what you were quoted",
           days: days == null || days < 1 ? null : { num: days, unit: days === 1 ? "day" : "days" },
           action: { label: "Your costs", run: () => showPhase("costs") },
+        };
+      }
+
+      case "during": {
+        const start = lifecycleDay(plan.dateStart);
+        const end = lifecycleDay(plan.dateEnd) || start;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const n = Math.round((today - start) / 86400000) + 1;
+        const of = Math.round((end - start) / 86400000) + 1;
+        return {
+          eyebrow: `Day ${n} of ${of} · ${plan.dateLabel}`,
+          headline: plan.destination.split(",")[0],
+          sub: "Have a brilliant time — add photos to the memory wall as you go",
+          action: { label: "Today's plan", run: () => showPhase("decide") },
         };
       }
 
@@ -5519,7 +5877,8 @@
       const end = lifecycleDay(plan.dateEnd) || start;
       if (start && end) {
         if (today > end) return "after";
-        if (today >= start) return "evening";
+        // The evening takeover is for a one-day event; a trip is "day N of M".
+        if (today >= start) return end > start ? "during" : "evening";
       }
       return "locked"; // locked but undated, or dates we could not parse
     }
@@ -5532,6 +5891,7 @@
   // Tabs that have nothing to say yet in this phase: dashed, still tappable,
   // so nobody wonders where they went.
   const QUIET_TABS = {
+    during: [],
     gathering: ["costs", "memories"],
     deciding: ["memories"],
     locked: ["memories"],
@@ -5539,7 +5899,7 @@
     after: [],
   };
   // The status bar / browser chrome takes the top of the band.
-  const BAND_TOP = { gathering: "#ffe0c2", deciding: "#ffd3e3", locked: "#ebcef5", evening: "#2e2466", after: "#cbddfa" };
+  const BAND_TOP = { during: "#ebcef5", gathering: "#ffe0c2", deciding: "#ffd3e3", locked: "#ebcef5", evening: "#2e2466", after: "#cbddfa" };
   function syncThemeColor() {
     const meta = $("#themeColor");
     if (!meta) return;
@@ -5556,7 +5916,8 @@
   }
   function applyPhase() {
     const phase = currentPhase();
-    document.documentElement.setAttribute("data-lifecycle", phase);
+    // A trip under way wears the locked palette; only a one-day event goes dark.
+    document.documentElement.setAttribute("data-lifecycle", phase === "during" ? "locked" : phase);
     document.querySelectorAll(".phase-tab").forEach((t) => {
       t.classList.toggle("quiet", (QUIET_TABS[phase] || []).includes(t.getAttribute("data-phase")));
     });
@@ -5652,7 +6013,7 @@
     // drive/fly threshold would draw a plane beside a fare priced as one car.
     const f = fareProvider(fromCity, toCity);
     if (!f || f.min == null) return "flight";
-    const party = 1 + Math.max(0, parseInt((prefs && prefs.kids) || 0, 10) || 0);
+    const party = partySize(prefs);
     // Take the local/walk case from the cost model too, rather than a separate
     // 25-mile literal — someone whose geocoded home city IS the destination was
     // drawn as flying, contradicting a fare card showing zero travel.

@@ -1508,3 +1508,86 @@ html, body, .card, .phase-tab {
   font-size: 0.6rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; border-radius: 5px;
 }
 :root[data-look="ember"] .demo-banner { background: var(--surface-solid); border-color: var(--border-strong); }
+
+/* ===== v0.9 amendments: Get started, Set up, checklist, gold bar, invite sheet ===== */
+.start { max-width: 520px; margin: 0 auto; padding-top: 10px; }
+.eyebrow {
+  font-size: 0.62rem; font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 8px;
+}
+.start-title {
+  margin: 0 0 16px; font-size: 1.6rem; font-weight: 300; letter-spacing: 0.015em;
+  text-transform: uppercase; line-height: 1.16; color: var(--text);
+}
+.cat-list { display: grid; gap: 10px; margin-bottom: 12px; }
+@media (min-width: 640px) { .cat-list { grid-template-columns: 1fr 1fr; } }
+.cat-btn {
+  display: flex; align-items: center; gap: 14px; width: 100%; min-height: 84px;
+  padding: 14px; border-radius: 16px; border: 1px solid var(--border);
+  background: var(--surface-solid); color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+.cat-btn:hover, .cat-btn:focus-visible { border-color: var(--accent); }
+.cat-icon {
+  flex: 0 0 auto; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+  background: var(--accent-soft); color: var(--accent);
+}
+.cat-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.cat-text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.cat-title { font-size: 0.95rem; font-weight: 600; }
+.cat-sub { font-size: 0.74rem; line-height: 1.4; color: var(--text-dim); }
+.card-eyebrow { margin: 0 0 6px; font-size: 0.62rem; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: var(--text-dim); }
+.join-row { display: flex; gap: 8px; }
+.join-row input { flex: 1 1 auto; min-width: 0; }
+.join-row .btn { width: auto; flex: 0 0 auto; }
+.try-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 14px;
+  border: 1px dashed var(--border-strong); font-size: 0.8rem; color: var(--text-dim);
+}
+.try-row span { flex: 1 1 auto; }
+.try-row .link-btn { min-height: 44px; text-decoration: none; }
+.back-link { min-height: 44px; margin-bottom: 4px; text-decoration: none; color: var(--text-dim); }
+.fixed-plan { font-size: 0.95rem; font-weight: 600; margin-top: 4px; }
+
+/* Checklist: everyone's own, with "not required" */
+.prep-row.nr { opacity: 0.55; }
+.prep-row.nr .prep-title { text-decoration: line-through; }
+.prep-body { flex: 1 1 auto; min-width: 0; }
+.prep-nr {
+  flex: 0 0 auto; min-width: 44px; min-height: 32px; padding: 0 8px; border-radius: 8px;
+  border: 1px solid var(--border-strong); background: transparent; color: var(--text-dim);
+  font: inherit; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.06em; cursor: pointer;
+}
+.prep-nr.on { background: var(--surface-2); color: var(--text); border-color: var(--text-dim); }
+.prep-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+.prep-progress-title { flex: 1 1 100%; font-size: 0.82rem; font-weight: 600; }
+.prep-progress-meta { flex: 1 1 auto; font-size: 0.74rem; color: var(--text-dim); }
+.nudge-btn { width: auto; min-height: 44px; }
+
+/* The gold bar: the one dated thing on the screen. */
+.goldbar {
+  border-radius: 12px; padding: 12px 14px; margin-bottom: 12px;
+  background: linear-gradient(100deg, #5e4a17 0%, #c9922f 46%, #8a6b22 100%);
+}
+.goldbar-title { font-size: 0.84rem; font-weight: 700; color: #fff9eb; }
+.goldbar-sub { font-size: 0.72rem; color: #f3e3c2; margin-top: 2px; }
+
+/* Invite: a bottom sheet on phones */
+.sheet-grip { display: none; }
+.modal-head .eyebrow { margin-bottom: 4px; }
+:root[data-look="ember"] #inviteTitle { font-weight: 300; text-transform: uppercase; letter-spacing: 0.015em; font-size: 1.25rem; line-height: 1.15; }
+.invite-opt.primary { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink, var(--accent)); }
+@media (max-width: 640px) {
+  #inviteModal { place-items: end stretch; padding: 0; }
+  #inviteModal .modal-card.sheet {
+    max-width: none; border-radius: 22px 22px 0 0; border-bottom: none;
+    padding: 10px 18px calc(22px + var(--safe-b));
+  }
+  .sheet-grip { display: block; width: 40px; height: 4px; border-radius: 999px; background: var(--border-strong); margin: 0 auto 12px; }
+}
+
+/* Welcome (Ember): the hero headline in wide light capitals, one accent */
+:root[data-look="ember"] .hero-title { font-weight: 300; text-transform: uppercase; letter-spacing: 0.04em; line-height: 1.1; }
+:root[data-look="ember"] .hero-title .grad { background: none; -webkit-background-clip: border-box; background-clip: border-box; color: var(--accent); }
+:root[data-look="ember"] .hero-badge { background: var(--accent-soft); color: var(--accent-ink); border-color: transparent; }
+:root[data-look="ember"] .hero-video { border-radius: 16px; overflow: hidden; }
