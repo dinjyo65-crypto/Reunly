@@ -535,7 +535,7 @@ a:focus-visible {
    Two layers, deliberately separate:
      1. The hue tokens below are always applied, but nothing in this stylesheet
         consumes them yet, so adding this changes nothing on screen.
-     2. The surface tints are gated behind data-surface-tint="on". Turn that on
+     2. The surface tints apply only to the Deeper look (data-look="deeper"). Turn that on
         once the header band, duotone hero and Now bar exist; until then the app
         keeps its current ground and only the new tokens are available to build
         against.
@@ -584,53 +584,53 @@ a:focus-visible {
   --phase-band: linear-gradient(125deg, #cbddfa, #cfe6e8 50%, #cfe7d6);
 }
 
-/* Layer 2 — surfaces. Nothing below applies until data-surface-tint="on". */
-:root[data-surface-tint="on"][data-lifecycle] {
+/* Layer 2 — surfaces, for the Deeper look only (data-look="deeper"). */
+:root[data-look="deeper"][data-lifecycle] {
   --accent: var(--phase-ink-dark);
   --grad: var(--phase-action);
   --accent-soft: color-mix(in srgb, var(--phase-a) 16%, transparent);
 }
-:root[data-theme="light"][data-surface-tint="on"][data-lifecycle] {
+:root[data-theme="light"][data-look="deeper"][data-lifecycle] {
   --accent: var(--phase-ink);
 }
 
-:root[data-theme="light"][data-surface-tint="on"][data-lifecycle="gathering"] {
+:root[data-theme="light"][data-look="deeper"][data-lifecycle="gathering"] {
   --bg: #fcf0e6; --bg-2: #fff8f1; --surface-solid: #fff8f1;
   --border: #f3dac8; --border-strong: #e6c4ac;
   --text: #1c1a17; --text-dim: #74594a;
 }
-:root[data-theme="light"][data-surface-tint="on"][data-lifecycle="deciding"] {
+:root[data-theme="light"][data-look="deeper"][data-lifecycle="deciding"] {
   --bg: #fceff5; --bg-2: #fef5f9; --surface-solid: #fef5f9;
   --border: #efd3e2; --border-strong: #e0b9ce;
   --text: #1c1a17; --text-dim: #6e5a66;
 }
-:root[data-theme="light"][data-surface-tint="on"][data-lifecycle="locked"] {
+:root[data-theme="light"][data-look="deeper"][data-lifecycle="locked"] {
   --bg: #f2f1fd; --bg-2: #f8f6ff; --surface-solid: #f8f6ff;
   --border: #e0daf5; --border-strong: #cbc2ec;
   --text: #1c1a17; --text-dim: #605a78;
 }
-:root[data-theme="light"][data-surface-tint="on"][data-lifecycle="after"] {
+:root[data-theme="light"][data-look="deeper"][data-lifecycle="after"] {
   --bg: #eff4f0; --bg-2: #f6faf7; --surface-solid: #f6faf7;
   --border: #d5e5da; --border-strong: #bcd4c4;
   --text: #1c1a17; --text-dim: #4f6b5b;
 }
 
-:root[data-theme="dark"][data-surface-tint="on"][data-lifecycle="gathering"] {
+:root[data-theme="dark"][data-look="deeper"][data-lifecycle="gathering"] {
   --bg: #16100c; --bg-2: #1e1711; --surface-solid: #241b14;
   --border: rgba(255, 200, 160, 0.12); --border-strong: rgba(255, 200, 160, 0.22);
   --text: #f6eee7; --text-dim: #b8a698;
 }
-:root[data-theme="dark"][data-surface-tint="on"][data-lifecycle="deciding"] {
+:root[data-theme="dark"][data-look="deeper"][data-lifecycle="deciding"] {
   --bg: #150c18; --bg-2: #1c1222; --surface-solid: #22162a;
   --border: rgba(255, 170, 215, 0.12); --border-strong: rgba(255, 170, 215, 0.22);
   --text: #f6edf4; --text-dim: #b6a3b4;
 }
-:root[data-theme="dark"][data-surface-tint="on"][data-lifecycle="locked"] {
+:root[data-theme="dark"][data-look="deeper"][data-lifecycle="locked"] {
   --bg: #0d0d1c; --bg-2: #141327; --surface-solid: #1a1930;
   --border: rgba(180, 185, 255, 0.12); --border-strong: rgba(180, 185, 255, 0.22);
   --text: #efeffa; --text-dim: #a5a3be;
 }
-:root[data-theme="dark"][data-surface-tint="on"][data-lifecycle="after"] {
+:root[data-theme="dark"][data-look="deeper"][data-lifecycle="after"] {
   --bg: #08140f; --bg-2: #0e1c16; --surface-solid: #13241c;
   --border: rgba(150, 230, 190, 0.12); --border-strong: rgba(150, 230, 190, 0.22);
   --text: #e9f5ef; --text-dim: #9bb5a8;
@@ -638,8 +638,8 @@ a:focus-visible {
 
 /* Evening is dark in both themes — it is night, and the screen is at arm's
    length in a pub. Listed last so it wins over the light block above. */
-:root[data-surface-tint="on"][data-lifecycle="evening"],
-:root[data-theme="light"][data-surface-tint="on"][data-lifecycle="evening"] {
+:root[data-look="deeper"][data-lifecycle="evening"],
+:root[data-theme="light"][data-look="deeper"][data-lifecycle="evening"] {
   --bg: #140f22; --bg-2: #1a142b; --surface: #1e182e; --surface-solid: #1e182e; --surface-2: rgba(255, 255, 255, 0.06);
   --border: #332b4a; --border-strong: #4a4068;
   --text: #f2effa; --text-dim: #b3aacb;
@@ -648,8 +648,8 @@ a:focus-visible {
   /* the light theme darkens these for paper; at night they need their light cut back */
   --warn: #fbbf24; --good: #34d399; --danger: #fb7185;
 }
-:root[data-surface-tint="on"][data-lifecycle="evening"] input,
-:root[data-surface-tint="on"][data-lifecycle="evening"] select { background: rgba(255, 255, 255, 0.06); color: var(--text); }
+:root[data-look="deeper"][data-lifecycle="evening"] input,
+:root[data-look="deeper"][data-lifecycle="evening"] select { background: rgba(255, 255, 255, 0.06); color: var(--text); }
 
 /* ---- Deeper: the edge-to-edge phase band ----
    One band per screen, full bleed and under the status bar (the page uses
@@ -673,7 +673,7 @@ a:focus-visible {
 }
 /* The pastel bands are drawn for paper; on a dark ground the same two hues
    come through deep and low. */
-:root[data-theme="dark"][data-surface-tint="on"]:not([data-lifecycle="evening"]) {
+:root[data-theme="dark"][data-look="deeper"]:not([data-lifecycle="evening"]) {
   --phase-band: linear-gradient(125deg,
     color-mix(in srgb, var(--phase-a) 30%, var(--bg)),
     color-mix(in srgb, var(--phase-b) 28%, var(--bg)));
@@ -1345,13 +1345,13 @@ body.in-event .topbar .sub { display: block; font-size: 0.8rem; font-weight: 600
 .invite-banner-title { font-weight: 750; font-size: 0.95rem; color: var(--text); }
 .invite-banner-sub { margin-top: 3px; font-size: 0.8rem; color: var(--text-dim); }
 
-/* ===== Deeper: the tinted ground, cards and tabs =====
+/* ===== The shell's shape, for every look (Deeper, Ember) =====
    Every surface comes from the phase tokens (data-lifecycle, above); this
    block only changes shape: flat paper instead of glass, wide light capitals
    for names, dashed tabs for what isn't earned yet. */
-:root[data-surface-tint="on"] body::before,
-:root[data-surface-tint="on"] body::after { display: none; }
-:root[data-surface-tint="on"] .card {
+:root[data-look] body::before,
+:root[data-look] body::after { display: none; }
+:root[data-look] .card {
   background: var(--surface-solid);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
@@ -1377,7 +1377,7 @@ html, body, .card, .phase-tab {
 
 /* Tabs: sticky under the status bar on the ground colour; the active one
    takes the phase action, unearned ones are dashed. */
-:root[data-surface-tint="on"] .phasebar {
+:root[data-look] .phasebar {
   top: var(--safe-t);
   gap: 5px;
   margin: 8px calc(-1 * var(--gutter-r)) 16px calc(-1 * var(--gutter-l));
@@ -1388,7 +1388,7 @@ html, body, .card, .phase-tab {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
-:root[data-surface-tint="on"] .phase-tab {
+:root[data-look] .phase-tab {
   min-height: 44px;
   border-radius: 9px;
   border: 1px solid var(--border);
@@ -1396,26 +1396,26 @@ html, body, .card, .phase-tab {
   color: var(--text-dim);
   font-size: 0.78rem;
 }
-:root[data-surface-tint="on"] .phase-tab.active {
+:root[data-look] .phase-tab.active {
   border-color: transparent;
   background: var(--phase-action);
   color: #fff;
   font-weight: 700;
 }
-:root[data-surface-tint="on"] .phase-tab.quiet:not(.active) {
+:root[data-look] .phase-tab.quiet:not(.active) {
   border-style: dashed;
   background: transparent;
 }
 
 /* Small tracked capitals for section heads. */
-:root[data-surface-tint="on"] .section-head h2 {
+:root[data-look] .section-head h2 {
   font-size: 0.66rem; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; color: var(--text-dim);
 }
 /* The top pick's photo goes duotone in the phase's own two hues, and its
    name takes the wide light capitals. */
 #winnerHero .rec-photo.has-photo::before,
 #winnerHero .rec-photo.has-photo::after { content: ""; position: absolute; inset: 0; pointer-events: none; }
-#winnerHero .rec-photo.has-photo::before {
+:root[data-look="deeper"] #winnerHero .rec-photo.has-photo::before {
   background: linear-gradient(150deg, var(--phase-a, #6366f1), var(--phase-b, #ec4899));
   mix-blend-mode: color; opacity: 0.85;
 }
@@ -1424,6 +1424,87 @@ html, body, .card, .phase-tab {
 }
 #winnerHero .rec-photo-label { position: relative; z-index: 1; }
 #winnerHero .rec-photo-pin { z-index: 1; }
-:root[data-surface-tint="on"] #winnerHero .rec-photo-label {
+:root[data-look] #winnerHero .rec-photo-label {
   font-weight: 300; text-transform: uppercase; letter-spacing: 0.08em; font-size: 1.5rem;
 }
+
+/* ===== Ember: warm paper, one plum accent, gold only for a date =====
+   After the "Ember" boards (Reunly Layout Exploration canvas): ivory ground,
+   white cards with a warm hairline, ink type; plum spent on the action, the
+   active tab and the live dot; destination photos carry the colour. No band
+   gradient and no wave: a white top bar with a hairline, and the Now bar
+   sits on the paper. Evening turns the paper to ink, same rules. */
+:root[data-look="ember"] {
+  --bg: #f7f3ec;
+  --bg-2: #fffdf9;
+  --surface: #fffdf9;
+  --surface-solid: #fffdf9;
+  --surface-2: #f1ebe0;
+  --border: #e6ded0;
+  --border-strong: #dbd1c0;
+  --text: #1c1a17;
+  --text-dim: #6e6761;      /* 5.1:1 on the ground */
+  --accent: #a8185f;        /* plum: 6.9:1 on the ground */
+  --accent-ink: #8e1250;
+  --accent-soft: #fbebf2;
+  --phase-action: #a8185f;  /* white type 7.3:1 */
+  --grad: #a8185f;
+  --phase-band: var(--bg);
+  --good: #3f6b52;
+  --warn: #8a5a12;
+  --danger: #b3243c;
+  --gold: linear-gradient(100deg, #5e4a17, #c9922f 46%, #8a6b22);
+  --shadow: none;
+}
+:root[data-look="ember"][data-theme="dark"],
+:root[data-look="ember"][data-lifecycle="evening"] {
+  --bg: #15120f;
+  --bg-2: #1b1714;
+  --surface: #211d19;
+  --surface-solid: #211d19;
+  --surface-2: #2a2520;
+  --border: #3a342d;
+  --border-strong: #4a4239;
+  --text: #f4eee4;
+  --text-dim: #b3a999;
+  --accent: #e8689f;
+  --accent-ink: #f29bc0;
+  --accent-soft: rgba(232, 104, 159, 0.14);
+  --phase-band: var(--bg);
+  --good: #6fbf8e;
+  --warn: #e0b45a;
+  --danger: #f08a9c;
+}
+:root[data-look="ember"][data-lifecycle="evening"] input,
+:root[data-look="ember"][data-lifecycle="evening"] select { background: var(--surface-2); color: var(--text); }
+/* The top bar is a white strip with a hairline, edge to edge and under the
+   status bar; the Now bar sits on the paper below it. */
+:root[data-look="ember"] .band { background: var(--bg); padding-top: 0; }
+:root[data-look="ember"] .band .topbar {
+  max-width: none;
+  padding-top: calc(13px + var(--safe-t));
+  padding-left: max(var(--gutter-l), calc((100vw - var(--maxw)) / 2 + 16px));
+  padding-right: max(var(--gutter-r), calc((100vw - var(--maxw)) / 2 + 16px));
+  background: var(--surface-solid);
+  border-bottom: 1px solid var(--border);
+}
+:root[data-look="ember"] .band .topbar .logo { background: var(--accent); box-shadow: none; animation: none; color: #fffdf9; }
+:root[data-look="ember"] .band .topbar .btn.ghost { background: transparent; border-color: var(--border); }
+:root[data-look="ember"] .band-wave { display: none; }
+:root[data-look="ember"] #nowBar { padding-top: 16px; padding-bottom: 18px; }
+:root[data-look="ember"] .nowbar-progress span { height: 3px; }
+:root[data-look="ember"] .nowbar-progress span:not(.on) { background: color-mix(in srgb, var(--text) 12%, var(--bg)); }
+/* Tabs: the active one is tinted plum, not filled. */
+:root[data-look="ember"] .phase-tab.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+:root[data-look="ember"] .btn:not(.ghost):not(.secondary) { background: var(--phase-action); box-shadow: none; }
+:root[data-look="ember"] .btn.secondary { background: var(--surface-solid); border: 1px solid var(--border-strong); color: var(--text); }
+/* Photos: a dark scrim and the city in wide light capitals; no recolour. */
+:root[data-look="ember"] #winnerHero .rec-photo-pin {
+  background: var(--bg); color: var(--text); border: none; backdrop-filter: none;
+  font-size: 0.6rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; border-radius: 5px;
+}
+:root[data-look="ember"] .demo-banner { background: var(--surface-solid); border-color: var(--border-strong); }

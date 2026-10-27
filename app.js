@@ -987,6 +987,7 @@
     let active = -1;
     let timer = null;
     let failed = false;
+    let picked = null; // the label just chosen: its own "input" echo mustn't reopen the list
     const kindParam = opts.kind ? `&kind=${encodeURIComponent(opts.kind)}` : "";
     const close = () => {
       if (menu) menu.remove();
@@ -1019,6 +1020,8 @@
     };
     const pick = (s) => {
       input.value = s.label;
+      picked = s.label;
+      clearTimeout(timer);
       close();
       if (onPick) onPick(s.label, s);
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1043,6 +1046,11 @@
     input.addEventListener("input", () => {
       const q = input.value.trim();
       clearTimeout(timer);
+      // Picking re-dispatches "input" so callers can save the value; without
+      // this the same label was searched again and the list popped back up
+      // under the field (and lingered as a sliver once the screen changed).
+      if (picked !== null && input.value === picked) return;
+      picked = null;
       if (q.length < 2) return close();
       timer = setTimeout(() => query(q), 220);
     });
@@ -5537,8 +5545,12 @@
     if (!meta) return;
     const root = document.documentElement;
     const phase = root.getAttribute("data-lifecycle") || "gathering";
+    // Ember: the white top bar (ink at night). Deeper: the top of the band.
+    const ember = root.getAttribute("data-look") === "ember";
     meta.setAttribute("content",
-      root.getAttribute("data-theme") === "dark" && phase !== "evening"
+      ember
+        ? getComputedStyle(root).getPropertyValue("--surface-solid").trim() || "#fffdf9"
+        : root.getAttribute("data-theme") === "dark" && phase !== "evening"
         ? getComputedStyle(root).getPropertyValue("--bg").trim() || "#080b16"
         : BAND_TOP[phase]);
   }
