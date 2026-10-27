@@ -1354,3 +1354,63 @@ html, body, .card, .phase-tab {
 :root[data-look="ember"] .hero-title .grad { background: none; -webkit-background-clip: border-box; background-clip: border-box; color: var(--color-brand); }
 :root[data-look="ember"] .hero-badge { background: var(--color-brand-subtle); color: var(--color-brand-ink); border-color: transparent; }
 :root[data-look="ember"] .hero-video { border-radius: var(--radius-2xl); overflow: hidden; }
+
+/* ===== States, icons, utilities (design-system priority 3) ===== */
+/* One icon set: stroke icons that take the text colour. */
+.icon {
+  width: 1.15em; height: 1.15em; flex: none; vertical-align: -0.2em;
+  fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round;
+}
+.icon.lead { margin-right: 0.45em; }
+.empty-emoji .icon, .onboard-emoji .icon { width: 2.2rem; height: 2.2rem; color: var(--color-brand); }
+.tool-opt .icon { width: 1.3em; height: 1.3em; color: var(--color-brand); }
+
+/* Focus: one ring everywhere — keyboard focus on controls, any focus on fields. */
+:where(.btn, .cat-btn, .phase-tab, .chip-toggle, .invite-opt, .prep-nr, .prep-check, .rsvp-pill, .link-btn, a, summary):focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--color-brand);
+  box-shadow: var(--shadow-focus);
+}
+
+/* Disabled: visibly unavailable, never clickable-looking. */
+.btn:disabled, .btn[aria-disabled="true"] {
+  opacity: 0.5; cursor: not-allowed; box-shadow: none; filter: saturate(0.6);
+}
+/* Loading (aria-busy): a spinner in front of the label, clicks paused. */
+.btn[aria-busy="true"] { cursor: progress; pointer-events: none; opacity: 0.8; filter: none; }
+.btn[aria-busy="true"] .icon { display: none; }
+.btn[aria-busy="true"]::before {
+  content: ""; width: 1em; height: 1em; margin-right: 0.5em; flex: none;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: var(--radius-full);
+  animation: spin var(--duration-phase) linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Field errors: marked for assistive tech (aria-invalid) and visibly. */
+[aria-invalid="true"] { border-color: var(--color-danger) !important; }
+[aria-invalid="true"]:focus { box-shadow: 0 0 0 3px var(--color-danger-bg); }
+
+/* Utilities that replaced inline styles in app.js. */
+.u-w-auto { width: auto; }
+.u-w-full { width: 100%; }
+.u-flex-1 { flex: 1; min-width: 0; }
+.u-mt-1 { margin-top: var(--space-1); }
+.u-mt-2 { margin-top: var(--space-2); }
+.u-mt-3 { margin-top: var(--space-3); }
+.u-mt-4 { margin-top: var(--space-4); }
+.u-text-xs { font-size: var(--text-xs); }
+
+/* Reduced motion, everywhere: no movement beyond what's needed. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .btn[aria-busy="true"]::before { animation: none; border-right-color: currentColor; opacity: 0.6; }
+}

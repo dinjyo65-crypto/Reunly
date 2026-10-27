@@ -297,7 +297,7 @@
     bar.hidden = !storageFailed;
     if (storageFailed && !bar.textContent) {
       bar.textContent =
-        "⚠️ This device is out of storage, so new changes aren't being saved. Remove some memory-wall photos to free space.";
+        "This device is out of storage, so new changes aren't being saved. Remove some memory-wall photos to free space.";
     }
   }
   // Parse saved localStorage state WITHOUT applying it to `state` yet — boot
@@ -964,9 +964,54 @@
 
   // ---- Tiny DOM helpers ----
   const $ = (sel) => document.querySelector(sel);
+  // One stroke icon set (design-system: no emoji in the interface). Static,
+  // trusted markup only — never data.
+  const ICONS = {
+    send: '<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/>',
+    calendar: '<rect x="3" y="5" width="18" height="16" rx="2.5"/><path d="M8 3v4M16 3v4M3 10h18"/>',
+    pin: '<circle cx="12" cy="10" r="3"/><path d="M12 21s7-6.2 7-11a7 7 0 10-14 0c0 4.8 7 11 7 11z"/>',
+    alert: '<path d="M12 9v4.5M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/>',
+    food: '<path d="M7 2v20M4 2v6a3 3 0 006 0V2M17 2c-2 2-3 5-3 8h3v12"/>',
+    target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
+    access: '<circle cx="12" cy="4.5" r="1.5"/><path d="M7 8.5h10M12 8.5v5.5l-3.5 6M12 14l3.5 6"/>',
+    sparkle: '<path d="M12 3l1.9 5.6L19.5 10.5 13.9 12.4 12 18 10.1 12.4 4.5 10.5 10.1 8.6z"/><path d="M19 3v4M17 5h4"/>',
+    check: '<circle cx="12" cy="12" r="9"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/>',
+    briefcase: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5h6v2M3 12h18"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    moon: '<path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/>',
+    shuffle: '<path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
+    money: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/>',
+    wallet: '<path d="M3 7h16a2 2 0 012 2v9a2 2 0 01-2 2H3z"/><path d="M3 7l12-4v4M17 14h.01"/>',
+    vote: '<path d="M4 12h16v8H4z"/><path d="M9 12V4h6v8M9 8h6"/>',
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
+    flask: '<path d="M9 3h6M10 3v6L4.2 19a1.5 1.5 0 001.3 2h13a1.5 1.5 0 001.3-2L14 9V3"/><path d="M7 15h10"/>',
+    camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
+    eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    bell: '<path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/>',
+    phone: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+    bed: '<path d="M3 18V7M3 13h18v5M21 18v-5a3 3 0 00-3-3h-7v3"/><circle cx="7" cy="10.5" r="1.5"/>',
+    home: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>',
+    map: '<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/>',
+    file: '<path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4M9 13h6M9 17h6"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    locate: '<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>',
+    cake: '<path d="M4 20h16v-7a2 2 0 00-2-2H6a2 2 0 00-2 2z"/><path d="M4 15c2 1.5 4 1.5 6 0s4-1.5 6 0 3 1 4 .5"/><path d="M12 11V7"/><path d="M12 7c-1-1-1-2 0-3 1 1 1 2 0 3z"/>',
+    rings: '<circle cx="9" cy="14" r="5"/><circle cx="15" cy="14" r="5"/><path d="M10 5l2-2 2 2"/>',
+    glass: '<path d="M8 3h8l-1 7a3 3 0 01-6 0z"/><path d="M12 13v8M8 21h8"/>',
+    dots: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  };
+  function icon(name, lead) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("class", `icon${lead ? " lead" : ""}`);
+    svg.innerHTML = ICONS[name] || ICONS.dots;
+    return svg;
+  }
   const el = (tag, props = {}, children = []) => {
     const node = document.createElement(tag);
     Object.entries(props).forEach(([k, v]) => {
+      if (k === "icon") return; // placed after the text, below
       if (k === "class") node.className = v;
       else if (k === "text") node.textContent = v;
       // NOTE: intentionally no innerHTML path — all dynamic content goes through
@@ -981,8 +1026,37 @@
       if (c == null) return;
       node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
     });
+    if (props.icon) node.insertBefore(icon(props.icon, !!node.textContent), node.firstChild);
     return node;
   };
+
+  /** A button that is working: spinner, not clickable, announced as busy. */
+  function busy(btn, on) {
+    if (!btn) return;
+    btn.disabled = !!on;
+    if (on) btn.setAttribute("aria-busy", "true");
+    else btn.removeAttribute("aria-busy");
+  }
+  /**
+   * A field error the way assistive tech expects it: the field is marked
+   * invalid, points at its message, and the message is announced. Cleared as
+   * soon as the person types.
+   */
+  function fieldError(input, errEl, msg) {
+    if (!errEl.id) errEl.id = `${input.id || "field"}Error`;
+    errEl.textContent = msg;
+    errEl.setAttribute("role", "alert");
+    if (!input) return;
+    input.setAttribute("aria-invalid", "true");
+    input.setAttribute("aria-describedby", errEl.id);
+    input.focus();
+    input.addEventListener("input", function clear() {
+      input.removeAttribute("aria-invalid");
+      errEl.textContent = "";
+      input.removeEventListener("input", clear);
+    });
+    return msg;
+  }
 
   // The current user's home display currency (set from their location/city).
   function myCurrency() {
@@ -1163,8 +1237,8 @@
       el("div", {
         class: "invite-banner-title",
         text: state.reunion.organizer
-          ? `✉️ ${state.reunion.organizer} invited you to ${what}`
-          : `✉️ You're invited to ${what}`,
+          ? `${state.reunion.organizer} invited you to ${what}`
+          : `You're invited to ${what}`,
       })
     );
     const plan = state.lockedPlan;
@@ -1261,7 +1335,7 @@
     regPick = pick;
     if (pick) $("#regError").textContent = ""; // the "choose from the list" nudge is answered
     $("#regLocNote").textContent = pick
-      ? `📍 ${pick.label} · prices will show in ${regCurrencyFor(pick)}`
+      ? `${pick.label} · prices will show in ${regCurrencyFor(pick)}`
       : "";
   }
 
@@ -1285,8 +1359,7 @@
           toast("Location isn't available on this device");
           return;
         }
-        detect.disabled = true;
-        detect.textContent = "Locating…";
+        busy(detect, true);
         navigator.geolocation.getCurrentPosition(
           async (pos) => {
             try {
@@ -1302,14 +1375,12 @@
             } catch (e) {
               toast("Location lookup failed — type your city");
             } finally {
-              detect.disabled = false;
-              detect.textContent = "📍 Use my location";
+              busy(detect, false);
             }
           },
           () => {
             toast("Location permission denied — type your city");
-            detect.disabled = false;
-            detect.textContent = "📍 Use my location";
+            busy(detect, false);
           },
           { timeout: 8000 }
         );
@@ -1321,15 +1392,14 @@
       const email = $("#regEmail").value.trim();
       const city = $("#regCity").value.trim();
       const err = $("#regError");
-      if (!name) return (err.textContent = "Please enter your name.");
-      if (!isValidEmail(email)) return (err.textContent = "Please enter a valid email.");
-      if (!city) return (err.textContent = "Please enter your home city.");
+      if (!name) return fieldError($("#regName"), err, "Please enter your name.");
+      if (!isValidEmail(email)) return fieldError($("#regEmail"), err, "Please enter a valid email.");
+      if (!city) return fieldError(cityInput, err, "Please enter your home city.");
       const picked = regPick && regPick.label === city;
       // Only insist on a pick when we can actually offer one: if the lookup
       // service is unreachable, a typed city beats locking someone out.
       if (!picked && !ac.serviceDown()) {
-        err.textContent = "Choose your city from the list so we know which country it's in.";
-        cityInput.focus();
+        fieldError(cityInput, err, "Choose your city from the list so we know which country it's in.");
         ac.suggest();
         return;
       }
@@ -1425,22 +1495,7 @@
   }
 
   // ---- Get started: a few categories; each opens Set up (or the evening planner)
-  const CATEGORY_ICONS = {
-    pin: '<circle cx="12" cy="10" r="3"/><path d="M12 21s7-6.2 7-11a7 7 0 10-14 0c0 4.8 7 11 7 11z"/>',
-    home: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-5h4v5"/>',
-    cake: '<path d="M4 20h16v-7a2 2 0 00-2-2H6a2 2 0 00-2 2z"/><path d="M4 15c2 1.5 4 1.5 6 0s4-1.5 6 0 3 1 4 .5"/><path d="M12 11V7"/><path d="M12 7c-1-1-1-2 0-3 1 1 1 2 0 3z"/>',
-    rings: '<circle cx="9" cy="14" r="5"/><circle cx="15" cy="14" r="5"/><path d="M10 5l2-2 2 2"/>',
-    glass: '<path d="M8 3h8l-1 7a3 3 0 01-6 0z"/><path d="M12 13v8M8 21h8"/>',
-    dots: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
-  };
-  function categoryIcon(name) {
-    // Static, trusted markup (the table above) — never data.
-    const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    s.setAttribute("viewBox", "0 0 24 24");
-    s.setAttribute("aria-hidden", "true");
-    s.innerHTML = CATEGORY_ICONS[name] || CATEGORY_ICONS.dots;
-    return s;
-  }
+  const categoryIcon = (name) => icon(name);
   function renderCategories() {
     const list = $("#categoryList");
     if (!list) return;
@@ -1509,9 +1564,9 @@
       const start = $("#setupStart").value;
       const end = $("#setupEnd").value || start;
       const where = (setupWherePick && setupWherePick.label) || $("#setupWhere").value.trim();
-      if (!start) return (err.textContent = "Pick the date.");
-      if (end < start) return (err.textContent = "The end can't be before the start.");
-      if (!where) return (err.textContent = "Say where it is — a town or city is enough.");
+      if (!start) return fieldError($("#setupStart"), err, "Pick the date.");
+      if (end < start) return fieldError($("#setupEnd"), err, "The end can't be before the start.");
+      if (!where) return fieldError($("#setupWhere"), err, "Say where it is — a town or city is enough.");
       plan = { destination: where, dateStart: start, dateEnd: end, dateLabel: E.rangeLabel({ start, end }) };
     }
     err.textContent = "";
@@ -1557,7 +1612,7 @@
     });
     $("#joinSubmit").addEventListener("click", () => {
       const code = $("#joinCode").value.trim();
-      if (!code) return ($("#joinError").textContent = "Enter the invitation code.");
+      if (!code) return fieldError($("#joinCode"), $("#joinError"), "Enter the invitation code.");
       $("#joinError").textContent = "";
       enterDashboard("join", code.toUpperCase());
     });
@@ -1653,21 +1708,24 @@
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, "_blank", "noopener");
   }
 
-  function chip(emoji, text) {
+  function chip(mark, text) {
+    // An icon name from ICONS, or — for destinations — the place's own emoji
+    // (content, not interface).
     const c = el("span", { class: "chip" });
-    if (emoji) c.appendChild(el("span", { text: emoji }));
+    if (mark && ICONS[mark]) c.appendChild(icon(mark));
+    else if (mark) c.appendChild(el("span", { text: mark }));
     c.appendChild(el("span", { text }));
     return c;
   }
   function summaryChips(p) {
     const chips = [];
     const firstDate = p.dates.find((d) => E.isValidRange(d));
-    chips.push(chip("🏠", p.city || "no city"));
-    chips.push(chip("🗓️", firstDate ? E.rangeLabel(firstDate) : "no dates"));
+    chips.push(chip("home", p.city || "no city"));
+    chips.push(chip("calendar", firstDate ? E.rangeLabel(firstDate) : "no dates"));
     chips.push(
       p.destinations[0]
         ? chip(D.cityEmoji(p.destinations[0]), p.destinations[0])
-        : chip("📍", "no destination")
+        : chip("pin", "no destination")
     );
     return chips;
   }
@@ -1948,7 +2006,7 @@
     group.appendChild(accWrap);
 
     // Activities (multi-select chips)
-    group.appendChild(el("div", { class: "gl", text: "Activity interests", style: "margin-top:10px" }));
+    group.appendChild(el("div", { class: "gl u-mt-3", text: "Activity interests" }));
     const chips = el("div", { class: "chip-select" });
     D.ACTIVITY_OPTIONS.forEach((a) => {
       const on = pr.activities.includes(a);
@@ -2076,7 +2134,7 @@
     const others = state.participants.filter((p) => !isMe(p));
     if (state.role === "organizer" && others.length === 0 && !state.demoMode) {
       const cta = el("div", { class: "card empty-cta" });
-      cta.appendChild(el("div", { class: "empty-emoji", text: "🪄" }));
+      cta.appendChild(el("div", { class: "empty-emoji", icon: "sparkle", text: "" }));
       cta.appendChild(el("div", { class: "empty-title", text: "It's just you so far" }));
       cta.appendChild(
         el("div", {
@@ -2085,7 +2143,7 @@
         })
       );
       const row = el("div", { class: "btn-row" });
-      row.appendChild(el("button", { class: "btn", text: "📨 Invite people", onClick: openInviteModal }));
+      row.appendChild(el("button", { class: "btn", icon: "send", text: "Invite people", onClick: openInviteModal }));
       row.appendChild(el("button", { class: "btn secondary", text: "Explore sample group", onClick: loadDemo }));
       cta.appendChild(row);
       list.appendChild(cta);
@@ -2116,14 +2174,12 @@
       if (canEdit(p)) {
         head.appendChild(
           el("button", {
-            class: "btn secondary sm",
-            style: "width:auto",
-            text: editing ? "Close" : mine ? "Edit yours" : "Edit",
+            class: "btn secondary sm u-w-auto",
+                        text: editing ? "Close" : mine ? "Edit yours" : "Edit",
             onClick: () => {
               state.editingId = editing ? null : p.id;
               renderAll();
-            },
-          })
+            } })
         );
       }
       card.appendChild(head);
@@ -2574,24 +2630,22 @@
 
     // --- Date question ---
     const dq = el("div", { class: "confirm-q" });
-    dq.appendChild(el("div", { class: "confirm-q-label", text: `📅 ${top.dateLabel} — does this date work?` }));
+    dq.appendChild(el("div", { class: "confirm-q-label", icon: "calendar", text: `${top.dateLabel} — does this date work?` }));
     dq.appendChild(yesNoRow(draft, "dateOk"));
     if (draft.dateOk === false) dq.appendChild(buildDatesGroup(p));
     body.appendChild(dq);
 
     // --- Destination question ---
     const xq = el("div", { class: "confirm-q" });
-    xq.appendChild(el("div", { class: "confirm-q-label", text: `📍 ${top.destination} — does this place work?` }));
+    xq.appendChild(el("div", { class: "confirm-q-label", icon: "pin", text: `${top.destination} — does this place work?` }));
     xq.appendChild(yesNoRow(draft, "destOk"));
     if (draft.destOk === false) xq.appendChild(buildDestGroup(p));
     body.appendChild(xq);
 
     const continueBtn = el("button", {
-      class: "btn",
-      style: "width:100%;margin-top:16px",
-      text: "Continue →",
-      onClick: () => confirmSubmit(p, top, draft, isAgreed),
-    });
+      class: "btn u-w-full u-mt-4",
+            text: "Continue →",
+      onClick: () => confirmSubmit(p, top, draft, isAgreed) });
     const hint = el("div", { class: "confirm-sub" });
     body.appendChild(continueBtn);
     // Yes-or-propose-something-else was the only way through. Someone who
@@ -2599,9 +2653,8 @@
     // was already settled — and until they did, they counted as undecided.
     body.appendChild(
       el("button", {
-        class: "btn ghost",
-        style: "width:100%;margin-top:8px",
-        text: "I can't make it",
+        class: "btn ghost u-w-full u-mt-2",
+                text: "I can't make it",
         onClick: () => {
           p.rsvp = "out";
           p.dateConfirmed = false;
@@ -2614,8 +2667,7 @@
           notifyOrganiser(p, top, { dateOk: false, destOk: false }, "declined");
           toast("Thanks — now send your answer to the organiser");
           renderAll();
-        },
-      })
+        } })
     );
     body.appendChild(hint);
 
@@ -2681,7 +2733,7 @@
     }
     if (!combos.length) {
       const card = el("div", { class: "card empty-cta" });
-      card.appendChild(el("div", { class: "empty-emoji", text: "🗓️" }));
+      card.appendChild(el("div", { class: "empty-emoji", icon: "calendar", text: "" }));
       card.appendChild(el("div", { class: "empty-title", text: "Add your dates & places" }));
       card.appendChild(
         el("div", {
@@ -2691,10 +2743,10 @@
       );
       const row = el("div", { class: "btn-row" });
       row.appendChild(
-        el("button", { class: "btn", text: "➕ Add your availability", onClick: goEditMine })
+        el("button", { class: "btn", icon: "plus", text: "Add your availability", onClick: goEditMine })
       );
       row.appendChild(
-        el("button", { class: "btn secondary", text: "📨 Invite people", onClick: openInviteModal })
+        el("button", { class: "btn secondary", icon: "send", text: "Invite people", onClick: openInviteModal })
       );
       card.appendChild(row);
       hero.appendChild(card);
@@ -2723,7 +2775,7 @@
     addRecPhoto(card, c.destination, locked ? "Agreed" : "Top pick");
 
     const body = el("div", { class: "winner-body" });
-    const whenLine = el("div", { class: "winner-when", text: `📅 ${c.dateLabel}` });
+    const whenLine = el("div", { class: "winner-when", icon: "calendar", text: `${c.dateLabel}` });
     // Be clear when the window was derived from overlapping availability
     // rather than proposed by someone.
     if (c.dateSuggested) {
@@ -2811,14 +2863,12 @@
       if (state.role === "organizer") {
         note.appendChild(
           el("button", {
-            class: "btn ghost sm",
-            style: "width:auto",
-            text: "Review",
+            class: "btn ghost sm u-w-auto",
+                        text: "Review",
             onClick: () => {
               const alts = document.getElementById("recList");
               if (alts) alts.scrollIntoView({ behavior: "smooth", block: "center" });
-            },
-          })
+            } })
         );
       }
       body.appendChild(note);
@@ -2847,7 +2897,7 @@
       body.appendChild(
         el("div", {
           class: "budget-warn",
-          text: `⚠️ Estimated travel + stay exceeds the stated budget for ${names}${more}. Worth checking before locking.`,
+          icon: "alert", text: `Estimated travel + stay exceeds the stated budget for ${names}${more}. Worth checking before locking.`,
         })
       );
     }
@@ -2857,11 +2907,10 @@
     if (state.role === "organizer") {
       body.appendChild(
         el("button", {
-          class: locked ? "btn secondary" : "btn",
-          style: "width:100%;margin-top:14px",
-          text: locked ? "✓ Locked — tap to unlock" : "🔒 Lock this plan",
-          onClick: () => toggleLock(c),
-        })
+          class: locked ? "btn secondary u-w-full u-mt-4" : "btn u-w-full u-mt-4",
+          icon: locked ? null : "lock",
+          text: locked ? "✓ Locked — tap to unlock" : "Lock this plan",
+          onClick: () => toggleLock(c) })
       );
     }
     // Who is coming from where, and how. Placed after the numbers rather than
@@ -2889,7 +2938,7 @@
       row.style.animationDelay = `${i * 0.06}s`;
       const head = el("div", { class: "alt-head" });
       head.appendChild(el("span", { class: "alt-emoji", text: D.cityEmoji(c.destination) }));
-      const w = el("div", { style: "flex:1;min-width:0" });
+      const w = el("div", { class: "u-flex-1" });
       w.appendChild(el("div", { class: "alt-title", text: c.destination }));
       const perPerson = c.avgTripCost != null ? c.avgTripCost : c.avgFare;
       w.appendChild(
@@ -2902,11 +2951,9 @@
       if (state.role === "organizer") {
         head.appendChild(
           el("button", {
-            class: "btn ghost sm",
-            style: "width:auto",
-            text: lockState(c) ? "Locked" : "Lock",
-            onClick: () => toggleLock(c),
-          })
+            class: "btn ghost sm u-w-auto",
+                        text: lockState(c) ? "Locked" : "Lock",
+            onClick: () => toggleLock(c) })
         );
       }
       row.appendChild(head);
@@ -2947,7 +2994,7 @@
     // Food mix
     if (s.foodRanked.length) {
       const fr = el("div", { class: "insight-row" });
-      fr.appendChild(el("span", { class: "insight-key", text: "🍽️ Dietary" }));
+      fr.appendChild(el("span", { class: "insight-key", icon: "food", text: "Dietary" }));
       const tags = el("div", { class: "insight-tags" });
       s.foodRanked.forEach(([label, n]) =>
         tags.appendChild(el("span", { class: "badge gray", text: `${label} ×${n}` }))
@@ -2958,7 +3005,7 @@
     // Top activities
     if (s.activitiesRanked.length) {
       const ar = el("div", { class: "insight-row" });
-      ar.appendChild(el("span", { class: "insight-key", text: "🎯 Top activities" }));
+      ar.appendChild(el("span", { class: "insight-key", icon: "target", text: "Top activities" }));
       const tags = el("div", { class: "insight-tags" });
       s.activitiesRanked.slice(0, 5).forEach(([label, n]) =>
         tags.appendChild(el("span", { class: "badge", text: `${label} ×${n}` }))
@@ -2979,7 +3026,7 @@
     if (s.accessibility.length) {
       s.accessibility.forEach((a) =>
         card.appendChild(
-          el("div", { class: "insight-note", text: `♿ ${a.name}: ${a.note}` })
+          el("div", { class: "insight-note", icon: "access", text: `${a.name}: ${a.note}` })
         )
       );
     }
@@ -3140,15 +3187,15 @@
           : "flight";
         const door = E.journeyHours(info.miles, E.roadProfile(p.city, toCity));
         if (mode === "drive") {
-          metaParts.push(`🚗 ${E.formatHours(info.drive)} each way`);
+          metaParts.push(`${E.formatHours(info.drive)} by car each way`);
         } else if (mode === "flight") {
           metaParts.push(
             door > info.flight + 0.4
-              ? `✈ ${E.formatHours(info.flight)} in the air · ~${E.formatHours(door)} door to door`
-              : `✈ ${E.formatHours(info.flight)}`
+              ? `${E.formatHours(info.flight)} in the air · ~${E.formatHours(door)} door to door`
+              : `${E.formatHours(info.flight)} flying`
           );
           // Offer the road as an alternative only where it's actually one.
-          if (info.miles <= 800) metaParts.push(`or 🚗 ${E.formatHours(info.drive)}`);
+          if (info.miles <= 800) metaParts.push(`or ${E.formatHours(info.drive)} by car`);
         }
       }
       side.appendChild(el("div", { class: "cost-meta", text: metaParts.join(" · ") }));
@@ -3307,7 +3354,7 @@
     }
     if (!w || w === "pending") return null;
     const mode = w.mode === "forecast" ? "Forecast" : "Typically";
-    return `🌤️ ${mode} ${w.tMin}–${w.tMax}°C${rainPhrase(w)}`;
+    return `${mode} ${w.tMin}–${w.tMax}°C${rainPhrase(w)}`;
   }
 
   /**
@@ -3616,14 +3663,14 @@
     return { days: out, extraDays: totalDays - dayIndices.length, notes };
   }
 
-  function toolLink(emoji, label, href) {
+  function toolLink(iconName, label, href) {
     const a = el("a", {
       class: "invite-opt tool-opt",
       href,
       target: "_blank",
       rel: "noopener noreferrer",
     });
-    a.appendChild(el("span", { text: emoji }));
+    a.appendChild(icon(iconName));
     a.appendChild(el("span", { text: label }));
     return a;
   }
@@ -3648,13 +3695,13 @@
     // an ad they couldn't act on.
     if (state.role !== "organizer") return;
     const card = el("div", { class: "card pro-card stagger" });
-    card.appendChild(el("div", { class: "pro-emoji", text: "✨" }));
+    card.appendChild(el("div", { class: "pro-emoji", icon: "sparkle", text: "" }));
     card.appendChild(el("div", { class: "pro-title", text: "Reunly Pro" }));
     card.appendChild(
       el("div", { class: "pro-sub", text: "For the organiser: the Trip Pack and a bigger memory wall for this event." })
     );
     card.appendChild(
-      el("button", { class: "btn", style: "margin-top:12px", text: "See Pro — £7.99/event", onClick: openProModal })
+      el("button", { class: "btn u-mt-3", text: "See Pro — £7.99/event", onClick: openProModal })
     );
     panel.appendChild(card);
   }
@@ -3677,7 +3724,7 @@
     state.pro = true;
     saveState();
     closeProModal();
-    toast("✨ Reunly Pro unlocked (demo)");
+    toast("Reunly Pro unlocked (demo)");
     renderAll();
   }
   function wireProModal() {
@@ -3862,7 +3909,7 @@
     head.appendChild(
       el("div", {
         class: "toolkit-title",
-        text: `✅ Before you go — ${days} day${days === 1 ? "" : "s"} to go`,
+        icon: "check", text: `Before you go — ${days} day${days === 1 ? "" : "s"} to go`,
       })
     );
     card.appendChild(head);
@@ -4008,7 +4055,7 @@
 
     // --- Trip toolkit ---
     const kit = el("div", { class: "card toolkit stagger" });
-    kit.appendChild(el("div", { class: "toolkit-title", text: "🧰 Trip toolkit" }));
+    kit.appendChild(el("div", { class: "toolkit-title", icon: "briefcase", text: "Trip toolkit" }));
 
     // Weather line (async; live via proxy → Open-Meteo).
     const wkey = `${dest}|${plan.dateStart}`;
@@ -4020,11 +4067,11 @@
       kit.appendChild(
         el("div", {
           class: "weather-line",
-          text: `🌤️ ${mode} ${w.tMin}–${w.tMax}°C in ${dest.split(",")[0]} for your dates${rain}`,
+          icon: "sun", text: `${mode} ${w.tMin}–${w.tMax}°C in ${dest.split(",")[0]} for your dates${rain}`,
         })
       );
     } else if (w === "pending" || w === undefined) {
-      kit.appendChild(el("div", { class: "weather-line muted", text: "🌤️ Checking the weather…" }));
+      kit.appendChild(el("div", { class: "weather-line muted", icon: "sun", text: "Checking the weather…" }));
     }
 
     const grid = el("div", { class: "invite-grid tool-grid" });
@@ -4032,32 +4079,27 @@
     const adults = Math.max(1, state.participants.filter((x) => x.rsvp === "in").length);
     const stay = `${plan.dateStart} to ${plan.dateEnd} for ${adults} ${adults === 1 ? "adult" : "adults"}`;
     grid.appendChild(
-      toolLink("🏨", "Hotels", `https://www.google.com/travel/hotels?q=${encodeURIComponent(`hotels in ${dest} ${stay}`)}`)
+      toolLink("bed", "Hotels", `https://www.google.com/travel/hotels?q=${encodeURIComponent(`hotels in ${dest} ${stay}`)}`)
     );
     grid.appendChild(
-      toolLink(
-        "🏠",
+      toolLink("home",
         "Airbnb",
         `https://www.airbnb.com/s/${encodeURIComponent(dest)}/homes?checkin=${encodeURIComponent(plan.dateStart)}` +
           `&checkout=${encodeURIComponent(plan.dateEnd)}&adults=${adults}`
       )
     );
-    grid.appendChild(toolLink("🗺️", "Explore map", E.mapsSearchLink(dest)));
-    grid.appendChild(toolLink("🍽️", "Restaurants", E.mapsSearchLink(`restaurants in ${dest}`)));
+    grid.appendChild(toolLink("map", "Explore map", E.mapsSearchLink(dest)));
+    grid.appendChild(toolLink("food", "Restaurants", E.mapsSearchLink(`restaurants in ${dest}`)));
     kit.appendChild(grid);
     const kitBtns = el("div", { class: "btn-row" });
     kitBtns.appendChild(
       el("button", {
-        class: "btn secondary sm", style: "flex:1",
-        text: "📅 Add to calendar", onClick: downloadIcs,
-      })
+        class: "btn secondary sm u-flex-1", icon: "calendar", text: "Add to calendar", onClick: downloadIcs })
     );
     kitBtns.appendChild(
       el("button", {
-        class: "btn secondary sm", style: "flex:1",
-        text: state.pro ? "📄 Trip pack" : "📄 Trip pack ✨",
-        onClick: () => (state.pro ? downloadTripPack() : openProModal()),
-      })
+        class: "btn secondary sm u-flex-1", icon: "file", text: state.pro ? "Trip pack" : "Trip pack · Pro",
+        onClick: () => (state.pro ? downloadTripPack() : openProModal()) })
     );
     kit.appendChild(kitBtns);
     panel.appendChild(kit);
@@ -4066,11 +4108,11 @@
     const it = buildItinerary(plan);
     const card = el("div", { class: "card itinerary stagger" });
     const head = el("div", { class: "itin-head" });
-    head.appendChild(el("div", { class: "toolkit-title", text: "✨ Suggested itinerary" }));
+    head.appendChild(el("div", { class: "toolkit-title", icon: "sparkle", text: "Suggested itinerary" }));
     head.appendChild(
       el("button", {
         class: "btn ghost sm",
-        text: "🎲 Shuffle",
+        icon: "shuffle", text: "Shuffle",
         onClick: () => {
           state.itinerarySeed += 1;
           saveState();
@@ -4279,7 +4321,7 @@
     if (!panel) return;
     panel.textContent = "";
     const card = el("div", { class: "card" });
-    card.appendChild(el("div", { class: "toolkit-title", text: "💸 Expenses & settle-up" }));
+    card.appendChild(el("div", { class: "toolkit-title", icon: "money", text: "Expenses & settle-up" }));
 
     const {
       total, share, shareExact, base, balances, transfers, spend, chargedIds,
@@ -4456,7 +4498,7 @@
     const moveRows = state.expenses.filter((x) => x.settlement);
     const buildRow = (x) => {
       const r = el("div", { class: `exp-item${x.settlement ? " exp-transfer-row" : ""}` });
-      const w = el("div", { style: "flex:1;min-width:0" });
+      const w = el("div", { class: "u-flex-1" });
       w.appendChild(el("div", { class: "exp-desc", text: x.desc }));
       // Show the split scope so an unequal share is visible, not hidden.
       // Show the FULL pinned set. Filtering to people still on the roster made
@@ -4556,17 +4598,15 @@
         if (state.role === "organizer" && !pos.onRoster && pos.net < -0.005) {
           row.appendChild(
             el("button", {
-              class: "btn ghost sm",
-              style: "width:auto",
-              text: "Write off",
+              class: "btn ghost sm u-w-auto",
+                            text: "Write off",
               onClick: () => {
                 if (!window.confirm(
                   `Write off ${money(-pos.net)} owed by ${pName(pos.id)}?\n\n` +
                     "The group absorbs it. The original expenses stay on the books."
                 )) return;
                 writeOffBalance(pos.id, -pos.net);
-              },
-            })
+              } })
           );
         }
         table.appendChild(row);
@@ -4575,7 +4615,7 @@
     }
     if (allSquare) {
       card.appendChild(
-        el("div", { class: "exp-square", text: "🎉 Everyone's square — the books are closed." })
+        el("div", { class: "exp-square", icon: "check", text: "Everyone's square — the books are closed." })
       );
     }
     // "each" is only meaningful when every expense is split the same way;
@@ -4616,7 +4656,7 @@
         const to = x.sharedWith[0];
         (held[to] = held[to] || []).push(x);
       });
-      card.appendChild(el("div", { class: "gl", text: "💰 Kitty", style: "margin-top:12px" }));
+      card.appendChild(el("div", { class: "gl u-mt-3", icon: "wallet", text: "Kitty" }));
       Object.entries(held).forEach(([to, list]) => {
         const sum = list.reduce((a, x) => a + x.amount, 0);
         const from = [...new Set(list.map((x) => pName(x.payerId)))];
@@ -4629,13 +4669,11 @@
       });
       card.appendChild(
         el("div", {
-          class: "muted",
-          style: "font-size:.78rem;margin-top:4px",
-          text: "Settle-up starts once shared costs are added.",
-        })
+          class: "muted u-text-xs u-mt-1",
+                    text: "Settle-up starts once shared costs are added." })
       );
     } else if (transfers.length) {
-      card.appendChild(el("div", { class: "gl", text: "To settle up", style: "margin-top:12px" }));
+      card.appendChild(el("div", { class: "gl u-mt-3", text: "To settle up" }));
       transfers.forEach((t) => {
         const row = el("div", { class: "exp-transfer" });
         row.appendChild(
@@ -4801,12 +4839,12 @@
     if (!b) {
       if (state.role === "organizer" && combos.length >= 2) {
         const card = el("div", { class: "card vote-cta" });
-        card.appendChild(el("div", { class: "vote-cta-title", text: "🗳️ Can't agree? Put it to a vote" }));
+        card.appendChild(el("div", { class: "vote-cta-title", icon: "vote", text: "Can't agree? Put it to a vote" }));
         card.appendChild(
           el("div", { class: "vote-cta-sub", text: "Let everyone pick from the top options — the group decides, the score just breaks ties." })
         );
         card.appendChild(
-          el("button", { class: "btn", style: "width:100%;margin-top:12px", text: "Open a vote", onClick: openBallot })
+          el("button", { class: "btn u-w-full u-mt-3", text: "Open a vote", onClick: openBallot })
         );
         panel.appendChild(card);
       } else if (state.role !== "organizer" && combos.length >= 2) {
@@ -4814,7 +4852,7 @@
         panel.appendChild(
           el("div", {
             class: "card vote-cta",
-            text: "🗳️ No vote open. If the group can't agree, the organiser can start one.",
+            icon: "vote", text: "No vote open. If the group can't agree, the organiser can start one.",
           })
         );
       }
@@ -4831,7 +4869,7 @@
 
     const card = el("div", { class: "card vote-card" });
     const head = el("div", { class: "vote-head" });
-    head.appendChild(el("h3", { class: "vote-title", text: b.open ? "🗳️ Vote for the plan" : "🏁 Vote results" }));
+    head.appendChild(el("h3", { class: "vote-title", icon: "vote", text: b.open ? "Vote for the plan" : "Vote results" }));
     const { eligible } = E.tallyBallot(state.participants, b);
     head.appendChild(
       el("span", { class: "hint", text: `${totalVotes} of ${eligible} voted` })
@@ -4848,7 +4886,7 @@
       if (!b.open) row.disabled = true;
       const top = el("div", { class: "vote-opt-top" });
       top.appendChild(el("span", { class: "vote-emoji", text: D.cityEmoji(o.destination) }));
-      const w = el("div", { style: "flex:1;min-width:0" });
+      const w = el("div", { class: "u-flex-1" });
       const t = el("div", { class: "vote-opt-title" });
       t.appendChild(el("span", { text: o.destination }));
       if (myVote === o.id) t.appendChild(el("span", { class: "vote-you", text: "✓ you" }));
@@ -4880,7 +4918,7 @@
         }
       } else {
         ctrl.appendChild(
-          el("button", { class: "btn sm", text: `🔒 Lock ${ordered[0].destination}`, onClick: () => lockBallotOption(ordered[0]) })
+          el("button", { class: "btn sm", icon: "lock", text: `Lock ${ordered[0].destination}`, onClick: () => lockBallotOption(ordered[0]) })
         );
         ctrl.appendChild(el("button", { class: "btn ghost sm", text: "Reopen", onClick: reopenBallot }));
         ctrl.appendChild(el("button", { class: "btn ghost sm", text: "Clear", onClick: clearBallot }));
@@ -5195,7 +5233,7 @@
           el("div", {
             class: "notif-name",
             text: locked
-              ? `🔒 ${n.name || "The organiser"} locked the plan`
+              ? `${n.name || "The organiser"} locked the plan`
               : declined
                 ? `${n.name || "Someone"} can't make it`
                 : `${n.name || "Someone"} responded`,
@@ -5282,7 +5320,7 @@
     }
     b.hidden = false;
     const line = el("div");
-    line.appendChild(el("span", { text: "🧪 Demo mode — sample people loaded. " }));
+    line.appendChild(el("span", { icon: "flask", text: "Demo mode — sample people loaded. " }));
     line.appendChild(el("button", { class: "link-btn", text: "Clear sample data", onClick: clearDemo }));
     b.appendChild(line);
     // "Respond as" simulator: experience the app — and vote — as any member.
@@ -5486,7 +5524,7 @@
     // Gated teaser before the event (organiser can preview early).
     if (beforeEvent && !memoryPreview) {
       const card = el("div", { class: "card memory-teaser" });
-      card.appendChild(el("div", { class: "memory-emoji", text: "📸" }));
+      card.appendChild(el("div", { class: "memory-emoji", icon: "camera", text: "" }));
       card.appendChild(el("div", { class: "memory-title", text: "The Memory Wall unlocks on the day" }));
       card.appendChild(
         el("div", {
@@ -5497,14 +5535,12 @@
       if (state.role === "organizer") {
         card.appendChild(
           el("button", {
-            class: "btn ghost sm",
-            style: "margin-top:14px",
-            text: "Preview the wall",
+            class: "btn ghost sm u-mt-4",
+                        text: "Preview the wall",
             onClick: () => {
               memoryPreview = true;
               renderMemories();
-            },
-          })
+            } })
         );
       }
       panel.appendChild(card);
@@ -5516,7 +5552,7 @@
       panel.appendChild(
         el("div", {
           class: "demo-banner",
-          text: `👀 Preview — the wall opens for everyone after ${state.lockedPlan.dateLabel}.`,
+          icon: "eye", text: `Preview — the wall opens for everyone after ${state.lockedPlan.dateLabel}.`,
         })
       );
     }
@@ -5531,29 +5567,27 @@
     composer.appendChild(ta);
     const row = el("div", { class: "memory-actions" });
     // Hidden file input + button to trigger it.
-    const fileInput = el("input", { type: "file", accept: "image/*", style: "display:none" });
+    const fileInput = el("input", { type: "file", accept: "image/*", hidden: "", });
     fileInput.addEventListener("change", (e) => {
       addPhoto(e.target.files && e.target.files[0]);
       e.target.value = "";
     });
     row.appendChild(fileInput);
     row.appendChild(
-      el("button", { class: "btn secondary sm", text: "📷 Photo", onClick: () => fileInput.click() })
+      el("button", { class: "btn secondary sm", icon: "camera", text: "Photo", onClick: () => fileInput.click() })
     );
     row.appendChild(
       el("button", {
-        class: "btn sm",
-        style: "flex:1",
-        text: "Add note",
+        class: "btn sm u-flex-1",
+                text: "Add note",
         onClick: () => {
           addNote(ta.value);
           ta.value = "";
-        },
-      })
+        } })
     );
     composer.appendChild(row);
     composer.appendChild(
-      el("div", { class: "memory-note", text: "🔒 Stored only in this browser — these stay on your device." })
+      el("div", { class: "memory-note", icon: "lock", text: "Stored only in this browser — these stay on your device." })
     );
     panel.appendChild(composer);
 
@@ -5567,7 +5601,7 @@
       const item = el("div", { class: "card tight memory-item stagger" });
       const head = el("div", { class: "memory-item-head" });
       head.appendChild(el("div", { class: "pcard-avatar sm", text: authorEmoji(m.authorId) }));
-      const who = el("div", { style: "flex:1;min-width:0" });
+      const who = el("div", { class: "u-flex-1" });
       who.appendChild(el("div", { class: "memory-author", text: m.authorName || "Someone" }));
       who.appendChild(el("div", { class: "memory-time", text: timeAgo(m.ts) }));
       head.appendChild(who);
@@ -5775,8 +5809,8 @@
             setTimeout(() => {
               toast(
                 lockChanged
-                  ? `📌 The plan changed — now ${lockChanged.destination}, ${lockChanged.dateLabel}`
-                  : "📌 The organiser unlocked the plan — nothing is fixed yet"
+                  ? `The plan changed — now ${lockChanged.destination}, ${lockChanged.dateLabel}`
+                  : "The organiser unlocked the plan — nothing is fixed yet"
               );
             }, bits.length ? 2600 : 0);
           }
@@ -5834,7 +5868,10 @@
     document.documentElement.setAttribute("data-theme", theme);
     syncThemeColor();
     const b = $("#themeToggle");
-    if (b) b.textContent = theme === "light" ? "☀️" : "🌙";
+    if (b) {
+      b.textContent = "";
+      b.appendChild(icon(theme === "light" ? "sun" : "moon"));
+    }
   }
   function initTheme() {
     let t = "light"; // Deeper is drawn light; dark keeps the same hues, deeper

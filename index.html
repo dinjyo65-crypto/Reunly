@@ -31,12 +31,12 @@
     </div>
     <div class="spacer"></div>
     <div class="bell-wrap" id="notifWrap" hidden>
-      <button class="btn ghost sm" id="notifBtn" aria-label="Notifications" title="Notifications">🔔</button>
+      <button class="btn ghost sm" id="notifBtn" aria-label="Notifications" title="Notifications"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg></button>
       <span class="notif-dot" id="notifDot" hidden></span>
       <div class="notif-panel" id="notifPanel" hidden></div>
     </div>
-    <button class="btn ghost sm" id="phoneBtn" aria-label="Open on your phone" title="Open on your phone">📱</button>
-    <button class="btn ghost sm" id="themeToggle" aria-label="Toggle theme" title="Toggle light/dark">🌙</button>
+    <button class="btn ghost sm" id="phoneBtn" aria-label="Open on your phone" title="Open on your phone"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg></button>
+    <button class="btn ghost sm" id="themeToggle" aria-label="Toggle theme" title="Toggle light/dark"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg></button>
     <button class="btn ghost sm" id="restartBtn" hidden>Restart</button>
   </header>
     <!-- The one next move for this phase (dashboard only). -->
@@ -73,7 +73,7 @@
         <input id="regEmail" type="email" autocomplete="email" placeholder="jordan@example.com" />
         <label for="regCity">Home city</label>
         <input id="regCity" type="text" autocomplete="off" placeholder="Start typing a city…" />
-        <button class="btn ghost sm" id="regDetect" type="button" style="margin-top:8px">📍 Use my location</button>
+        <button class="btn ghost sm u-mt-2" id="regDetect" type="button"><svg class="icon lead" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>Use my location</button>
         <div class="loc-note" id="regLocNote"></div>
         <div class="error" id="regError"></div>
         <button class="btn" id="regSubmit" style="margin-top:16px">Get started →</button>
@@ -162,7 +162,7 @@
           <span class="chip" id="inviteChip">Invite code: —</span>
           <span class="chip" id="countChip">0 invited</span>
         </div>
-        <button class="btn secondary sm" id="shareBtn" style="width:auto;margin-top:10px">📨 Invite people</button>
+        <button class="btn secondary sm u-w-auto u-mt-3" id="shareBtn"><svg class="icon lead" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>Invite people</button>
       </details>
 
       <!-- Demo-mode banner -->
@@ -301,7 +301,7 @@
   <div id="phoneModal" class="modal" role="dialog" aria-modal="true" aria-label="Open on your phone" hidden>
     <div class="modal-card">
       <div class="modal-head">
-        <h2>📱 Test on your phone</h2>
+        <h2><svg class="icon lead" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>Test on your phone</h2>
         <button class="icon-btn" id="phoneClose" aria-label="Close">✕</button>
       </div>
       <ol class="phone-steps">
