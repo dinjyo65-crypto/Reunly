@@ -56,30 +56,39 @@
            Pre-rendered loops (hero-animation/, Remotion) that app.js plays in
            turn; the poster is the finale, shown as first paint and to anyone
            who prefers reduced motion. Purely decorative. -->
-      <div class="hero-video" aria-hidden="true">
-        <video id="heroVideo" muted playsinline preload="none"
-               poster="media/hero-poster.jpg" disablepictureinpicture></video>
+      <!-- The hero: the globe loop, and below it — in the same dark card — the
+           headline in Ember's wide light capitals. Below, not over: the
+           animation carries its own place names. -->
+      <div class="hero-card">
+        <div class="hero-video" aria-hidden="true">
+          <video id="heroVideo" muted playsinline preload="none"
+                 poster="media/hero-poster.jpg" disablepictureinpicture></video>
+        </div>
+        <div class="hero-caption">
+          <div class="eyebrow">When · where · how</div>
+          <h1 class="hero-title">Get the group together</h1>
+          <p class="hero-tag">The easiest way to plan <span class="rot" id="rotator">a reunion 🎉</span></p>
+        </div>
       </div>
-      <div class="hero">
-        <div class="hero-badge">✦ When · where · how, sorted</div>
-        <h1 class="hero-title">Get the group<br /><span class="grad">together.</span></h1>
-        <p class="hero-tag">The easiest way to plan
-          <span class="rot" id="rotator">a reunion 🎉</span></p>
-      </div>
+      <ol class="how-steps" aria-label="How it works">
+        <li><span class="n">1</span>Everyone adds their dates</li>
+        <li><span class="n">2</span>We rank where and when</li>
+        <li><span class="n">3</span>Vote, lock, go</li>
+      </ol>
       <div class="card center-card reg-card">
-        <label for="regName">Full name</label>
+        <label for="regName">Your name</label>
         <input id="regName" type="text" autocomplete="name" placeholder="Jordan Rivera" />
-        <label for="regEmail">Email address</label>
+        <label for="regEmail">Email</label>
         <input id="regEmail" type="email" autocomplete="email" placeholder="jordan@example.com" />
-        <label for="regCity">Home city</label>
-        <input id="regCity" type="text" autocomplete="off" placeholder="Start typing a city…" />
-        <button class="btn ghost sm u-mt-2" id="regDetect" type="button"><svg class="icon lead" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>Use my location</button>
+        <label for="regCity">Home city <span class="label-hint">· sets your currency and travel costs</span></label>
+        <div class="city-row">
+          <input id="regCity" type="text" autocomplete="off" placeholder="Start typing a city…" />
+          <button class="btn ghost icon-only" id="regDetect" type="button" aria-label="Use my location" title="Use my location"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg></button>
+        </div>
         <div class="loc-note" id="regLocNote"></div>
         <div class="error" id="regError"></div>
-        <button class="btn" id="regSubmit" style="margin-top:16px">Get started →</button>
-        <p class="muted" style="font-size:.72rem;text-align:center;margin:12px 0 0">
-          No account needed · lives in this browser until you share an invite link
-        </p>
+        <button class="btn u-mt-4" id="regSubmit">Get started</button>
+        <p class="muted reg-note">No account, nothing to install. Your details stay in this browser until you share a link.</p>
       </div>
     </section>
 

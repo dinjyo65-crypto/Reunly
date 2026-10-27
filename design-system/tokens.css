@@ -51,6 +51,11 @@
   --gradient-deadline: linear-gradient(100deg, #5e4a17 0%, #c9922f 46%, #8a6b22 100%);
   --color-on-deadline: #fff9eb;
   --color-on-deadline-muted: #f3e3c2;
+  /* Text on a photo / the dark hero card — same in every look */
+  --color-hero-bg: #120e1a;
+  --color-on-photo: #fffdf9;
+  --color-on-photo-muted: #d9cfc4;
+  --color-on-photo-accent: #f2c9a0;
   /* Warm note colour ("Find us: back room") */
   --color-highlight: #fcd34d;
   /* Previously used without being defined (a fallback decided them). */
