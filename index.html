@@ -72,24 +72,27 @@
       </div>
       <ol class="how-steps" aria-label="How it works">
         <li><span class="n">1</span>Everyone adds their dates</li>
-        <li><span class="n">2</span>We rank where and when</li>
-        <li><span class="n">3</span>Vote, lock, go</li>
+        <li><span class="n">2</span>We find the best dates and place</li>
+        <li><span class="n">3</span>Vote, confirm, go</li>
       </ol>
-      <div class="card center-card reg-card">
+      <form class="card center-card reg-card" id="regForm" novalidate>
         <label for="regName">Your name</label>
-        <input id="regName" type="text" autocomplete="name" placeholder="Jordan Rivera" />
-        <label for="regEmail">Email</label>
-        <input id="regEmail" type="email" autocomplete="email" placeholder="jordan@example.com" />
+        <input id="regName" type="text" autocomplete="name" placeholder="e.g. Jordan Rivera" enterkeyhint="next" />
+        <div class="error field-err" id="regNameErr" role="alert"></div>
+        <label for="regEmail">Email <span class="label-hint">· only to recognise you here, never put in links</span></label>
+        <input id="regEmail" type="email" autocomplete="email" placeholder="e.g. jordan@example.com" enterkeyhint="next" />
+        <div class="error field-err" id="regEmailErr" role="alert"></div>
         <label for="regCity">Home city <span class="label-hint">· sets your currency and travel costs</span></label>
         <div class="city-row">
-          <input id="regCity" type="text" autocomplete="off" placeholder="Start typing a city…" />
+          <input id="regCity" type="text" autocomplete="off" placeholder="Start typing a city…" enterkeyhint="go" />
           <button class="btn ghost icon-only" id="regDetect" type="button" aria-label="Use my location" title="Use my location"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg></button>
         </div>
-        <div class="loc-note" id="regLocNote"></div>
-        <div class="error" id="regError"></div>
-        <button class="btn u-mt-4" id="regSubmit">Get started</button>
+        <div class="error field-err" id="regCityErr" role="alert"></div>
+        <div class="loc-note" id="regLocNote" role="status"></div>
+        <div class="error" id="regError" role="alert"></div>
+        <button class="btn u-mt-4" id="regSubmit" type="submit">Get started</button>
         <p class="muted reg-note">No account, nothing to install. Your details stay in this browser until you share a link.</p>
-      </div>
+      </form>
     </section>
 
     <!-- ============ Screen: Choose path ============ -->
@@ -101,13 +104,13 @@
         <div class="cat-list" id="categoryList"></div>
         <div class="card join-card">
           <h2 class="card-eyebrow">Joining someone else's?</h2>
-          <label for="joinCode">Invite code</label>
+          <label for="joinCode">Paste the invite link</label>
           <div class="join-row">
-            <input id="joinCode" type="text" placeholder="e.g. FAM-2026" autocomplete="off" />
+            <input id="joinCode" type="url" placeholder="https://… the link the organiser sent" autocomplete="off" />
             <button class="btn secondary" id="joinSubmit">Join</button>
           </div>
           <div class="error" id="joinError"></div>
-          <p class="field-note">Opening the organiser's link does this for you.</p>
+          <p class="field-note">Or just tap the link in your messages: it opens the right event.</p>
         </div>
         <div class="try-row">
           <span>Just looking? See a sample group work through a plan.</span>
@@ -122,12 +125,12 @@
         <button class="link-btn back-link" id="setupBack" type="button">&larr; All event types</button>
         <div class="eyebrow" id="setupEyebrow">Trip or reunion</div>
         <h1 class="start-title" id="setupTitle">Name your event</h1>
-        <div class="card">
+        <form class="card" id="setupForm" novalidate>
           <label for="setupName">Event name</label>
-          <input id="setupName" type="text" autocomplete="off" placeholder="e.g. The Class of '15 Reunion" />
+          <input id="setupName" type="text" autocomplete="off" placeholder="e.g. The Class of '15 Reunion" required />
           <!-- "Something else": is the date already set? -->
           <div id="setupAsk" hidden>
-            <div class="gl" style="margin-top:14px">Is the date already set?</div>
+            <div class="gl u-mt-3">Is the date already set?</div>
             <div class="chip-select" role="group" aria-label="Is the date already set?">
               <button class="chip-toggle" id="setupFixedYes" type="button" aria-pressed="false">Yes, it's set</button>
               <button class="chip-toggle" id="setupFixedNo" type="button" aria-pressed="false">No — find a date that suits everyone</button>
@@ -148,10 +151,10 @@
             <label for="setupWhere">Where <span class="muted">(town or city)</span></label>
             <input id="setupWhere" type="text" autocomplete="off" placeholder="Start typing a town or city…" />
           </div>
-          <div class="error" id="setupError"></div>
-          <button class="btn" id="setupGo" style="margin-top:14px">Create the event</button>
+          <div class="error" id="setupError" role="alert"></div>
+          <button class="btn u-mt-3" id="setupGo" type="submit">Create the event</button>
           <p class="field-note" id="setupNote"></p>
-        </div>
+        </form>
       </div>
     </section>
 
@@ -295,6 +298,7 @@
       <p class="muted" id="inviteIntro" style="font-size:.8rem;margin:0 0 12px">
         Share one link — everyone adds their dates &amp; preferences. Nothing to install.
       </p>
+      <div class="alert-note" id="inviteNudge" role="status" hidden></div>
       <div class="invite-grid">
         <a class="invite-opt" id="inviteWhatsApp" target="_blank" rel="noopener noreferrer">WhatsApp</a>
         <a class="invite-opt" id="inviteSms">Text message</a>

@@ -191,12 +191,13 @@ const EVENT_TYPES = [
  * out is the pub-crawl planner (prototypes/pub-crawl/).
  */
 const EVENT_CATEGORIES = [
-  { id: "trip", title: "Trip or reunion", sub: "Everyone's free dates and budget, where to go, vote, lock it.", type: "Holiday / group trip", dates: "flexible", icon: "pin" },
-  { id: "family", title: "Family get-together", sub: "Find the weekend that works for everyone, kids and partners included.", type: "Family gathering", dates: "flexible", icon: "home" },
+  { id: "reunion", title: "Reunion", sub: "School, uni or old friends: find the dates most people can do, then where.", type: "Reunion", dates: "flexible", icon: "home" },
+  { id: "trip", title: "Group trip", sub: "Everyone's free dates and budget, where to go, then a vote.", type: "Holiday / group trip", dates: "flexible", icon: "pin" },
+  { id: "family", title: "Family get-together", sub: "Find the weekend that works for everyone, kids and partners included.", type: "Family gathering", dates: "flexible", icon: "calendar" },
   { id: "birthday", title: "Birthday", sub: "Your date and place — RSVPs, plus-ones, who's bringing what.", type: "Birthday", dates: "fixed", icon: "cake" },
   { id: "wedding", title: "Wedding", sub: "Your date and venue — RSVPs, partners and kids, getting there.", type: "Wedding", dates: "fixed", icon: "rings" },
   { id: "evening", title: "Evening out", sub: "Work drinks or a pub crawl: a route, who joins where, getting home safe.", href: "prototypes/pub-crawl/", icon: "glass" },
-  { id: "other", title: "Something else", sub: "Tell us whether the date is already set.", type: "Other", dates: "ask", icon: "dots" },
+  { id: "other", title: "Something else", sub: "Anything else: a date that's already set, or one to find together.", type: "Other", dates: "ask", icon: "dots" },
 ];
 
 /** Dietary options collected per person and rolled up for the host. */

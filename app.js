@@ -841,10 +841,13 @@
         return;
       }
     } catch (e) {
-      return; // user dismissed the share sheet
+      // Cancelling the sheet is a choice; anything else (no permission, an
+      // unsupported payload) falls through to copying the link instead.
+      if (e && e.name === "AbortError") return;
     }
     try {
       await navigator.clipboard.writeText(url);
+      markInvited();
       toast("Invite link copied to clipboard");
     } catch (e) {
       window.prompt("Copy this invite link:", url);
@@ -880,11 +883,13 @@
       saveState();
       renderNowBar();
     }
-    if (!guest && !state.reunion.invitedAt) {
-      state.reunion.invitedAt = Date.now();
-      saveState();
-      renderNowBar();
-    }
+    // An invite sent before the organiser's own dates carries none.
+    const me = state.participants.find(isMe);
+    const noDates = !guest && !state.reunion.fixed && !state.demoMode && me && !me.dates.some(E.isValidRange);
+    $("#inviteNudge").hidden = !noDates;
+    $("#inviteNudge").textContent = noDates
+      ? "Add your own dates first: the link carries them, so the group can see when you're free."
+      : "";
     $("#inviteModal").setAttribute("aria-label", $("#inviteTitle").textContent);
     $("#inviteIntro").textContent = guest
       ? `Send ${to} this link. When they open it, your dates and choices are added to the group plan.`
@@ -898,6 +903,14 @@
       `&body=${encodeURIComponent(msg)}`;
     $("#inviteModal").hidden = false;
     $("#inviteClose").focus();
+  }
+  // The organiser has invited people once a link actually leaves the phone,
+  // not when the sheet merely opens.
+  function markInvited() {
+    if (state.role !== "organizer" || state.reunion.invitedAt) return;
+    state.reunion.invitedAt = Date.now();
+    saveState();
+    renderNowBar();
   }
   function closeInviteModal() {
     $("#inviteModal").hidden = true;
@@ -914,11 +927,15 @@
       if (!$("#phoneModal").hidden) $("#phoneModal").hidden = true;
       if (!$("#proModal").hidden) closeProModal();
     });
-    $("#inviteSms").addEventListener("click", () => setTimeout(closeInviteModal, 50));
-    $("#inviteEmail").addEventListener("click", () => setTimeout(closeInviteModal, 50));
-    $("#inviteWhatsApp").addEventListener("click", () => setTimeout(closeInviteModal, 50));
+    ["#inviteSms", "#inviteEmail", "#inviteWhatsApp"].forEach((id) =>
+      $(id).addEventListener("click", () => {
+        markInvited();
+        setTimeout(closeInviteModal, 50);
+      })
+    );
     $("#inviteCopy").addEventListener("click", async () => {
       const url = $("#inviteLink").value;
+      markInvited();
       try {
         await navigator.clipboard.writeText(url);
         toast(state.role === "organizer" ? "Invite link copied" : "Link copied — paste it to the organiser");
@@ -1042,14 +1059,14 @@
    * invalid, points at its message, and the message is announced. Cleared as
    * soon as the person types.
    */
-  function fieldError(input, errEl, msg) {
+  function fieldError(input, errEl, msg, focus = true) {
     if (!errEl.id) errEl.id = `${input.id || "field"}Error`;
     errEl.textContent = msg;
     errEl.setAttribute("role", "alert");
     if (!input) return;
     input.setAttribute("aria-invalid", "true");
     input.setAttribute("aria-describedby", errEl.id);
-    input.focus();
+    if (focus) input.focus();
     input.addEventListener("input", function clear() {
       input.removeAttribute("aria-invalid");
       errEl.textContent = "";
@@ -1139,6 +1156,10 @@
         const data = await res.json();
         failed = false;
         if (input.value.trim() !== q) return; // stale response
+        // A reply that lands after the person has moved on must not float a
+        // list over whatever they tap next: a late "Lisb" list sat over Done,
+        // and that tap picked "Sabaudia, Italy" for them.
+        if (document.activeElement !== input) return close();
         items = (data.results || []).slice(0, 6);
         active = -1;
         if (items.length) render();
@@ -1387,14 +1408,22 @@
       });
     }
 
-    $("#regSubmit").addEventListener("click", () => {
+    $("#regForm").addEventListener("submit", (e) => {
+      e.preventDefault();
       const name = $("#regName").value.trim();
       const email = $("#regEmail").value.trim();
       const city = $("#regCity").value.trim();
       const err = $("#regError");
-      if (!name) return fieldError($("#regName"), err, "Please enter your name.");
-      if (!isValidEmail(email)) return fieldError($("#regEmail"), err, "Please enter a valid email.");
-      if (!city) return fieldError(cityInput, err, "Please enter your home city.");
+      // Every problem at once, each under its own field; focus the first.
+      const problems = [
+        !name && [$("#regName"), $("#regNameErr"), "Enter your name."],
+        !isValidEmail(email) && [$("#regEmail"), $("#regEmailErr"), email ? "That email looks incomplete, e.g. name@example.com." : "Enter your email."],
+        !city && [cityInput, $("#regCityErr"), "Enter your home city."],
+      ].filter(Boolean);
+      if (problems.length) {
+        problems.forEach(([input, errEl, msg], i) => fieldError(input, errEl, msg, i === 0));
+        return;
+      }
       const picked = regPick && regPick.label === city;
       // Only insist on a pick when we can actually offer one: if the lookup
       // service is unreachable, a typed city beats locking someone out.
@@ -1524,7 +1553,14 @@
     setupFixed = c.dates === "fixed";
     $("#setupEyebrow").textContent = c.title;
     $("#setupTitle").innerHTML = setupFixed ? "Name it and<br />set the date" : "Name your event";
-    $("#setupName").value = "";
+    ["#setupName", "#setupStart", "#setupEnd", "#setupWhere"].forEach((id) => {
+      $(id).value = "";
+      $(id).removeAttribute("aria-invalid");
+    });
+    setupWherePick = null;
+    const today = new Date().toISOString().slice(0, 10);
+    $("#setupStart").min = today;
+    $("#setupEnd").min = today;
     $("#setupName").placeholder =
       c.id === "birthday" ? "e.g. Priya's 40th" : c.id === "wedding" ? "e.g. Sam & Alex's wedding"
       : c.id === "family" ? "e.g. Summer at Grandma's" : "e.g. The Class of '15 Reunion";
@@ -1548,12 +1584,14 @@
     $("#setupFixedNo").classList.toggle("on", !fixed);
     $("#setupFixedNo").setAttribute("aria-pressed", fixed ? "false" : "true");
     $("#setupFixed").hidden = !fixed;
+    $("#setupError").textContent = "";
     $("#setupTitle").innerHTML = fixed ? "Name it and<br />set the date" : "Name your event";
   }
   function createFromSetup() {
     const c = setupCat || D.EVENT_CATEGORIES[0];
     const err = $("#setupError");
     const name = $("#setupName").value.trim();
+    if (!name) return fieldError($("#setupName"), err, "Give it a name your group will recognise.");
     if (c.dates === "ask" && $("#setupAsk").hidden === false
         && !$("#setupFixedYes").classList.contains("on") && !$("#setupFixedNo").classList.contains("on")) {
       err.textContent = "Say whether the date is already set.";
@@ -1565,12 +1603,13 @@
       const end = $("#setupEnd").value || start;
       const where = (setupWherePick && setupWherePick.label) || $("#setupWhere").value.trim();
       if (!start) return fieldError($("#setupStart"), err, "Pick the date.");
+      if (start < new Date().toISOString().slice(0, 10)) return fieldError($("#setupStart"), err, "That date has already passed.");
       if (end < start) return fieldError($("#setupEnd"), err, "The end can't be before the start.");
       if (!where) return fieldError($("#setupWhere"), err, "Say where it is — a town or city is enough.");
       plan = { destination: where, dateStart: start, dateEnd: end, dateLabel: E.rangeLabel({ start, end }) };
     }
     err.textContent = "";
-    state.reunion.name = name || (c.id === "trip" ? "Untitled get-together" : c.title);
+    state.reunion.name = name;
     state.reunion.type = c.type;
     state.reunion.category = c.id;
     state.reunion.fixed = !!plan;
@@ -1596,7 +1635,10 @@
     $("#setupBack").addEventListener("click", () => showScreen("choose"));
     $("#setupFixedYes").addEventListener("click", () => setAsk(true));
     $("#setupFixedNo").addEventListener("click", () => setAsk(false));
-    $("#setupGo").addEventListener("click", createFromSetup);
+    $("#setupForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      createFromSetup();
+    });
     attachAutocomplete($("#setupWhere"), (label, s) => { setupWherePick = s; }, { kind: "city" });
     $("#setupWhere").addEventListener("input", () => {
       if (setupWherePick && $("#setupWhere").value !== setupWherePick.label) setupWherePick = null;
@@ -1611,10 +1653,15 @@
       loadDemo();
     });
     $("#joinSubmit").addEventListener("click", () => {
-      const code = $("#joinCode").value.trim();
-      if (!code) return fieldError($("#joinCode"), $("#joinError"), "Enter the invitation code.");
+      const link = $("#joinCode").value.trim();
+      const m = link.match(/#(r=.+)$/);
+      if (!m) {
+        return fieldError($("#joinCode"), $("#joinError"),
+          link ? "That isn't an invite link. Paste the whole link the organiser sent you." : "Paste the invite link the organiser sent you.");
+      }
       $("#joinError").textContent = "";
-      enterDashboard("join", code.toUpperCase());
+      location.hash = m[1];
+      location.reload();
     });
   }
 
@@ -1630,7 +1677,21 @@
       state.reunion.type = e.target.value;
       saveState();
     });
-    $("#restartBtn").addEventListener("click", () => fullReset());
+    $("#restartBtn").addEventListener("click", async () => {
+      const name = state.reunion.name || "this event";
+      if (state.participants.length && state.role === "organizer" && !state.demoMode) {
+        if (window.confirm(`Copy a backup link to "${name}" before restarting?\n\nOK copies it. Cancel goes on without one.`)) {
+          try {
+            await navigator.clipboard.writeText(buildShareUrl());
+            toast("Backup link copied");
+          } catch (e) {
+            window.prompt("Copy this backup link:", buildShareUrl());
+          }
+        }
+      }
+      if (!window.confirm(`Start over? "${name}" and everyone's answers on this phone will be deleted.`)) return;
+      fullReset();
+    });
     $("#shareBtn").addEventListener("click", openInviteModal);
     wireInviteModal();
     $("#currencyToggle").addEventListener("click", () => {
@@ -1769,6 +1830,9 @@
         onClick: () => {
           state.editingId = null;
           renderAll();
+          if (state.role === "organizer" && isMe(p) && !state.demoMode) {
+            toast(hasResponded(p) ? (state.reunion.invitedAt ? "Saved" : "Saved. Invite your group next") : "Saved. Add your dates when you know them");
+          }
           // A guest finishing their own card is the moment to send it — their
           // answers are on this phone only until the organiser opens the link.
           if (state.role !== "organizer" && isMe(p)) openInviteModal();
@@ -2772,7 +2836,10 @@
       state.lockedPlan && lockedCombo && combos[0] !== lockedCombo ? combos[0] : null;
     const card = el("div", { class: "card winner-card stagger" });
 
-    addRecPhoto(card, c.destination, locked ? "Agreed" : "Top pick");
+    // With one set of answers there is nothing to rank: 100% across the board
+    // just echoes that person back as a "winner".
+    const solo = !locked && !state.demoMode && state.participants.filter(hasResponded).length < 2;
+    addRecPhoto(card, c.destination, locked ? "Agreed" : solo ? "Your pick so far" : "Top pick");
 
     const body = el("div", { class: "winner-body" });
     const whenLine = el("div", { class: "winner-when", icon: "calendar", text: `${c.dateLabel}` });
@@ -2788,6 +2855,7 @@
     if (wNote) body.appendChild(el("div", { class: "winner-weather", text: wNote }));
 
     const grid = el("div", { class: "score-grid" });
+    grid.hidden = solo;
     grid.appendChild(scoreCell("Date", pct(c.dateScore), c.dateScore));
     grid.appendChild(scoreCell("Place", pct(c.destScore), c.destScore));
     grid.appendChild(scoreCell("Cost", pct(c.costScore), c.costScore));
@@ -3267,7 +3335,7 @@
       : null;
     // Name the destination ONCE in the heading instead of on every card.
     $("#costsHeading").textContent = groupBest
-      ? `Getting to ${D.cityEmoji(groupBest)} ${groupBest}${state.lockedPlan ? "" : " (top pick so far)"}`
+      ? `Getting to ${D.cityEmoji(groupBest)} ${groupBest}${state.lockedPlan ? "" : state.participants.filter(hasResponded).length < 2 ? " (your pick so far)" : " (top pick so far)"}`
       : "Travel costs";
 
     // The gold bar: the one dated thing on this tab — book by, or square up by.
@@ -5026,8 +5094,8 @@
           // Invited, but nobody's answers have come back yet.
           return {
             eyebrow: "Gathering replies",
-            headline: "Waiting for the first reply",
-            sub: "Replies appear here as people send their answers back to you.",
+            headline: "Your answers are in",
+            sub: "Now waiting on the group. Replies appear here as people send their answers back.",
             action: { label: "Invite more people", run: openInviteModal },
           };
         }

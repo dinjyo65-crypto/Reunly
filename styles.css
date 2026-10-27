@@ -163,7 +163,7 @@ input:focus, select:focus {
   background: rgba(139, 140, 249, 0.08);
   box-shadow: 0 0 0 4px rgba(139, 140, 249, 0.14);
 }
-input::placeholder { color: #6b7488; }
+input::placeholder { color: var(--color-fg-muted); opacity: 0.6; }
 
 .btn:focus-visible,
 input:focus-visible,
@@ -1455,3 +1455,10 @@ input:focus, select:focus, textarea:focus {
 .center-card.reg-card { margin-top: 0; }
 .btn.icon-only[aria-busy="true"] .icon { display: none; }
 .reg-card .loc-note:empty, .reg-card .error:empty { min-height: 0; margin-top: 0; }
+.reg-card .field-err:empty { display: none; }
+.reg-card .field-err { margin-top: var(--space-1); }
+.alert-note {
+  margin: 0 0 var(--space-3); padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-control); font-size: var(--text-sm);
+  background: var(--color-warning-bg); color: var(--color-fg-default);
+}
