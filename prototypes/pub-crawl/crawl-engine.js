@@ -1,5 +1,5 @@
 /*
- * crawl-engine.js — pure logic for the v0.9 pub-crawl / work-social prototype.
+ * crawl-engine.js — pure logic for the v0.9 pub-crawl / work-social planner.
  * No DOM. Loaded by the page as window.CrawlEngine and by node --test.
  *
  * Times are "HH:MM" on the event's day. Evening events run past midnight, so

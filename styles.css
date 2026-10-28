@@ -312,8 +312,8 @@ a:focus-visible {
 
 /* Toast */
 .toast {
-  position: fixed; left: 50%; bottom: calc(26px + var(--safe-b));
-  transform: translate(-50%, 20px);
+  position: fixed; left: 50%; bottom: calc(var(--space-3) + var(--safe-b)); /* hugs the screen edge, below content, clear of the sticky tab bar at the top */
+  transform: translate(-50%, var(--space-4));
   background: var(--color-bg-surface);
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg-default);
@@ -1471,3 +1471,19 @@ input:focus, select:focus, textarea:focus {
 .dest-field { min-width: 0; flex: 1 1 auto; }
 .unmatched-note:empty { display: none; }
 .unmatched-note { color: var(--color-warning); margin-top: var(--space-1); }
+
+/* Vote card notes: what a vote does, and ties said out loud */
+.vote-note { font-size: var(--text-sm); color: var(--color-fg-muted); margin: 0 0 var(--space-3); line-height: 1.45; }
+.vote-note.tie { color: var(--color-warning); }
+.vote-opt[aria-disabled="true"] { cursor: default; }
+/* Organiser's compact Yes/No row under the top pick */
+.confirm-card.compact .confirm-body { padding: var(--space-3) var(--space-4); }
+.confirm-card.compact .confirm-title { font-size: var(--text-sm); }
+.confirm-card.compact .confirm-q { margin-top: var(--space-2); }
+
+/* Expense form: visible labels, and the "who is in the split" line */
+.exp-field { display: grid; gap: var(--space-1); }
+.exp-field-label { font-size: var(--text-xs); font-weight: var(--font-semibold); color: var(--color-fg-muted); }
+.exp-form-row { align-items: end; }
+.exp-split-line { margin-top: var(--space-2); }
+.group-total { font-size: var(--text-sm); font-weight: var(--font-semibold); color: var(--color-fg-default); margin-bottom: var(--space-3); }

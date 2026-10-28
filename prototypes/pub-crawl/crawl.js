@@ -1,5 +1,5 @@
 /*
- * crawl.js — v0.9 prototype UI: plan an evening (work social / pub crawl),
+ * crawl.js — v0.9 UI: plan an evening (work social / pub crawl),
  * collect "from when, until when", finalise the start, and track the group
  * live so late arrivals can join at a later stop.
  *
@@ -12,6 +12,10 @@
  */
 (function () {
   "use strict";
+  // Follow the Reunly app's light/dark choice (same origin, key reunly_theme).
+  try {
+    document.documentElement.setAttribute("data-theme", localStorage.getItem("reunly_theme") === "dark" ? "dark" : "light");
+  } catch (e) { /* storage blocked: stay light */ }
   const C = window.CrawlEngine;
   const $ = (s) => document.querySelector(s);
   const POLL_MS = 15000;
@@ -29,6 +33,17 @@
       if (c != null) node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
     });
     return node;
+  }
+
+  // The main Reunly app keeps its profile in localStorage on this origin.
+  function savedProfile() {
+    try {
+      const st = JSON.parse(localStorage.getItem("reunly_state_v1") || "null");
+      const u = st && st.user;
+      return u && typeof u === "object" ? { name: String(u.name || "").trim(), city: String(u.city || "").trim() } : null;
+    } catch (e) {
+      return null;
+    }
   }
 
   let toastTimer = null;
@@ -52,7 +67,7 @@
       try {
         localStorage.setItem(k, JSON.stringify(v));
       } catch (e) {
-        /* private mode: the prototype still works for this page view */
+        /* private mode: the planner still works for this page view */
       }
     },
   };
@@ -361,13 +376,19 @@
       dwell.appendChild(el("option", { value: m, text: `${m} min per stop`, selected: m === draft.dwell }))
     );
     dwell.addEventListener("change", () => { draft.dwell = Number(dwell.value); save(); drawRoute(); });
+    // First screen: name, date, start. Everything else is folded into "More options".
+    const more = el("details", { class: "more", id: "evMore" });
     basics.append(
       el("label", { for: "evName", text: "Name" }), name,
-      el("label", { for: "evOrg", text: "Organiser" }), org,
       el("div", { class: "row" }, [
         el("div", {}, [el("label", { for: "evDate", text: "Date" }), date]),
         el("div", {}, [el("label", { for: "evStart", text: "Planned start" }), start]),
       ]),
+      more
+    );
+    more.append(
+      el("summary", { id: "evMoreSum", text: "More options — organiser, where you're coming from, time per stop" }),
+      el("label", { for: "evOrg", text: "Organiser" }), org,
       el("label", { for: "evDwell", text: "Time at each stop" }), dwell
     );
     // Getting home + being reachable on the night.
@@ -395,7 +416,7 @@
       const s = C.scheduleStops(draft.stops, draft.plannedStart, draft.dwell);
       return tripFor(s[s.length - 1], draft.organizerHome, draft.organizerTransport, draft.organizerLastTrain, draft.date);
     };
-    basics.append(
+    more.append(
       el("label", { for: "evOrgPhone", text: "Your phone (optional)" }), orgPhone,
       el("label", { for: "evOrgHome", text: "You're coming from" }), homeWrap,
       el("div", { class: "row stack" }, [
@@ -409,6 +430,34 @@
     // wireTrain clears the train when it isn't relevant — keep the draft in step.
     draft.organizerLastTrain = orgTrain.value;
     app.appendChild(basics);
+
+    // Prefill organiser and start city from the saved Reunly profile (never over what was typed).
+    const profile = savedProfile();
+    if (profile) {
+      if (!draft.organizer && profile.name) {
+        draft.organizer = profile.name.split(/\s+/)[0];
+        org.value = draft.organizer;
+      }
+      if (!draft.organizerHome && !orgHome.value && profile.city) {
+        const city = profile.city;
+        orgHome.value = city;
+        const resolve = async () => {
+          try {
+            const data = (await api(`/api/geosuggest?q=${encodeURIComponent(city)}&kind=area`)).data;
+            const hit = data && data.results && data.results[0];
+            if (hit && orgHome.value === city && !draft.organizerHome) {
+              draft.organizerHome = { label: city, lat: hit.lat, lon: hit.lon };
+              save();
+              drawRoute();
+            }
+          } catch (e) { /* offline: the city text stays, the user can pick a suggestion */ }
+        };
+        resolve();
+      }
+      save();
+    }
+    // Keep the fold open when the organiser's name is still missing (it is required to publish).
+    if (!org.value.trim()) more.open = true;
 
     // --- Who's coming (drives smart suggest) ---
     const who = el("div", { class: "card", id: "whoCard" });
@@ -852,6 +901,8 @@
     const me = store.get(`crawl:me:${ctx.id}`);
     $("#topSub").textContent = `${live.name}${live.organizer ? " · by " + live.organizer : ""}`;
     const isLive = live.status && live.status.phase === "live";
+    // Light app, light page; the dark ember evening look is for the live night.
+    document.documentElement.setAttribute("data-lifecycle", isLive ? "evening" : "gathering");
     $("#liveDot").hidden = !isLive;
     $("#clock").hidden = !isLive;
     if (isLive) $("#clock").textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -1643,7 +1694,10 @@
     live = null;
     const h = parseHash();
     if (h.id) startEvent();
-    else renderBuilder();
+    else {
+      document.documentElement.removeAttribute("data-lifecycle");
+      renderBuilder();
+    }
   }
   window.addEventListener("hashchange", route);
   route();

@@ -1,7 +1,6 @@
-/* Reunly v0.9 prototype — Ember at night. Every shared value comes from
-   /design-system/tokens.css (index.html sets data-look="ember" and
-   data-lifecycle="evening" on <html>, so the paper is warm ink and plum is
-   the one accent). Only what the evening planner adds lives here. */
+/* Reunly v0.9 — Ember, light or dark with the app, ink on the live night. Every shared value comes from
+   /design-system/tokens.css (index.html sets data-look="ember"; crawl.js sets
+   data-theme from the app, and the live night adds data-lifecycle="evening"). Only what the evening planner adds lives here. */
 :root {
   --live: #a8185f;          /* the one main action on the night; white 7.3:1 */
   --live-ink: #fffdf9;
@@ -191,8 +190,9 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
 /* Native controls follow the dark theme. Without this, Windows draws the
    dropdown list white while the option text inherits the light theme colour
    — white on white, unreadable. */
-:root { color-scheme: dark; }
-select option, select optgroup { background: #211d19; color: #f4eee4; }
+:root { color-scheme: light; }
+:root[data-theme="dark"], :root[data-lifecycle="evening"] { color-scheme: dark; }
+select option, select optgroup { background: var(--color-bg-surface); color: var(--color-fg-default); }
 
 /* Safety panel rows: who, then how to reach them */
 .saferow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-1) 0; border-bottom: 1px solid var(--color-border-default); }
@@ -218,14 +218,14 @@ select option, select optgroup { background: #211d19; color: #f4eee4; }
    Text already clears 7:1; what read as dim was size and hairlines. Form
    controls get a 3:1 edge, small labels grow, the two getting-home selects
    stack so neither is cut off, and the map's bright tiles are toned down. */
-input, select { border-color: #6a6055; }
+input, select { border-color: var(--color-fg-muted); }
 .eyebrow { font-size: var(--text-xs); }
 .legend { font-size: var(--text-sm); }
 .row.stack { flex-direction: column; gap: 0; }
 .legend .k-quiet { --dot: transparent; }
 .legend .k-quiet::before { box-shadow: inset 0 0 0 1.5px var(--color-fg-default); }
 .legend .k-home { --dot: var(--color-warning); opacity: 0.85; }
-.leaflet-tile-pane { filter: brightness(0.72) saturate(0.75) contrast(1.05); }
+:root[data-theme="dark"] .leaflet-tile-pane, :root[data-lifecycle="evening"] .leaflet-tile-pane { filter: brightness(0.72) saturate(0.75) contrast(1.05); }
 
 /* ===== States (design-system priority 3) ===== */
 :where(.btn, a, summary):focus-visible { outline: none; box-shadow: var(--shadow-focus); }
@@ -239,3 +239,9 @@ input:focus, select:focus { outline: none; border-color: var(--color-brand); box
     transition-duration: 0.01ms !important; scroll-behavior: auto !important;
   }
 }
+
+/* Back link and the folded "More options" */
+.back { color: var(--color-fg-default); text-decoration: none; }
+.back:hover { color: var(--color-brand); }
+.more { margin-top: var(--space-3); }
+.more > summary { cursor: pointer; font-weight: 600; color: var(--color-brand); padding: var(--space-2) 0; }

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-look="ember" data-theme="dark" data-lifecycle="evening">
+<html lang="en" data-look="ember" data-theme="light">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -8,7 +8,7 @@
         content="default-src 'self'; img-src 'self' data: https://tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'" />
   <!-- Origin only: OSM tiles want a referrer; the #e=…&k=… part is never sent. -->
   <meta name="referrer" content="strict-origin" />
-  <title>Reunly — Evening out (prototype)</title>
+  <title>Reunly — Evening out</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/design-system/tokens.css" />
   <link rel="stylesheet" href="vendor/leaflet.css" />
@@ -20,7 +20,7 @@
     <header class="top">
       <div class="logo">R</div>
       <div class="top-text">
-        <div class="brand">Reunly <span class="tag">Evening out · prototype</span></div>
+        <div class="brand"><a class="back" id="backLink" href="/" aria-label="Back to Reunly">‹ Reunly</a> <span class="tag">Evening out</span></div>
         <div class="sub" id="topSub">Work socials &amp; pub crawls</div>
       </div>
       <span class="live-dot" id="liveDot" hidden aria-hidden="true"></span>

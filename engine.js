@@ -1640,6 +1640,14 @@
         if (slack < 0) urgency = "overdue";
         else if (slack <= 14) urgency = "soon";
       }
+      // A lead time can't be missed if the plan was only locked after it had
+      // gone: with opts.daysAtLock (days to go when the plan was locked), a
+      // step whose usual point is earlier than that never had a window, so it
+      // is "now" (do it now), not "N days past". A genuinely missed step is
+      // capped by the days since the lock, which -slack never exceeds here.
+      if (urgency === "overdue" && opts.daysAtLock != null && step.byDays >= opts.daysAtLock) {
+        urgency = "now";
+      }
       return { ...step, slack, urgency };
     });
   }
@@ -1728,7 +1736,14 @@
       const cents = Math.round(x.amount * 100);
       const per = Math.floor(cents / sharers.length);
       const remainder = cents - per * sharers.length;
-      sharers.forEach((id, i) => {
+      // Spare cents go to the PAYER first (they are the one fronting the
+      // money, so a stray penny of their own share costs them least and the
+      // others' shares stay round), then to the rest in order. Shares still sum
+      // to the amount exactly.
+      const order = sharers.includes(x.payerId) && !x.settlement
+        ? [x.payerId, ...sharers.filter((id) => id !== x.payerId)]
+        : sharers;
+      order.forEach((id, i) => {
         owed[id] = (owed[id] || 0) + (per + (i < remainder ? 1 : 0)) / 100;
       });
     });

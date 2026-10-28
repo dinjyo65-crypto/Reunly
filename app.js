@@ -95,6 +95,26 @@
     return days == null ? null : -days;
   }
 
+  /** "2026-06-27" -> "27 Jun": people never see a raw ISO date. */
+  function niceDate(iso) {
+    const d = iso && new Date(`${iso}T00:00:00`);
+    if (!d || Number.isNaN(d.getTime())) return "";
+    return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  }
+  /** How fresh the fare data is, in words, and whether it is old enough to doubt. */
+  function faresFreshness() {
+    const age = ageInDays(D.FARES_AS_OF);
+    const stale = age != null && age > 30;
+    return {
+      stale,
+      text: stale ? `Fares last checked ${niceDate(D.FARES_AS_OF)}, may have moved` : `Fares checked ${niceDate(D.FARES_AS_OF)}`,
+    };
+  }
+  /** "family of 3" for a booking that covers several people. */
+  function partyWord(n) {
+    return n >= 3 ? `family of ${n}` : `${n} together`;
+  }
+
   // Timestamped on/off flags, used for the prep checklist and booking status.
   // Accepts the old bare-boolean shape so existing saves and older links still
   // load — an untimestamped tick is treated as very old, so any real decision
@@ -1260,7 +1280,7 @@
     t.textContent = msg;
     t.classList.add("show");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.remove("show"), 2400);
+    toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
   }
 
   // Someone arriving from an invite link landed on a generic sign-up page with
@@ -1460,6 +1480,9 @@
       err.textContent = "";
       const currency = picked ? regCurrencyFor(regPick) : D.currencyForCity(city);
       state.user = { name, email, city, currency };
+      // On disk straight away: the "Evening out" entry leaves the SPA by
+      // location.href and reads the profile from storage on the other side.
+      saveState();
       // Arrived via a shared invite link → skip the chooser, join straight in.
       if (state.fromInvite) {
         enterDashboard("join", state.reunion.code);
@@ -1518,6 +1541,16 @@
     return mine;
   }
 
+  // A saved profile with no event yet (registered, then left before choosing
+  // one) lands on the chooser, not an empty dashboard.
+  function resumeOrChoose() {
+    if (!state.role && !state.reunion.name && !state.participants.length) {
+      $("#choiceGreeting").textContent = `Hello, ${(state.user.name || "").split(" ")[0]}`;
+      showScreen("choose");
+    } else {
+      enterDashboard("resume", state.reunion.code);
+    }
+  }
   function enterDashboard(mode, code) {
     if (mode !== "resume") {
       const mine = addCurrentUserAsParticipant();
@@ -1569,6 +1602,7 @@
   let setupCat = null;
   let setupFixed = false;
   let setupWherePick = null;
+  let setupAc = null;
   function pickCategory(c) {
     if (c.href) {
       location.href = c.href; // the evening planner is its own page for now
@@ -1583,6 +1617,7 @@
       $(id).removeAttribute("aria-invalid");
     });
     setupWherePick = null;
+    $("#setupWhereNote").textContent = "";
     const today = localISO();
     $("#setupStart").min = today;
     $("#setupEnd").min = today;
@@ -1627,6 +1662,13 @@
       const start = $("#setupStart").value;
       const end = $("#setupEnd").value || start;
       const where = (setupWherePick && setupWherePick.label) || $("#setupWhere").value.trim();
+      // Same rule as the People field: typed text that was never picked and
+      // isn't a known city is blocked, so "Lisb" is never saved, priced or
+      // given weather. (A lookup that's down can't offer a pick, so it passes.)
+      if (where && !setupWherePick && !E.resolveCity(where) && !(setupAc && setupAc.serviceDown())) {
+        $("#setupWhereNote").textContent = "Not matched yet: pick a place from the list so we can compare it.";
+        return fieldError($("#setupWhere"), err, "Not matched yet. Pick a place from the list below the Where field, then create the event.");
+      }
       if (!start) return fieldError($("#setupStart"), err, "Pick the date.");
       if (start < localISO()) return fieldError($("#setupStart"), err, "That date has already passed.");
       if (end < start) return fieldError($("#setupEnd"), err, "The end can't be before the start.");
@@ -1664,9 +1706,15 @@
       e.preventDefault();
       createFromSetup();
     });
-    attachAutocomplete($("#setupWhere"), (label, s) => { setupWherePick = s; }, { kind: "city" });
+    setupAc = attachAutocomplete($("#setupWhere"), (label, s) => { setupWherePick = s; }, { kind: "city" });
     $("#setupWhere").addEventListener("input", () => {
       if (setupWherePick && $("#setupWhere").value !== setupWherePick.label) setupWherePick = null;
+      // Flag on the way out of the field just like destInput: a pick or a
+      // known city clears it, free text shows the note.
+      const v = $("#setupWhere").value.trim();
+      const bad = !!v && !setupWherePick && !E.resolveCity(v) && !(setupAc && setupAc.serviceDown());
+      $("#setupWhereNote").textContent = bad ? "Not matched yet: pick a place from the list so we can compare it." : "";
+      $("#setupWhere").setAttribute("aria-invalid", bad ? "true" : "false");
     });
     $("#chooseDemo").addEventListener("click", () => {
       state.reunion.name = "Sample group";
@@ -1819,8 +1867,8 @@
     if (!state.reunion.fixed) {
       chips.push(chip("calendar", firstDate ? E.rangeLabel(firstDate) : "no dates"));
       chips.push(
-        p.destinations[0]
-          ? chip(D.cityEmoji(p.destinations[0]), p.destinations[0])
+        matchedDestinations(p)[0]
+          ? chip(D.cityEmoji(matchedDestinations(p)[0]), matchedDestinations(p)[0])
           : chip("pin", "no destination")
       );
     }
@@ -2546,7 +2594,7 @@
     const winner = combos[0];
     const lead = winner.total - combos[1].total;
     const decisive = lead >= 0.06; // clear gap to #2
-    const enoughData = state.participants.filter((p) => p.destinations[0]).length >= 3;
+    const enoughData = state.participants.filter((p) => matchedDestinations(p)[0]).length >= 3;
     const tag = `${winner.destination}|${winner.dateLabel}`;
     if (decisive && enoughData && tag !== lastCelebrated) {
       lastCelebrated = tag;
@@ -2761,14 +2809,16 @@
 
   // The Yes/No confirm card itself: reuses the photo banner + the existing
   // flexible date/destination editors for the "No, here's my alternative" path.
-  function renderConfirmStep(hero, p, top, isAgreed) {
+  function renderConfirmStep(hero, p, top, isAgreed, compact = false) {
     const draft = getConfirmDraft(p.id);
-    const card = el("div", { class: "card confirm-card stagger" });
-    addRecPhoto(card, top.destination);
+    const card = el("div", { class: `card confirm-card stagger${compact ? " compact" : ""}` });
+    // Compact = the organiser's row under the top pick: no photo, the pick
+    // above already says what is being asked about.
+    if (!compact) addRecPhoto(card, top.destination);
 
     const body = el("div", { class: "confirm-body" });
     body.appendChild(el("div", { class: "confirm-title", text: "Does this work for you?" }));
-    body.appendChild(
+    if (!compact) body.appendChild(
       el("div", {
         class: "confirm-sub",
         // "Leaning towards" understates a decision that has been made, and
@@ -2830,7 +2880,7 @@
       const dateAnswered = draft.dateOk !== null;
       const destAnswered = draft.destOk !== null;
       const dateAltOk = draft.dateOk !== false || p.dates.some(E.isValidRange);
-      const destAltOk = draft.destOk !== false || p.destinations.some((d) => d && d.trim());
+      const destAltOk = draft.destOk !== false || matchedDestinations(p).some((d) => d && d.trim());
       const canContinue = dateAnswered && destAnswered && dateAltOk && destAltOk;
       if (canContinue) continueBtn.removeAttribute("disabled");
       else continueBtn.setAttribute("disabled", "disabled");
@@ -2847,6 +2897,9 @@
     card.appendChild(body);
     hero.appendChild(card);
   }
+
+  // Drift notes the organiser has chosen to keep the locked plan over.
+  const driftKept = new Set();
 
   // A combo-shaped object for a locked plan that no longer appears in the
   // ranking (its destination dropped out of the tally, say). Enough for the
@@ -2868,7 +2921,12 @@
     // Guard combos.length here too: needsConfirmStep can stay true mid-flow
     // even if combos briefly become empty (e.g. clearing demo data while
     // mid-confirm), and combos[0] would otherwise be undefined.
-    if (needsConfirmStep(me) && combos.length > 0) {
+    // The organiser asked "which place wins and why", so for them the top pick
+    // (reasons, Date/Place/Cost, warning) leads and the same Yes/No questions
+    // sit in a compact row underneath. Guests keep the full-card step.
+    const organiserFirst = state.role === "organizer";
+    const confirmBelow = needsConfirmStep(me) && combos.length > 0 && organiserFirst;
+    if (needsConfirmStep(me) && combos.length > 0 && !organiserFirst) {
       // The same drift the hero was fixed for, on the ONE card a fresh invitee
       // actually sees. Showing combos[0] meant a guest opening the link could
       // be asked to confirm a different city and week from the one the group
@@ -2972,7 +3030,7 @@
       scoreCell(
         // For a family, "your cost" is the whole booking — that's the number
         // they have to find, so show it and say who it covers.
-        myTrip ? (myTrip.party > 1 ? `Your ${myTrip.party}` : "Your cost")
+        myTrip ? (myTrip.party > 1 ? `Your ${partyWord(myTrip.party)}` : "Your cost")
           : c.nights > 0 ? "Avg per person" : "Avg fare",
         money3
           ? money3.total
@@ -3012,7 +3070,10 @@
         })
       );
     }
-    if (driftedTo) {
+    // Shown once, and the organiser can settle it: keep the locked plan (hides
+    // the note for this pairing) or switch to the new leader.
+    const driftKey = driftedTo ? `${c.destination}|${c.dateLabel}>${driftedTo.destination}|${driftedTo.dateLabel}` : "";
+    if (driftedTo && !driftKept.has(driftKey)) {
       const note = el("div", { class: "alert-inline" });
       note.appendChild(
         el("span", {
@@ -3025,11 +3086,14 @@
         note.appendChild(
           el("button", {
             class: "btn ghost sm u-w-auto",
-                        text: "Review",
-            onClick: () => {
-              const alts = document.getElementById("recList");
-              if (alts) alts.scrollIntoView({ behavior: "smooth", block: "center" });
-            } })
+            text: `Keep ${c.dateLabel}`,
+            onClick: () => { driftKept.add(driftKey); renderWinner(); } })
+        );
+        note.appendChild(
+          el("button", {
+            class: "btn ghost sm u-w-auto",
+            text: "Switch",
+            onClick: () => toggleLock(driftedTo) })
         );
       }
       body.appendChild(note);
@@ -3058,7 +3122,7 @@
       body.appendChild(
         el("div", {
           class: "budget-warn",
-          icon: "alert", text: `Estimated travel + stay exceeds the stated budget for ${names}${more}. Worth checking before locking.`,
+          icon: "alert", text: `Estimated travel + stay exceeds the stated budget for ${names}${more}. ${state.lockedPlan ? "Worth a word with them." : "Worth checking before locking."}`,
         })
       );
     }
@@ -3080,6 +3144,7 @@
     renderJourneyMap(body, { destination: c.destination });
     card.appendChild(body);
     hero.appendChild(card);
+    if (confirmBelow) renderConfirmStep(hero, me, c, !!state.lockedPlan, true);
   }
 
   // The runners-up (combos 2 & 3): compact rows, no photo/medal noise.
@@ -3109,7 +3174,10 @@
         })
       );
       head.appendChild(w);
-      if (state.role === "organizer") {
+      // While a vote is open the vote is the decision device: a Lock on every
+      // runner-up beside it read as a second, competing way to decide.
+      const voteOpen = !!(state.ballot && state.ballot.open);
+      if (state.role === "organizer" && !voteOpen) {
         head.appendChild(
           el("button", {
             class: "btn ghost sm u-w-auto",
@@ -3291,7 +3359,7 @@
           const stale = age != null && age > 30;
           return el("span", {
             class: `badge ${stale ? "warn" : "good"}`,
-            text: stale ? `searched · ${age} days old` : `searched · ${fare.asOf}`,
+            text: stale ? `searched · ${niceDate(fare.asOf)}, may have moved` : `searched · ${niceDate(fare.asOf)}`,
           });
         })()
       );
@@ -3317,17 +3385,26 @@
     if (window_ && window_.start && window_.end && fare.min !== 0) {
       const trip = E.tripCostFor(p.city, toCity, window_, fareProvider, p.prefs, tripOpts(toCity));
       if (trip && trip.nights > 0) {
-        const partyNote = trip.party > 1 ? ` · ${trip.party} travelling` : "";
+        const partyNote = trip.party > 1 ? ` · one booking, ${partyWord(trip.party)}` : "";
         const stayNote =
           trip.lodging > 0
             ? `incl. ${trip.nights} night${trip.nights === 1 ? "" : "s"}`
             : "no stay needed";
+        // One rounding pass (travel + stay, each rounded, then summed): the
+        // same figure the Plan tab's winner card prints, so they never differ
+        // by a pound.
         side.appendChild(
           el("div", {
             class: "cost-allin",
-            text: `${E.formatMoney(trip.total, code)} all-in — ${stayNote}${partyNote}`,
+            text: `${E.formatParts([trip.travel, trip.lodging], code).total} all-in — ${stayNote}${partyNote}`,
           })
         );
+        // A foreign total is no use to a reader who thinks in another currency.
+        if (home !== code) {
+          side.appendChild(
+            el("div", { class: "cost-meta", text: `≈ ${E.formatParts([trip.travel, trip.lodging], home).total} all-in for you (${home})` })
+          );
+        }
       }
     }
     // Distance + time. Drive time only shown when plausibly drivable (<= 800 mi),
@@ -3395,13 +3472,19 @@
     if (today < start) {
       const by = new Date(start);
       by.setDate(by.getDate() - 21);
-      if (by < today) return null;
-      title = `Book travel by ${fmt(by)}`;
-      sub = "Fares on most routes climb in the last three weeks";
-    } else if (today > end && state.expenses.some((x) => !x.settlement)) {
+      if (by < today) {
+        // The mark has passed: that is when "you are late" matters most, so
+        // say it rather than drop the bar.
+        title = "Book now: the 3-week mark has passed";
+        sub = "Fares often rise nearer departure, so the sooner the better";
+      } else {
+        title = `Book travel by ${fmt(by)}`;
+        sub = "Fares often rise nearer departure, so booking about three weeks ahead is a safe rule of thumb";
+      }
+    } else if (today > end && state.expenses.some((x) => !x.settlement) && hasOpenBalance()) {
       const by = new Date(end);
       by.setDate(by.getDate() + 7);
-      title = `Square up by ${fmt(by)}`;
+      title = by < today ? `Square up now (was due ${fmt(by)})` : `Square up by ${fmt(by)}`;
       sub = "While everyone still remembers who paid";
     } else {
       return null;
@@ -3454,10 +3537,27 @@
         text:
           "Estimates only. The all-in figure covers return travel plus an " +
           `estimated stay for the chosen dates — it excludes ${COST_EXCLUSIONS}. ` +
-          `Fares priced ${D.FARES_AS_OF}; non-USD amounts use approximate rates ` +
-          `set ${D.RATES_AS_OF}.`,
+          `${faresFreshness().text}; non-USD amounts use approximate rates ` +
+          `from ${niceDate(D.RATES_AS_OF)}.`,
       })
     );
+    // The group in one line, in the reader's own currency, with who it counts.
+    // Skips people who've said they can't come.
+    {
+      const win = agreed ? { start: agreed.dateStart || (agreed.dateRange && agreed.dateRange.start), end: agreed.dateEnd || (agreed.dateRange && agreed.dateRange.end) } : null;
+      let sumUsd = 0, heads = 0;
+      if (win && win.start && win.end) {
+        withCity.filter((p) => p.rsvp !== "out").forEach((p) => {
+          const t = E.tripCostFor(p.city, groupBest, win, fareProvider, p.prefs, tripOpts(groupBest));
+          if (t && t.nights > 0) { sumUsd += t.total; heads += t.party || 1; }
+        });
+      }
+      if (heads > 0) {
+        list.appendChild(
+          el("div", { class: "group-total", text: `Group total about ${est(sumUsd)} (${heads} ${heads === 1 ? "person" : "people"})` })
+        );
+      }
+    }
 
     withCity.forEach((p, idx) => {
       const card = el("div", { class: "card stagger cost-row" });
@@ -4030,8 +4130,8 @@
       `<div class="foot">Generated by Reunly on ${escapeHtml(localISO())} · ` +
       `estimates only. "Travel + stay" covers return travel plus an estimated stay for these ` +
       `dates; it excludes ${escapeHtml(COST_EXCLUSIONS)}. Amounts in ` +
-      `${escapeHtml(displayCode())}, converted at rates set ${escapeHtml(D.RATES_AS_OF)}; ` +
-      `fares priced ${escapeHtml(D.FARES_AS_OF)}. Confirm real prices before booking.</div>` +
+      `${escapeHtml(displayCode())}, converted at rates from ${escapeHtml(niceDate(D.RATES_AS_OF))}; ` +
+      `${escapeHtml(faresFreshness().text.toLowerCase())}. Confirm real prices before booking.</div>` +
       `</body></html>`;
     const blob = new Blob([html], { type: "text/html" });
     const a = document.createElement("a");
@@ -4061,7 +4161,10 @@
     const season = E.seasonFactorFor({ start: plan.dateStart, end: plan.dateEnd }, plan.destination);
     const local = state.reunion.category === "birthday";
     const TRAVEL_ONLY = ["passport", "visa", "entry-permit", "book-travel", "insurance"];
-    const steps = E.prepStepsFor(days, international, { peak: season.lodging > 1 })
+    // Days to go when this plan was locked: a step whose usual lead time was
+    // already gone at that point says "Do this now", never "N days past".
+    const sinceLock = Math.max(0, Math.floor((Date.now() - (state.lockTs || Date.now())) / 86400000));
+    const steps = E.prepStepsFor(days, international, { peak: season.lodging > 1, daysAtLock: days + sinceLock })
       .filter((st) => !local || !TRAVEL_ONLY.includes(st.id));
     // Everyone ticks their own list; "NR" = not required for them.
     const me = state.participants.find(isMe);
@@ -4119,7 +4222,9 @@
           el("span", {
             class: `badge ${st.urgency === "overdue" ? "warn" : ""}`,
             text:
-              st.urgency === "overdue"
+              st.urgency === "now"
+                ? "Do this now"
+                : st.urgency === "overdue"
                 ? `${Math.abs(st.slack)} day${Math.abs(st.slack) === 1 ? "" : "s"} past the usual point`
                 : "due about now",
           })
@@ -4463,6 +4568,10 @@
    */
   // Thin wrapper: the settle-up maths lives in engine.js so it can be tested
   // directly — it's the only code in the app that decides real money.
+  /** Is anyone still owed or owing anything? Drives "Square up by". */
+  function hasOpenBalance() {
+    return computeSplit().transfers.length > 0;
+  }
   function computeSplit() {
     return E.computeSettlement(state.participants, state.expenses);
   }
@@ -4498,7 +4607,7 @@
         class: "itin-sub",
         text:
           `Amounts in ${displayCode()}` +
-          (displayCode() === "USD" ? "" : ` (converted at ${D.RATES_AS_OF} rates)`) +
+          (displayCode() === "USD" ? "" : ` (converted at ${niceDate(D.RATES_AS_OF)} rates)`) +
           ` · new expenses default to splitting between the ${base.length} ` +
           `${base.length === state.participants.length ? "people here" : "going"}. ` +
           "Untick anyone an expense shouldn't apply to. " +
@@ -4506,6 +4615,23 @@
           "ledger with everyone else.",
       })
     );
+    // Who is NOT in the default split, and why, so "split 6 ways" never
+    // leaves two names unexplained. Flights and stays are a separate thing.
+    {
+      const inIds = new Set(base.map((p) => p.id));
+      const left = state.participants.filter((p) => !inIds.has(p.id));
+      const first = (p) => (p.name || "Someone").split(" ")[0];
+      const said = left.filter((p) => p.rsvp !== "out");
+      const out = left.filter((p) => p.rsvp === "out");
+      const why = [];
+      if (said.length) why.push(`${said.map(first).join(" and ")} ${said.length === 1 ? "hasn't" : "haven't"} said yes`);
+      if (out.length) why.push(`${out.map(first).join(" and ")} can't come`);
+      card.appendChild(el("div", {
+        class: "itin-sub exp-split-line",
+        text: `${base.length} of ${state.participants.length} going${why.length ? "; " + why.join("; ") : ""}. ` +
+          "Flights and stays aren't included here, only the shared costs you add.",
+      }));
+    }
 
     // Add-expense form.
     // Anyone the ledger still has money with. Building the pickers from the
@@ -4565,8 +4691,22 @@
       // No min: a refund is entered as a negative line.
       type: "number", step: "0.01", placeholder: displayCode(), inputmode: "decimal",
     });
-    form.appendChild(payerSel);
-    form.appendChild(descIn);
+    // Visible labels: the amount was named only by its placeholder (which
+    // vanishes once typed) and "Who paid" by nothing at all.
+    payerSel.id = "expPayer";
+    descIn.id = "expDesc";
+    amtIn.id = "expAmt";
+    const labelled = (id, text, ctl) => {
+      const g = el("div", { class: "exp-field" });
+      const l = el("label", { class: "exp-field-label", for: id, text });
+      g.appendChild(l);
+      g.appendChild(ctl);
+      return { g, l };
+    };
+    const payerField = labelled("expPayer", "Who paid", payerSel);
+    form.appendChild(payerField.g);
+    const descField = labelled("expDesc", "What for", descIn);
+    form.appendChild(descField.g);
 
     // Per-expense "split between" picker — this is what makes unequal shares
     // and late joiners work correctly (see addExpense/computeSplit).
@@ -4598,7 +4738,7 @@
     form.appendChild(toWrap);
 
     const row = el("div", { class: "exp-form-row" });
-    row.appendChild(amtIn);
+    row.appendChild(labelled("expAmt", `Amount (${displayCode()})`, amtIn).g);
     const submit = el("button", {
       class: "btn sm",
       text: "Add expense",
@@ -4639,8 +4779,9 @@
       const collecting = entryMode === "collect";
       whoWrap.hidden = collecting;
       toWrap.hidden = !collecting;
-      descIn.hidden = collecting;
+      descField.g.hidden = collecting;
       payerSel.setAttribute("aria-label", collecting ? "Who paid in" : "Who paid");
+      payerField.l.textContent = collecting ? "Who paid in" : "Who paid";
       submit.textContent = collecting ? "Record payment" : "Add expense";
       descIn.placeholder = "What for? e.g. Villa deposit";
     }
@@ -4736,7 +4877,7 @@
         const name = el("div", { class: "pos-name" });
         name.appendChild(el("span", { text: pName(pos.id) }));
         if (pos.paidNothing) {
-          name.appendChild(el("span", { class: "badge warn", text: "paid in nothing" }));
+          name.appendChild(el("span", { class: "badge warn", text: "hasn't paid anything yet" }));
         }
         if (!pos.onRoster) {
           name.appendChild(el("span", { class: "badge", text: "left" }));
@@ -4752,9 +4893,9 @@
           class: `pos-net ${pos.net > 0.005 ? "up" : pos.net < -0.005 ? "down" : ""}`,
           text:
             pos.net > 0.005
-              ? `owed ${money(pos.net)}`
+              ? `Gets back ${money(pos.net)}`
               : pos.net < -0.005
-              ? `owes ${money(-pos.net)}`
+              ? `Owes ${money(-pos.net)}`
               : "square",
         });
         row.appendChild(net);
@@ -4851,7 +4992,8 @@
           row.appendChild(
             el("button", {
               class: "btn ghost sm settle-btn",
-              text: "Mark paid",
+              text: `Paid by ${(pName(t.from) || "").split(" ")[0]}`,
+              title: "Record that this payment was made",
               onClick: () => {
                 // Prefilled with the full balance but editable. People repay in
                 // round numbers and in instalments, and the settle-up maths has
@@ -4896,6 +5038,22 @@
   function optionId(c) {
     // Year-bearing, so ballots can't merge two different years' options.
     return `${c.destination}|${c.dateRange.start}_${c.dateRange.end}`;
+  }
+  // One reading of the ballot for every place that talks about it (vote card,
+  // Now bar, lock confirm), so the leader, the tie and "N of M" always agree.
+  // M is the people who can vote: everyone who hasn't declined.
+  function ballotSummary(people, b) {
+    const { counts, totalVotes, eligible } = E.tallyBallot(people, b);
+    const ordered = [...b.options].sort(
+      (a, c) => (counts[c.id] || 0) - (counts[a.id] || 0) || c.seedTotal - a.seedTotal
+    );
+    const top = counts[ordered[0].id] || 0;
+    const tiedOpts = top > 0 ? ordered.filter((o) => (counts[o.id] || 0) === top) : [];
+    // When options share a destination, the date is the only thing that tells
+    // them apart, so it leads.
+    const sameDest = new Set(b.options.map((o) => o.destination)).size < b.options.length;
+    const name = (o) => (sameDest ? o.dateLabel : o.destination.split(",")[0]);
+    return { counts, totalVotes, eligible, ordered, top, tied: tiedOpts.length > 1, tiedOpts, sameDest, name };
   }
   function openBallot() {
     const combos = rankedCombos().slice(0, 4);
@@ -4942,6 +5100,10 @@
     renderAll();
   }
   function castVote(id) {
+    if (state.ballot && !state.ballot.open) {
+      toast("Voting has closed");
+      return;
+    }
     if (!state.ballot || !state.ballot.open) return;
     if (!state.me) {
       toast("Register to vote");
@@ -4978,7 +5140,15 @@
       toast("Only the organiser can lock the plan");
       return;
     }
-    if (!window.confirm(`Lock ${o.destination} on ${o.dateLabel} for everyone?`)) return;
+    // Re-tally at the moment of locking, so the leader the organiser read a
+    // minute ago can't silently differ from the one they are about to lock.
+    const { counts, totalVotes, eligible } = E.tallyBallot(state.participants, state.ballot);
+    const n = counts[o.id] || 0;
+    const tied = Object.values(counts).filter((v) => v === n).length > 1;
+    if (!window.confirm(
+      `Lock ${o.dateLabel} in ${o.destination}: ${n} of ${eligible} votes` +
+      `${tied ? " (a tie, decided by score)" : ""}${totalVotes < eligible ? `, ${eligible - totalVotes} yet to vote` : ""}. Lock it for everyone?`
+    )) return;
     applyLock({
       destination: o.destination,
       dateStart: o.dateStart,
@@ -5026,30 +5196,48 @@
     }
 
     // Tally.
-    const { counts, totalVotes } = E.tallyBallot(state.participants, b);
+    const sum = ballotSummary(state.participants, b);
+    const { counts, totalVotes, ordered, eligible } = sum;
     const myVote = state.me ? (b.votesByParticipant[state.me] || {}).optionId : null;
-    const ordered = [...b.options].sort(
-      (a, c) => (counts[c.id] || 0) - (counts[a.id] || 0) || c.seedTotal - a.seedTotal
-    );
     const maxCount = Math.max(1, ...b.options.map((o) => counts[o.id] || 0));
 
     const card = el("div", { class: "card vote-card" });
     const head = el("div", { class: "vote-head" });
     head.appendChild(el("h3", { class: "vote-title", icon: "vote", text: b.open ? "Vote for the plan" : "Vote results" }));
-    const { eligible } = E.tallyBallot(state.participants, b);
     head.appendChild(
       el("span", { class: "hint", text: `${totalVotes} of ${eligible} voted` })
     );
     card.appendChild(head);
+    // What a vote is for, said where the choice is made: voting is advice to
+    // the organiser, it doesn't fix the plan.
+    if (b.open) {
+      card.appendChild(el("div", {
+        class: "vote-note",
+        text: state.role === "organizer"
+          ? "Voting doesn't lock the plan. Press Lock when you're happy."
+          : "Voting doesn't lock the plan. The organiser locks it when they're happy.",
+      }));
+    }
+    // Say so when the order is a tie, rather than quietly breaking it.
+    if (sum.tied) {
+      card.appendChild(el("div", {
+        class: "vote-note tie",
+        text: `A tie: ${sum.tiedOpts.map((o) => sum.name(o)).join(" and ")} have ${sum.top} vote${sum.top === 1 ? "" : "s"} each. ` +
+          `${b.open ? "The score breaks it unless more votes come in" : "The organiser decides, the score suggests " + sum.name(ordered[0])}.`,
+      }));
+    } else if (!b.open && sum.top === 0) {
+      card.appendChild(el("div", { class: "vote-note tie", text: "No votes were cast. The score suggests the first option." }));
+    }
 
     ordered.forEach((o, i) => {
       const n = counts[o.id] || 0;
-      const leading = !b.open && i === 0 && n > 0;
+      const leading = !b.open && i === 0 && n > 0 && !sum.tied;
       const row = el("button", {
         class: `vote-opt${myVote === o.id ? " mine" : ""}${leading ? " winner" : ""}`,
-        onClick: b.open ? () => castVote(o.id) : null,
+        onClick: () => castVote(o.id), // closed: castVote says "Voting has closed"
       });
-      if (!b.open) row.disabled = true;
+      // aria-disabled, not disabled, so the results stay reachable by keyboard.
+      if (!b.open) row.setAttribute("aria-disabled", "true");
       const top = el("div", { class: "vote-opt-top" });
       top.appendChild(el("span", { class: "vote-emoji", text: D.cityEmoji(o.destination) }));
       const w = el("div", { class: "u-flex-1" });
@@ -5084,7 +5272,7 @@
         }
       } else {
         ctrl.appendChild(
-          el("button", { class: "btn sm", icon: "lock", text: `Lock ${ordered[0].destination}`, onClick: () => lockBallotOption(ordered[0]) })
+          el("button", { class: "btn sm", icon: "lock", text: `Lock ${sum.sameDest ? ordered[0].dateLabel : ordered[0].destination}`, onClick: () => lockBallotOption(ordered[0]) })
         );
         ctrl.appendChild(el("button", { class: "btn ghost sm", text: "Reopen", onClick: reopenBallot }));
         ctrl.appendChild(el("button", { class: "btn ghost sm", text: "Clear", onClick: clearBallot }));
@@ -5100,7 +5288,7 @@
   // Render orchestration + debounced recompute
   // -------------------------------------------------------------------------
   function hasResponded(p) {
-    return p.destinations.some(Boolean) || p.dates.some(E.isValidRange);
+    return matchedDestinations(p).some(Boolean) || p.dates.some(E.isValidRange);
   }
   /**
    * Participants answer on their own device and their answers stay there until
@@ -5232,19 +5420,21 @@
         if (!b || !b.options || !b.options.length) {
           return { eyebrow: "Deciding", headline: "The vote is open" };
         }
-        const { counts, totalVotes } = E.tallyBallot(people, b);
-        const leader = [...b.options].sort(
-          (a, c) => (counts[c.id] || 0) - (counts[a.id] || 0) || c.seedTotal - a.seedTotal
-        )[0];
+        const sum = ballotSummary(people, b);
+        const { totalVotes } = sum;
+        const leader = sum.ordered[0];
         const me = people.find(isMe);
         const voted = me && b.votesByParticipant && b.votesByParticipant[me.id];
         return {
           eyebrow: "Deciding",
-          headline: `${leader.destination} is ahead`,
-          sub: `${totalVotes} of ${total} ${total === 1 ? "vote" : "votes"} in · ${leader.dateLabel}`,
-          progress: { done: totalVotes, total },
+          headline: sum.top === 0 ? "No votes yet"
+            : sum.tied ? `A tie: ${sum.tiedOpts.map((o) => sum.name(o)).join(" and ")}`
+            : `${sum.name(leader)} is ahead`,
+          sub: `${totalVotes} of ${sum.eligible} voted · ${sum.sameDest || sum.top === 0 || sum.tied ? leader.destination : leader.dateLabel}` +
+            (sum.tied ? " · score breaks the tie" : ""),
+          progress: { done: totalVotes, total: sum.eligible },
           action: organiser
-            ? { label: `Lock ${leader.destination.split(",")[0]} in`, run: () => lockBallotOption(leader) }
+            ? { label: `Lock ${sum.name(leader)} in`, run: () => lockBallotOption(leader) }
             : voted
             ? { label: "See the vote", run: () => { showPhase("decide"); scrollToVote(); } }
             : { label: "Cast your vote", run: () => { showPhase("decide"); scrollToVote(); } },
@@ -6018,7 +6208,7 @@
         } else {
           applySavedState(saved);
           if (state.user) {
-            enterDashboard("resume", state.reunion.code);
+            resumeOrChoose();
           } else {
             showScreen("register");
           }
@@ -6034,7 +6224,7 @@
     } else if (saved) {
       applySavedState(saved);
       if (state.user) {
-        enterDashboard("resume", state.reunion.code);
+        resumeOrChoose();
       } else {
         showScreen("register");
       }
