@@ -417,8 +417,8 @@
         "section": "colors"
       },
       {
-        "name": "The Gold Reservation Rule",
-        "body": "Gold is never decoration, never a second accent, never a \"premium\" flourish. It marks the one dated obligation on a screen. If a screen has no deadline, it has no gold.",
+        "name": "The Two Golds Rule",
+        "body": "Gold has exactly two jobs: burnished gold marks the one dated obligation on a screen, and bright gold marks first place in a ranking. Nothing else is gold — not Pro, not a highlight, not a \"premium\" flourish. The two never swap, and they must stay tellable apart from each other and from the warning amber. Today the winner's gold fails that second test (it is byte-identical to --color-warning in the dark look); until it has its own token, treat a gold that is not the deadline ramp as provisional.",
         "section": "colors"
       },
       {
@@ -473,7 +473,7 @@
     ],
     "donts": [
       "Don't spend plum on a sixth element. If something new needs the accent, something existing gives it up.",
-      "Don't use gold for anything but a date the user must act on. Not for Pro, not for a highlight, not for a \"premium\" feel.",
+      "Don't use gold for anything but a date the user must act on or a first place. Not for Pro, not for a highlight, not for a \"premium\" feel — and never the same gold for both.",
       "Don't repurpose moss or ochre for emphasis, category or mood. They mean searched/settled and estimated/late, and nothing else.",
       "Don't introduce a true neutral grey. Every ground, border and ink in this system is warm.",
       "Don't add a shadow to a resting surface, or to a hover state. Depth is the ground/surface step and the hairline.",

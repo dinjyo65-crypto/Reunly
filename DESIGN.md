@@ -228,9 +228,19 @@ held back for a single purpose.
 - **Claret** (#b3243c): a destructive action, a validation failure, someone who
   has not checked in.
 - **Deadline Gold** (`linear-gradient(100deg, #44350f, #7d5c15 46%, #523f10)` with
-  #fff9eb title and #f3e3c2 sub): reserved entirely for the dated bar — book by,
-  square up by. Burnished rather than bright, because the text sits directly on
-  it: the ramp clears 5.9:1 and 4.9:1 at its lightest point.
+  #fff9eb title and #f3e3c2 sub): the dated bar — book by, square up by.
+  Burnished rather than bright, because the text sits directly on it: the ramp
+  clears 5.9:1 and 4.9:1 at its lightest point.
+- **Winner's Gold** (`linear-gradient(90deg, #fbbf24, #f59e0b)`): the 3px cap and
+  rank badge on the first-placed recommendation. Bright where the deadline is
+  burnished — the two are deliberately opposite ends of the same metal, so a
+  first place never reads as a deadline.
+
+  *Outstanding: this one is hardcoded in `styles.css:334` and `:341` rather than
+  tokenised, and #fbbf24 is byte-identical to `--color-warning` in the dark look.
+  In that look, "this destination is winning" and "this figure is an estimate"
+  are currently the same colour. It needs its own token and a hue that parts from
+  the warning amber — see The Two Golds Rule.*
 
 ### On Photography
 
@@ -244,9 +254,12 @@ held back for a single purpose.
 primary action, the active tab, a link, the live dot, one badge. If a sixth wants
 it, something else loses it. Spread thin, it stops reading as emphasis at all.
 
-**The Gold Reservation Rule.** Gold is never decoration, never a second accent,
-never a "premium" flourish. It marks the one dated obligation on a screen. If a
-screen has no deadline, it has no gold.
+**The Two Golds Rule.** Gold has exactly two jobs: burnished gold marks the one
+dated obligation on a screen, and bright gold marks first place in a ranking.
+Nothing else is gold — not Pro, not a highlight, not a "premium" flourish. The two
+never swap, and they must stay tellable apart from each other and from the warning
+amber. Today the winner's gold fails that second test; until it has its own token,
+treat a gold that is not the deadline ramp as provisional.
 
 **The Reserved Signal Rule.** Moss and ochre mean searched and estimated, settled
 and late. They are never borrowed for emphasis, category colour or mood. A user
@@ -462,8 +475,9 @@ interface, and stay.
 
 - **Don't** spend plum on a sixth element. If something new needs the accent,
   something existing gives it up.
-- **Don't** use gold for anything but a date the user must act on. Not for Pro, not
-  for a highlight, not for a "premium" feel.
+- **Don't** use gold for anything but a date the user must act on or a first place.
+  Not for Pro, not for a highlight, not for a "premium" feel — and never the same
+  gold for both.
 - **Don't** repurpose moss or ochre for emphasis, category or mood. They mean
   searched/settled and estimated/late, and nothing else.
 - **Don't** introduce a true neutral grey. Every ground, border and ink in this
