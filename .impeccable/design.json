@@ -418,7 +418,7 @@
       },
       {
         "name": "The Two Golds Rule",
-        "body": "Gold has exactly two jobs: burnished gold marks the one dated obligation on a screen, and bright gold marks first place in a ranking. Nothing else is gold — not Pro, not a highlight, not a \"premium\" flourish. The two never swap, and they must stay tellable apart from each other and from the warning amber. Today the winner's gold fails that second test (it is byte-identical to --color-warning in the dark look); until it has its own token, treat a gold that is not the deadline ramp as provisional.",
+        "body": "Gold has exactly two jobs: burnished gold marks the one dated obligation on a screen, and bright gold marks first place in a ranking. Nothing else is gold — not Pro, not a highlight, not a \"premium\" flourish. The two never swap, and they must stay tellable apart from each other and from the warning amber: the winner's ramp holds hue ~48 against warning's 36-43, and the deadline ramp is dark enough that neither could be mistaken for it.",
         "section": "colors"
       },
       {

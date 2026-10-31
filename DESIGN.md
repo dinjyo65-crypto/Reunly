@@ -231,16 +231,17 @@ held back for a single purpose.
   #fff9eb title and #f3e3c2 sub): the dated bar — book by, square up by.
   Burnished rather than bright, because the text sits directly on it: the ramp
   clears 5.9:1 and 4.9:1 at its lightest point.
-- **Winner's Gold** (`linear-gradient(90deg, #fbbf24, #f59e0b)`): the 3px cap and
-  rank badge on the first-placed recommendation. Bright where the deadline is
-  burnished — the two are deliberately opposite ends of the same metal, so a
-  first place never reads as a deadline.
+- **Winner's Gold** (`--gradient-winner`, `linear-gradient(90deg, #f9dc5c,
+  #e3b505)`, with `--color-winner-subtle` for the rank badge): the cap and badge
+  on a first-placed recommendation. Bright where the deadline is burnished — the
+  two are deliberately opposite ends of the same metal, so a first place never
+  reads as a deadline. It sits at hue ~48 against the warning amber's 36–43, far
+  enough that winning never reads as an estimate.
 
-  *Outstanding: this one is hardcoded in `styles.css:334` and `:341` rather than
-  tokenised, and #fbbf24 is byte-identical to `--color-warning` in the dark look.
-  In that look, "this destination is winning" and "this figure is an estimate"
-  are currently the same colour. It needs its own token and a hue that parts from
-  the warning amber — see The Two Golds Rule.*
+  *Dormant: nothing currently applies `.rec-card`, so this renders nowhere — the
+  live winner is `#winnerHero` and the runners-up are compact rows. The token
+  exists so a gold first-place mark can return without reintroducing a hardcoded
+  amber.*
 
 ### On Photography
 
@@ -258,8 +259,8 @@ it, something else loses it. Spread thin, it stops reading as emphasis at all.
 dated obligation on a screen, and bright gold marks first place in a ranking.
 Nothing else is gold — not Pro, not a highlight, not a "premium" flourish. The two
 never swap, and they must stay tellable apart from each other and from the warning
-amber. Today the winner's gold fails that second test; until it has its own token,
-treat a gold that is not the deadline ramp as provisional.
+amber: the winner's ramp holds hue ~48 against warning's 36–43, and the deadline
+ramp is dark enough that neither could be mistaken for it.
 
 **The Reserved Signal Rule.** Moss and ochre mean searched and estimated, settled
 and late. They are never borrowed for emphasis, category colour or mood. A user

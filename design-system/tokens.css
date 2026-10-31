@@ -56,6 +56,12 @@
   --gradient-deadline: linear-gradient(100deg, #44350f 0%, #7d5c15 46%, #523f10 100%);
   --color-on-deadline: #fff9eb;
   --color-on-deadline-muted: #f3e3c2;
+  /* The system's other gold: first place in a ranking. Bright where the
+     deadline is burnished, and yellower (hue ~48) than --color-warning
+     (hue 38-43) so "this one is winning" never reads as "this one is an
+     estimate". Same in every look, like the deadline ramp. */
+  --gradient-winner: linear-gradient(90deg, #f9dc5c, #e3b505);
+  --color-winner-subtle: rgba(227, 181, 5, 0.18);
   /* Text on a photo / the dark hero card — same in every look */
   --color-hero-bg: #120e1a;
   --color-on-photo: #fffdf9;

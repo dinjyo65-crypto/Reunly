@@ -331,14 +331,17 @@ a:focus-visible {
   content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
   background: var(--gradient-brand);
 }
-.rec-card.gold::before { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+/* Dormant: nothing applies .rec-card today — the winner is #winnerHero and the
+   runners-up are compact rows. Kept and tokenised so a gold first-place mark can
+   come back without reintroducing a hardcoded amber. */
+.rec-card.gold::before { background: var(--gradient-winner); }
 .rec-card .rec-top { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
 .rec-card .rec-top .pos {
   width: 40px; height: 40px; border-radius: var(--radius-xl); flex: 0 0 auto;
   display: grid; place-items: center; font-weight: 800; font-size: var(--text-lg);
   background: var(--color-brand-subtle); color: var(--color-brand);
 }
-.rec-card.gold .rec-top .pos { background: rgba(251, 191, 36, 0.16); font-size: var(--text-xl); }
+.rec-card.gold .rec-top .pos { background: var(--color-winner-subtle); font-size: var(--text-xl); }
 .rec-card .rec-emoji { font-size: var(--text-2xl); }
 .rec-card .rec-title { font-weight: 720; font-size: var(--text-base); letter-spacing: -0.01em; display: flex; align-items: center; gap: var(--space-2); }
 .rec-card .rec-sub { font-size: var(--text-xs); color: var(--color-fg-muted); }
