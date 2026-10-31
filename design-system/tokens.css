@@ -47,8 +47,13 @@
   --shadow-xl: 0 24px 60px var(--shadow-color);
   --shadow-focus: 0 0 0 3px color-mix(in srgb, var(--color-brand) 35%, transparent);
 
-  /* The gold bar: the one dated thing on a screen. Same in every look. */
-  --gradient-deadline: linear-gradient(100deg, #5e4a17 0%, #c9922f 46%, #8a6b22 100%);
+  /* The gold bar: the one dated thing on a screen. Same in every look.
+     Burnished rather than bright: the previous ramp peaked at #c9922f, where
+     the title sat at 2.6:1 and the sub at 2.2:1 against their own background.
+     This one measures 5.9:1 / 4.9:1 at its lightest point and better at the
+     ends, so the one deadline on the screen is actually readable. Any change
+     here must keep --color-on-deadline-muted above 4.5:1 at every stop. */
+  --gradient-deadline: linear-gradient(100deg, #44350f 0%, #7d5c15 46%, #523f10 100%);
   --color-on-deadline: #fff9eb;
   --color-on-deadline-muted: #f3e3c2;
   /* Text on a photo / the dark hero card — same in every look */
@@ -300,7 +305,8 @@
   --color-success: #3f6b52;
   --color-warning: #8a5a12;
   --color-danger: #b3243c;
-  --gradient-deadline: linear-gradient(100deg, #5e4a17, #c9922f 46%, #8a6b22);
+  /* No --gradient-deadline override: the deadline bar is the one element that
+     never changes with the look, so it inherits the base value above. */
   --shadow-card: none;
 }
 

@@ -1330,10 +1330,10 @@ html, body, .card, .phase-tab {
 /* The gold bar: the one dated thing on the screen. */
 .goldbar {
   border-radius: var(--radius-xl); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-3);
-  background: linear-gradient(100deg, #5e4a17 0%, #c9922f 46%, #8a6b22 100%);
+  background: var(--gradient-deadline);
 }
-.goldbar-title { font-size: var(--text-sm); font-weight: 700; color: #fff9eb; }
-.goldbar-sub { font-size: var(--text-xs); color: #f3e3c2; margin-top: 2px; }
+.goldbar-title { font-size: var(--text-sm); font-weight: 700; color: var(--color-on-deadline); }
+.goldbar-sub { font-size: var(--text-xs); color: var(--color-on-deadline-muted); margin-top: 2px; }
 
 /* Invite: a bottom sheet on phones */
 .sheet-grip { display: none; }

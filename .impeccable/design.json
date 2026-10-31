@@ -1,0 +1,485 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-31T00:00:00Z",
+  "title": "Design System: Reunly",
+  "extensions": {
+    "colorMeta": {
+      "brand": {
+        "role": "primary",
+        "displayName": "Plum",
+        "canonical": "#a8185f",
+        "tonalRamp": [
+          "oklch(15% 0.06 357)",
+          "oklch(24% 0.11 357)",
+          "oklch(33% 0.15 357)",
+          "oklch(43% 0.17 357)",
+          "oklch(55% 0.16 357)",
+          "oklch(68% 0.12 357)",
+          "oklch(82% 0.07 357)",
+          "oklch(95% 0.02 357)"
+        ]
+      },
+      "brand-ink": {
+        "role": "primary",
+        "displayName": "Plum Ink",
+        "canonical": "#8e1250",
+        "tonalRamp": [
+          "oklch(14% 0.05 355)",
+          "oklch(22% 0.10 355)",
+          "oklch(30% 0.14 355)",
+          "oklch(38% 0.16 355)",
+          "oklch(50% 0.15 355)",
+          "oklch(65% 0.11 355)",
+          "oklch(80% 0.06 355)",
+          "oklch(94% 0.02 355)"
+        ]
+      },
+      "brand-subtle": {
+        "role": "primary",
+        "displayName": "Plum Tint",
+        "canonical": "#fbebf2",
+        "tonalRamp": [
+          "oklch(20% 0.02 357)",
+          "oklch(32% 0.03 357)",
+          "oklch(45% 0.04 357)",
+          "oklch(58% 0.04 357)",
+          "oklch(72% 0.035 357)",
+          "oklch(84% 0.025 357)",
+          "oklch(92% 0.018 357)",
+          "oklch(96% 0.012 357)"
+        ]
+      },
+      "bg-page": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "#f7f3ec",
+        "tonalRamp": [
+          "oklch(15% 0.010 80)",
+          "oklch(25% 0.012 80)",
+          "oklch(38% 0.014 80)",
+          "oklch(52% 0.014 80)",
+          "oklch(66% 0.013 80)",
+          "oklch(80% 0.011 80)",
+          "oklch(90% 0.008 80)",
+          "oklch(96% 0.006 80)"
+        ]
+      },
+      "bg-surface": {
+        "role": "neutral",
+        "displayName": "Card Ivory",
+        "canonical": "#fffdf9",
+        "tonalRamp": [
+          "oklch(16% 0.008 85)",
+          "oklch(27% 0.009 85)",
+          "oklch(40% 0.010 85)",
+          "oklch(54% 0.010 85)",
+          "oklch(68% 0.009 85)",
+          "oklch(82% 0.007 85)",
+          "oklch(92% 0.005 85)",
+          "oklch(99% 0.004 85)"
+        ]
+      },
+      "bg-muted": {
+        "role": "neutral",
+        "displayName": "Pressed Linen",
+        "canonical": "#f1ebe0",
+        "tonalRamp": [
+          "oklch(15% 0.012 80)",
+          "oklch(26% 0.015 80)",
+          "oklch(39% 0.017 80)",
+          "oklch(53% 0.017 80)",
+          "oklch(67% 0.016 80)",
+          "oklch(80% 0.013 80)",
+          "oklch(89% 0.011 80)",
+          "oklch(95% 0.008 80)"
+        ]
+      },
+      "border-default": {
+        "role": "neutral",
+        "displayName": "Warm Hairline",
+        "canonical": "#e6ded0",
+        "tonalRamp": [
+          "oklch(15% 0.014 80)",
+          "oklch(26% 0.018 80)",
+          "oklch(39% 0.021 80)",
+          "oklch(53% 0.021 80)",
+          "oklch(67% 0.019 80)",
+          "oklch(80% 0.016 80)",
+          "oklch(89% 0.013 80)",
+          "oklch(95% 0.009 80)"
+        ]
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "Warm Rule",
+        "canonical": "#dbd1c0",
+        "tonalRamp": [
+          "oklch(15% 0.016 80)",
+          "oklch(26% 0.020 80)",
+          "oklch(39% 0.024 80)",
+          "oklch(53% 0.024 80)",
+          "oklch(66% 0.022 80)",
+          "oklch(78% 0.019 80)",
+          "oklch(87% 0.015 80)",
+          "oklch(94% 0.010 80)"
+        ]
+      },
+      "fg-default": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1c1a17",
+        "tonalRamp": [
+          "oklch(12% 0.005 70)",
+          "oklch(20% 0.006 70)",
+          "oklch(32% 0.007 70)",
+          "oklch(45% 0.008 70)",
+          "oklch(58% 0.008 70)",
+          "oklch(72% 0.007 70)",
+          "oklch(85% 0.005 70)",
+          "oklch(95% 0.004 70)"
+        ]
+      },
+      "fg-muted": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "canonical": "#6e6761",
+        "tonalRamp": [
+          "oklch(15% 0.006 75)",
+          "oklch(25% 0.008 75)",
+          "oklch(36% 0.009 75)",
+          "oklch(48% 0.010 75)",
+          "oklch(62% 0.009 75)",
+          "oklch(76% 0.007 75)",
+          "oklch(87% 0.005 75)",
+          "oklch(95% 0.004 75)"
+        ]
+      },
+      "success": {
+        "role": "tertiary",
+        "displayName": "Moss",
+        "canonical": "#3f6b52",
+        "tonalRamp": [
+          "oklch(16% 0.03 155)",
+          "oklch(26% 0.05 155)",
+          "oklch(37% 0.06 155)",
+          "oklch(48% 0.07 155)",
+          "oklch(60% 0.07 155)",
+          "oklch(73% 0.06 155)",
+          "oklch(86% 0.04 155)",
+          "oklch(95% 0.015 155)"
+        ]
+      },
+      "warning": {
+        "role": "tertiary",
+        "displayName": "Ochre",
+        "canonical": "#8a5a12",
+        "tonalRamp": [
+          "oklch(16% 0.04 75)",
+          "oklch(26% 0.07 75)",
+          "oklch(37% 0.09 75)",
+          "oklch(48% 0.10 75)",
+          "oklch(61% 0.10 75)",
+          "oklch(74% 0.08 75)",
+          "oklch(86% 0.05 75)",
+          "oklch(95% 0.02 75)"
+        ]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Claret",
+        "canonical": "#b3243c",
+        "tonalRamp": [
+          "oklch(16% 0.06 20)",
+          "oklch(26% 0.11 20)",
+          "oklch(37% 0.16 20)",
+          "oklch(48% 0.19 20)",
+          "oklch(61% 0.17 20)",
+          "oklch(74% 0.12 20)",
+          "oklch(86% 0.07 20)",
+          "oklch(95% 0.025 20)"
+        ]
+      },
+      "highlight": {
+        "role": "secondary",
+        "displayName": "Note Amber",
+        "canonical": "#fcd34d",
+        "tonalRamp": [
+          "oklch(20% 0.04 90)",
+          "oklch(32% 0.07 90)",
+          "oklch(45% 0.10 90)",
+          "oklch(58% 0.13 90)",
+          "oklch(70% 0.15 90)",
+          "oklch(81% 0.14 90)",
+          "oklch(90% 0.09 90)",
+          "oklch(96% 0.04 90)"
+        ]
+      },
+      "hero-bg": {
+        "role": "neutral",
+        "displayName": "Hero Ink",
+        "canonical": "#120e1a",
+        "tonalRamp": [
+          "oklch(10% 0.015 300)",
+          "oklch(18% 0.022 300)",
+          "oklch(29% 0.028 300)",
+          "oklch(42% 0.030 300)",
+          "oklch(56% 0.028 300)",
+          "oklch(70% 0.022 300)",
+          "oklch(84% 0.014 300)",
+          "oklch(95% 0.006 300)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Welcome headline and destination names. Light weight, wide tracking, uppercase — the most identifying mark of the system."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "The Now bar's single line naming the next move. Display treatment, tightened."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Section headings. Heavy and tight — the counterweight to Display's light and wide."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Everything read rather than scanned. Deliberately plain system text."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Form labels and captions, set in Muted Ink."
+      },
+      "eyebrow": {
+        "displayName": "Eyebrow",
+        "purpose": "Phase names, section kickers, status chips. The widest tracking in the system; never below 11px."
+      }
+    },
+    "shadows": [
+      {
+        "name": "paper-edge",
+        "value": "0 1px 2px color-mix(in srgb, var(--color-fg-default) 6%, transparent)",
+        "purpose": "The only shadow on a resting surface. Reads as the edge of a sheet of paper, not as lift."
+      },
+      {
+        "name": "shadow-focus",
+        "value": "0 0 0 3px color-mix(in srgb, var(--color-brand) 35%, transparent)",
+        "purpose": "The single focus ring across every control and field. A state, not a depth."
+      },
+      {
+        "name": "shadow-xl",
+        "value": "0 24px 60px var(--shadow-color)",
+        "purpose": "Modal cards only — something that genuinely left the page."
+      },
+      {
+        "name": "shadow-lg",
+        "value": "0 12px 32px var(--shadow-color)",
+        "purpose": "Toasts. Transient, above everything."
+      }
+    ],
+    "motion": [
+      {
+        "name": "duration-fast",
+        "value": "100ms",
+        "purpose": "Micro-feedback on press."
+      },
+      {
+        "name": "duration-base",
+        "value": "150ms",
+        "purpose": "Default for colour, border and shadow transitions."
+      },
+      {
+        "name": "duration-slow",
+        "value": "300ms",
+        "purpose": "Card hover and modal entry."
+      },
+      {
+        "name": "duration-phase",
+        "value": "600ms",
+        "purpose": "A lifecycle change repaints the whole app; this cross-fades the ground, cards and tabs rather than jolting."
+      },
+      {
+        "name": "ease-entrance",
+        "value": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "Screen and card entrances (fadeUp, pop)."
+      },
+      {
+        "name": "transition-colors",
+        "value": "color 150ms ease, background-color 150ms ease, border-color 150ms ease",
+        "purpose": "The default interactive transition. Never animate layout."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "stack-3col",
+        "value": "460px"
+      },
+      {
+        "name": "stack-2col",
+        "value": "380px"
+      },
+      {
+        "name": "column-max",
+        "value": "720px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one action on a screen. Solid plum, no shadow, full width by default.",
+      "html": "<button class=\"ds-btn-primary\">Send my answers</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); width: 100%; min-height: 44px; background: var(--color-brand); color: var(--color-fg-on-brand); border: none; border-radius: var(--radius-control); padding: var(--space-4); font-family: inherit; font-size: var(--text-base); font-weight: 650; line-height: 1.2; cursor: pointer; transition: transform var(--duration-base) ease, filter var(--duration-base) ease; } .ds-btn-primary:hover { transform: translateY(-1px); filter: brightness(1.08); } .ds-btn-primary:active { transform: translateY(0) scale(0.99); } .ds-btn-primary:focus-visible { outline: none; box-shadow: var(--shadow-focus); } .ds-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; filter: saturate(0.6); }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "The alternative to the primary action. Card ivory with a warm rule.",
+      "html": "<button class=\"ds-btn-secondary\">Not yet</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); width: 100%; min-height: 44px; background: var(--color-bg-surface); color: var(--color-fg-default); border: 1px solid var(--color-border-strong); border-radius: var(--radius-control); padding: var(--space-4); font-family: inherit; font-size: var(--text-base); font-weight: 650; cursor: pointer; transition: var(--transition-colors); } .ds-btn-secondary:hover { background: var(--color-bg-muted); } .ds-btn-secondary:focus-visible { outline: none; box-shadow: var(--shadow-focus); }"
+    },
+    {
+      "name": "Now Bar",
+      "kind": "custom",
+      "refersTo": "nowbar-action",
+      "description": "The signature component: the one next move for the current lifecycle phase. Eyebrow, light wide headline, progress, one action.",
+      "html": "<div class=\"ds-nowbar\"><div class=\"ds-nowbar-eyebrow\">Gathering replies</div><div class=\"ds-nowbar-head\">Three of eight have replied</div><div class=\"ds-nowbar-progress\"><span class=\"on\"></span><span class=\"on\"></span><span class=\"on\"></span><span></span><span></span><span></span><span></span><span></span></div><div class=\"ds-nowbar-row\"><button class=\"ds-nowbar-action\">Nudge the five</button></div></div>",
+      "css": ".ds-nowbar { padding: var(--space-2) var(--space-5) var(--space-5); background: var(--color-bg-page); } .ds-nowbar-eyebrow { font-size: var(--text-2xs); font-weight: 700; letter-spacing: var(--eyebrow-tracking); text-transform: uppercase; color: var(--color-brand); } .ds-nowbar-head { margin-top: var(--space-2); font-size: var(--text-2xl); font-weight: var(--display-weight); letter-spacing: var(--display-tracking); text-transform: uppercase; line-height: 1.16; color: var(--color-fg-default); overflow-wrap: anywhere; } .ds-nowbar-progress { display: flex; gap: var(--space-1); margin-top: var(--space-4); } .ds-nowbar-progress span { flex: 1 1 0; height: 3px; border-radius: var(--radius-full); background: color-mix(in srgb, var(--color-fg-default) 12%, var(--color-bg-page)); } .ds-nowbar-progress span.on { background: var(--color-brand); } .ds-nowbar-row { display: flex; align-items: center; gap: var(--space-3); margin-top: var(--space-4); } .ds-nowbar-action { flex: 1 1 auto; min-height: 46px; border: none; border-radius: var(--radius-lg); background: var(--color-brand); color: var(--color-fg-on-brand); font-family: inherit; font-size: var(--text-base); font-weight: 650; cursor: pointer; transition: filter var(--duration-base) ease; } .ds-nowbar-action:hover { filter: brightness(1.08); } .ds-nowbar-action:focus-visible { outline: none; box-shadow: var(--shadow-focus); }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Every panel in the app. Flat paper, warm hairline, no shadow — the ground/surface step is what makes it read.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-head\">Front-runners so far</div><p class=\"ds-card-body\">Based on three replies. The order usually moves once everyone is in.</p></div>",
+      "css": ".ds-card { background: var(--color-bg-surface); border: 1px solid var(--color-border-default); border-radius: var(--radius-card); padding: var(--space-4); box-shadow: 0 1px 2px color-mix(in srgb, var(--color-fg-default) 6%, transparent); } .ds-card-head { font-size: var(--text-base); font-weight: 720; letter-spacing: -0.02em; color: var(--color-fg-default); } .ds-card-body { margin: var(--space-2) 0 0; font-size: var(--text-sm); line-height: var(--leading-normal); color: var(--color-fg-muted); }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "All text and select inputs. Warm hairline, plum focus ring, claret error edge.",
+      "html": "<label class=\"ds-label\" for=\"ds-city\">Home city</label><input class=\"ds-input\" id=\"ds-city\" type=\"text\" placeholder=\"Start typing a city…\">",
+      "css": ".ds-label { display: block; font-size: var(--text-xs); font-weight: 500; color: var(--color-fg-muted); margin: var(--space-3) 0 var(--space-1); } .ds-input { width: 100%; background: var(--color-bg-surface); border: 1px solid var(--color-border-default); color: var(--color-fg-default); border-radius: var(--radius-control); padding: var(--space-3) var(--space-4); font-family: inherit; font-size: var(--text-base); transition: border-color var(--duration-base) ease, box-shadow var(--duration-base) ease; } .ds-input::placeholder { color: var(--color-fg-muted); opacity: 0.6; } .ds-input:focus { outline: none; border-color: var(--color-brand); box-shadow: var(--shadow-focus); } .ds-input[aria-invalid=\"true\"] { border-color: var(--color-danger); }"
+    },
+    {
+      "name": "Lifecycle Tabs",
+      "kind": "nav",
+      "refersTo": "phase-tab",
+      "description": "The dashboard's four rooms. Active tab is a solid plum pill; a tab the phase has not earned is dashed and disabled rather than hidden.",
+      "html": "<nav class=\"ds-tabs\" aria-label=\"Sections\"><button class=\"ds-tab active\" aria-current=\"page\">Decide</button><button class=\"ds-tab\">People</button><button class=\"ds-tab\">Costs</button><button class=\"ds-tab unearned\" disabled>Memories</button></nav>",
+      "css": ".ds-tabs { display: flex; gap: var(--space-1); padding: var(--space-2) 0; background: var(--color-bg-page); } .ds-tab { flex: 1; min-height: 40px; border: none; background: transparent; color: var(--color-fg-muted); font-family: inherit; font-size: var(--text-sm); font-weight: 650; padding: var(--space-2); border-radius: var(--radius-lg); cursor: pointer; transition: var(--transition-colors); } .ds-tab:hover { color: var(--color-fg-default); } .ds-tab.active { background: var(--color-brand); color: var(--color-fg-on-brand); } .ds-tab.unearned { border: 1px dashed var(--color-border-strong); opacity: 0.5; cursor: not-allowed; } .ds-tab:focus-visible { outline: none; box-shadow: var(--shadow-focus); }"
+    },
+    {
+      "name": "Provenance Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "Carries the product's honesty rule: moss for a genuinely searched fare, ochre for an estimate. These colours are not interchangeable.",
+      "html": "<span class=\"ds-badge good\">Searched</span> <span class=\"ds-badge warn\">Estimated</span> <span class=\"ds-badge\">New</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-2xs); font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; padding: var(--space-1) var(--space-2); border-radius: var(--radius-full); background: var(--color-brand-subtle); color: var(--color-brand); white-space: nowrap; } .ds-badge.good { background: color-mix(in srgb, var(--color-success) 14%, transparent); color: var(--color-success); } .ds-badge.warn { background: var(--color-warning-bg); color: var(--color-warning); }"
+    },
+    {
+      "name": "Chip Toggle",
+      "kind": "chip",
+      "refersTo": "chip-toggle",
+      "description": "Multi-select preference control. Pressed linen at rest, plum tint with a plum border when on.",
+      "html": "<div class=\"ds-chips\"><button class=\"ds-chip on\">Beach</button><button class=\"ds-chip\">City break</button><button class=\"ds-chip\">Mountains</button></div>",
+      "css": ".ds-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); } .ds-chip { min-height: 44px; font-family: inherit; font-size: var(--text-xs); font-weight: 600; cursor: pointer; background: var(--color-bg-muted); color: var(--color-fg-muted); border: 1px solid var(--color-border-default); border-radius: var(--radius-full); padding: var(--space-2) var(--space-3); transition: var(--transition-colors); } .ds-chip:hover { border-color: var(--color-border-strong); } .ds-chip.on { background: var(--color-brand-subtle); color: var(--color-brand); border-color: var(--color-brand); } .ds-chip:focus-visible { outline: none; box-shadow: var(--shadow-focus); }"
+    },
+    {
+      "name": "Deadline Bar",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "The one dated obligation on a screen, and the only element whose colours never change with the look, theme or phase. Informs rather than acts, so it is role=\"note\" and not a button. Burnished rather than bright so its own text stays readable on it.",
+      "html": "<div class=\"ds-deadline\" role=\"note\"><div class=\"ds-deadline-title\">Book travel by Thu 14 May</div><div class=\"ds-deadline-sub\">Fares often rise nearer departure, so booking about three weeks ahead is a safe rule of thumb</div></div>",
+      "css": ".ds-deadline { border-radius: var(--radius-xl); padding: var(--space-3) var(--space-4); background: var(--gradient-deadline); } .ds-deadline-title { font-size: var(--text-sm); font-weight: 700; color: var(--color-on-deadline); } .ds-deadline-sub { margin-top: 2px; font-size: var(--text-xs); line-height: var(--leading-normal); color: var(--color-on-deadline-muted); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Concierge's Folder",
+    "overview": "Reunly looks like something that was already handled. Not a tool you operate, but a folder someone competent prepared and passed across a desk: warm paper stock, ink-dark type, the details already arranged. Nothing in it is trying to get your attention, because the work is done and the plan is the thing worth looking at.\n\nThat reading drives every material decision. The ground is warm ivory (#f7f3ec) rather than white, so photographs sit down on it instead of glowing off it and a single accent reads as deliberate rather than lonely. Cards are flat paper with a warm hairline and no shadow. Headlines are set in wide, light capitals — weight 300, open tracking — so the character comes from the typesetting rather than from colour or weight. The one plum accent (#a8185f) is spent on about five things per screen: the action, the active tab, the live dot, a link, an alert. Colour at volume belongs to the destination photographs, which is the only place the app has anything genuinely worth looking at.\n\nThe feel in one phrase is warm and handled — prepared by a person, not generated by software. That rules out the admin-tool register (dense grey chrome, aggressive dividers, utilitarian density) and equally rules out the consumer-app register (bright gradients everywhere, bouncing confetti, emoji as interface). The incumbent world this replaced — dark glassmorphism with an indigo-to-pink gradient on every surface and an animated aurora behind the page — is a confirmed anti-reference. Its tokens still exist under data-look=\"deeper\" as a parked exploration; it is not a second supported world and new work owes it nothing.",
+    "keyCharacteristics": [
+      "Warm ivory paper, never white; ink type, never grey-on-grey.",
+      "One accent, spent rarely. Photographs carry the colour.",
+      "Gold means exactly one thing: a date you have to act on.",
+      "Wide light capitals for names and headlines; small tracked capitals for labels.",
+      "Flat surfaces with hairlines. Depth comes from the ground/surface step, not shadow.",
+      "No emoji in the interface. One stroke icon set that takes the text colour."
+    ],
+    "rules": [
+      {
+        "name": "The One Voice Rule",
+        "body": "Plum appears on roughly five elements per screen: the primary action, the active tab, a link, the live dot, one badge. If a sixth wants it, something else loses it. Spread thin, it stops reading as emphasis at all.",
+        "section": "colors"
+      },
+      {
+        "name": "The Gold Reservation Rule",
+        "body": "Gold is never decoration, never a second accent, never a \"premium\" flourish. It marks the one dated obligation on a screen. If a screen has no deadline, it has no gold.",
+        "section": "colors"
+      },
+      {
+        "name": "The Reserved Signal Rule",
+        "body": "Moss and ochre mean searched and estimated, settled and late. They are never borrowed for emphasis, category colour or mood. A user who learns what green means must not then meet a green that means nothing.",
+        "section": "colors"
+      },
+      {
+        "name": "The Warm Neutral Rule",
+        "body": "No neutral in this system is actually neutral. Every ground, border and ink carries warmth. A pure grey (#888, #e5e5e5) dropped into a card reads as a bug, not a choice.",
+        "section": "colors"
+      },
+      {
+        "name": "The Light-and-Wide Rule",
+        "body": "Anything that names a thing — a city, an event, the next move — is set light (300), uppercase and tracked. Anything that organises the page is set heavy (720) and tight. The two never swap.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tracked-Capitals Floor",
+        "body": "Eyebrow capitals never go below 0.6875rem (11px), and never carry colour other than plum or Muted Ink. At that size, tracking is what makes them legible, not weight.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Column Rule",
+        "body": "Reunly is a phone app that also opens on a laptop. Width is capped at 720px and centred; nothing earns a second column by virtue of there being room.",
+        "section": "layout"
+      },
+      {
+        "name": "The 44px Rule",
+        "body": "Every tap target clears 44px, including ones that look like text. Where a utility class would shrink a control below it, the class is applied to a wrapper instead — .btn.nowbar-action, never .nowbar-action alone.",
+        "section": "layout"
+      },
+      {
+        "name": "The Readable Gold Rule",
+        "body": "The deadline ramp exists to be read, not to shine. Any change to --gradient-deadline must keep --color-on-deadline-muted above 4.5:1 at every stop — the lightest stop is the constraint, and a brighter gold fails it.",
+        "section": "colors"
+      },
+      {
+        "name": "The Flat Paper Rule",
+        "body": "A surface at rest casts nothing. If a shadow appears, it is because the element genuinely left the page: a modal, a toast, a drag. Hover does not earn one.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do take every value from design-system/tokens.css. Stylesheets consume tokens and never define them — that separation is the system's one structural rule.",
+      "Do keep the ground warm (#f7f3ec) and the cards one warm step above it (#fffdf9). The step is what makes a surface read.",
+      "Do set anything that names a thing in light wide capitals (300, +0.04em) and anything that organises the page in heavy tight type (720, −0.02em).",
+      "Do let photographs carry the colour. A screen with a destination photo needs no other saturation.",
+      "Do give every tap target 44px, and apply sizing utilities to the wrapper when a class would shrink one below it.",
+      "Do use --shadow-focus for focus on everything. One ring, everywhere.",
+      "Do render an unearned lifecycle tab dashed and disabled rather than removing it."
+    ],
+    "donts": [
+      "Don't spend plum on a sixth element. If something new needs the accent, something existing gives it up.",
+      "Don't use gold for anything but a date the user must act on. Not for Pro, not for a highlight, not for a \"premium\" feel.",
+      "Don't repurpose moss or ochre for emphasis, category or mood. They mean searched/settled and estimated/late, and nothing else.",
+      "Don't introduce a true neutral grey. Every ground, border and ink in this system is warm.",
+      "Don't add a shadow to a resting surface, or to a hover state. Depth is the ground/surface step and the hairline.",
+      "Don't put an emoji in the interface. Use the stroke icon set; it takes the text colour by design.",
+      "Don't reach for the dark glassmorphism world — gradient fills on every surface, backdrop blur as decoration, the animated aurora. It is the confirmed anti-reference, and its surviving data-look=\"deeper\" tokens are a parked exploration, not a second contract.",
+      "Don't add a webfont. The system stack is a deliberate performance decision on a free host with cold starts."
+    ]
+  }
+}
