@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "styles.css"
+        ],
+        "createdAt": "2026-10-31T20:27:06.677Z",
+        "reason": "Claude triage: .rec-card::before is a 3px rule on the card's TOP edge (inset: 0 0 auto 0), not a left/right border; the banned pattern is a colored border-left/border-right above 1px. Predates this session."
+      }
+    ]
+  }
+}
